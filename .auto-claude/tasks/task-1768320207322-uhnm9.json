@@ -1,0 +1,31 @@
+{
+  "title": "Write integration tests",
+  "description": "Add end-to-end tests for critical user flows",
+  "phase": "validate",
+  "status": "in_progress",
+  "subtasks": [
+    {
+      "id": "1",
+      "content": "Auth flow tests",
+      "status": "completed",
+      "completedAt": 1768320207260
+    },
+    {
+      "id": "2",
+      "content": "Task CRUD tests",
+      "status": "in_progress"
+    },
+    {
+      "id": "3",
+      "content": "Agent tests",
+      "status": "pending"
+    }
+  ],
+  "metadata": {
+    "estimatedComplexity": "medium"
+  },
+  "id": "task-1768320207322-uhnm9",
+  "branchName": "auto-claude/task-1768320207322-uhnm9",
+  "createdAt": 1768320207322,
+  "updatedAt": 1768324743205
+}

@@ -1,0 +1,33 @@
+{
+  "title": "Build REST API endpoints",
+  "description": "Implement CRUD operations for task management",
+  "phase": "spec",
+  "status": "completed",
+  "subtasks": [
+    {
+      "id": "1",
+      "content": "Create endpoint",
+      "status": "completed",
+      "completedAt": 1768320220558
+    },
+    {
+      "id": "2",
+      "content": "Update endpoint",
+      "status": "completed",
+      "completedAt": 1768320220558
+    },
+    {
+      "id": "3",
+      "content": "List endpoint",
+      "status": "completed",
+      "completedAt": 1768320220558
+    }
+  ],
+  "metadata": {
+    "estimatedComplexity": "medium"
+  },
+  "id": "task-1768320220600-2kttb",
+  "branchName": "auto-claude/task-1768320220600-2kttb",
+  "createdAt": 1768320220600,
+  "updatedAt": 1768320220600
+}

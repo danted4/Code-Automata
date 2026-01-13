@@ -1,0 +1,109 @@
+{
+  "version": "1.0",
+  "updated": "2026-01-13T17:19:11.758Z",
+  "totalTasks": 12,
+  "phases": [
+    {
+      "name": "discovery",
+      "tasks": [
+        {
+          "id": "task-1768320220558-6hc9a",
+          "title": "Implement user authentication",
+          "status": "in_progress",
+          "subtasks": 0
+        },
+        {
+          "id": "task-1768320207260-xr1ck",
+          "title": "Implement user authentication",
+          "status": "in_progress",
+          "subtasks": 0
+        }
+      ]
+    },
+    {
+      "name": "requirements",
+      "tasks": [
+        {
+          "id": "task-1768320220572-vg9eg",
+          "title": "Design database schema",
+          "status": "pending",
+          "subtasks": 0
+        },
+        {
+          "id": "task-1768320207272-ozxti",
+          "title": "Design database schema",
+          "status": "pending",
+          "subtasks": 0
+        }
+      ]
+    },
+    {
+      "name": "context",
+      "tasks": [
+        {
+          "id": "task-1768320220586-wqdwp",
+          "title": "Set up CI/CD pipeline",
+          "status": "pending",
+          "subtasks": 0
+        },
+        {
+          "id": "task-1768320207284-qhqeh",
+          "title": "Set up CI/CD pipeline",
+          "status": "pending",
+          "subtasks": 0
+        }
+      ]
+    },
+    {
+      "name": "spec",
+      "tasks": [
+        {
+          "id": "task-1768320220600-2kttb",
+          "title": "Build REST API endpoints",
+          "status": "completed",
+          "subtasks": 3
+        },
+        {
+          "id": "task-1768320207309-4vbtz",
+          "title": "Implement real-time notifications",
+          "status": "blocked",
+          "subtasks": 0
+        }
+      ]
+    },
+    {
+      "name": "planning",
+      "tasks": [
+        {
+          "id": "task-1768320220613-ap7zf",
+          "title": "Implement real-time notifications",
+          "status": "blocked",
+          "subtasks": 0
+        },
+        {
+          "id": "task-1768320207297-3x3cn",
+          "title": "Build REST API endpoints",
+          "status": "completed",
+          "subtasks": 3
+        }
+      ]
+    },
+    {
+      "name": "validate",
+      "tasks": [
+        {
+          "id": "task-1768320220627-cs25v",
+          "title": "Write integration tests",
+          "status": "in_progress",
+          "subtasks": 3
+        },
+        {
+          "id": "task-1768320207322-uhnm9",
+          "title": "Write integration tests",
+          "status": "in_progress",
+          "subtasks": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "title": "Set up CI/CD pipeline",
+  "description": "Configure GitHub Actions for automated testing and deployment",
+  "phase": "context",
+  "status": "pending",
+  "subtasks": [],
+  "metadata": {
+    "estimatedComplexity": "low"
+  },
+  "id": "task-1768320220586-wqdwp",
+  "branchName": "auto-claude/task-1768320220586-wqdwp",
+  "createdAt": 1768320220586,
+  "updatedAt": 1768320220586
+}

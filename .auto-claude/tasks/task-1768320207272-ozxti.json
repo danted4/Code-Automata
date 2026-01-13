@@ -1,0 +1,14 @@
+{
+  "title": "Design database schema",
+  "description": "Create PostgreSQL schema for users, sessions, and task data",
+  "phase": "requirements",
+  "status": "pending",
+  "subtasks": [],
+  "metadata": {
+    "estimatedComplexity": "medium"
+  },
+  "id": "task-1768320207272-ozxti",
+  "branchName": "auto-claude/task-1768320207272-ozxti",
+  "createdAt": 1768320207272,
+  "updatedAt": 1768320207272
+}

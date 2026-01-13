@@ -1,0 +1,14 @@
+{
+  "title": "Implement real-time notifications",
+  "description": "Add WebSocket support for live updates",
+  "phase": "planning",
+  "status": "blocked",
+  "subtasks": [],
+  "metadata": {
+    "estimatedComplexity": "high"
+  },
+  "id": "task-1768320220613-ap7zf",
+  "branchName": "auto-claude/task-1768320220613-ap7zf",
+  "createdAt": 1768320220613,
+  "updatedAt": 1768320220613
+}

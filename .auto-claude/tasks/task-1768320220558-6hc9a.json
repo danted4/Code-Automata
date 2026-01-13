@@ -1,0 +1,14 @@
+{
+  "title": "Implement user authentication",
+  "description": "Add JWT-based authentication with OAuth support for GitHub and Google",
+  "phase": "discovery",
+  "status": "in_progress",
+  "subtasks": [],
+  "metadata": {
+    "estimatedComplexity": "high"
+  },
+  "id": "task-1768320220558-6hc9a",
+  "branchName": "auto-claude/task-1768320220558-6hc9a",
+  "createdAt": 1768320220558,
+  "updatedAt": 1768320220558
+}
