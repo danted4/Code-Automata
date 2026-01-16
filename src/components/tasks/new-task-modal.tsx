@@ -117,7 +117,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
   };
 
   const handleCreate = async () => {
-    if (!title.trim() || !description.trim()) {
+    if (!description.trim()) {
       alert('Please fill in all required fields');
       return;
     }
@@ -125,8 +125,8 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
     setIsCreating(true);
 
     try {
-      await createTask({
-        title,
+      const task = await createTask({
+        title: title.trim() || '', // Will be set to task ID if empty
         description,
         phase: 'planning',
         status: 'pending',
@@ -136,6 +136,8 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
         requiresHumanReview,
         planApproved: false,
         locked: requiresHumanReview, // Lock if human review required
+        planningStatus: 'not_started',
+        planningLogsPath: `.code-auto/tasks/{task-id}/planning-logs.txt`, // Will be updated with actual ID
         metadata: {
           estimatedComplexity: 'medium',
         },
@@ -149,12 +151,35 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
       setRequiresHumanReview(false);
 
       onOpenChange(false);
+
+      // If no human review required, start planning immediately
+      if (!requiresHumanReview) {
+        try {
+          await fetch('/api/agents/start-planning', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              taskId: task.id,
+            }),
+          });
+        } catch (error) {
+          console.error('Failed to start planning:', error);
+        }
+      }
     } catch (error) {
       alert('Failed to create task');
       console.error(error);
     } finally {
       setIsCreating(false);
     }
+  };
+
+  // Determine button text based on state
+  const getButtonText = () => {
+    if (isCreating) {
+      return !requiresHumanReview ? 'Starting...' : 'Creating...';
+    }
+    return !requiresHumanReview ? 'Start Task' : 'Create Task';
   };
 
   const renderConfigField = (field: any) => {
@@ -244,10 +269,10 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
         <div className="space-y-4 py-4">
           {/* Task Name */}
           <div className="space-y-2">
-            <Label htmlFor="title">Task Name *</Label>
+            <Label htmlFor="title">Task Name</Label>
             <Input
               id="title"
-              placeholder="e.g., Implement user authentication"
+              placeholder="Optional (will use task ID if empty)"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
@@ -295,18 +320,21 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
           )}
 
           {/* Human Review Checkbox */}
-          <div className="flex items-start space-x-2 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="flex items-start gap-3 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
             <Checkbox
               id="human-review"
               checked={requiresHumanReview}
               onCheckedChange={(checked) => setRequiresHumanReview(checked as boolean)}
+              className="mt-1"
             />
-            <div className="space-y-1">
+            <div className="flex-1 space-y-1">
               <Label htmlFor="human-review" className="cursor-pointer font-medium">
                 Require human review for plan
               </Label>
               <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                Task will be locked until you approve the AI-generated plan
+                {requiresHumanReview
+                  ? 'Task will be locked until you approve the AI-generated plan'
+                  : 'Planning will start immediately after task creation'}
               </p>
             </div>
           </div>
@@ -318,10 +346,20 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={isCreating || !title.trim() || !description.trim()}
-            className="bg-yellow-400 hover:bg-yellow-500 text-black"
+            disabled={isCreating || !description.trim()}
+            className="font-medium"
+            style={{
+              background: 'var(--color-primary)',
+              color: 'var(--color-primary-text)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--color-primary-hover)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--color-primary)';
+            }}
           >
-            {isCreating ? 'Creating...' : 'Create Task'}
+            {getButtonText()}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -36,6 +36,13 @@ export function KanbanBoard() {
 
   useEffect(() => {
     loadTasks();
+
+    // Auto-refresh tasks every 3 seconds to catch background updates
+    const interval = setInterval(() => {
+      loadTasks();
+    }, 3000);
+
+    return () => clearInterval(interval);
   }, [loadTasks]);
 
   const handleDragStart = (event: DragStartEvent) => {

@@ -15,15 +15,35 @@ export async function POST(req: NextRequest) {
 
     const task: Task = {
       id: taskId,
-      title: body.title || 'Untitled Task',
+      title: body.title || taskId, // Use task ID as title if not provided
       description: body.description || '',
-      phase: body.phase || 'discovery',
+      phase: body.phase || 'planning',
       status: body.status || 'pending',
       subtasks: body.subtasks || [],
+
+      // CLI Configuration
+      cliTool: body.cliTool,
+      cliConfig: body.cliConfig,
+
+      // Workflow Control
+      requiresHumanReview: body.requiresHumanReview || false,
+      planApproved: body.planApproved || false,
+      locked: body.locked || false,
+
+      // Planning Phase
+      planningStatus: body.planningStatus || 'not_started',
+      planningData: body.planningData,
+      planContent: body.planContent,
+      planningLogsPath: body.planningLogsPath ? body.planningLogsPath.replace('{task-id}', taskId) : `.code-auto/tasks/${taskId}/planning-logs.txt`,
+
+      // Execution
       worktreePath: body.worktreePath,
       branchName: body.branchName || `auto-claude/${taskId}`,
+
+      // Integrations
       githubIssue: body.githubIssue,
       gitlabIssue: body.gitlabIssue,
+
       createdAt: Date.now(),
       updatedAt: Date.now(),
       metadata: body.metadata || {},

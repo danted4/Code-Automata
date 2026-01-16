@@ -28,6 +28,13 @@ export interface AgentLog {
 export interface AgentOptions {
   workingDir: string;
   context?: ContextData;
+  onComplete?: (result: AgentResult) => void | Promise<void>;
+}
+
+export interface AgentResult {
+  success: boolean;
+  output: string;
+  error?: string;
 }
 
 export class AgentManager {
@@ -84,10 +91,19 @@ export class AgentManager {
     this.activeAgents.set(threadId, session);
 
     // Start execution in background (don't await)
-    this.executeAgent(threadId, prompt, options.context).catch((error) => {
+    this.executeAgent(threadId, prompt, options.context, options.onComplete).catch((error) => {
       session.status = 'error';
       session.error = error instanceof Error ? error.message : 'Unknown error';
       session.completedAt = Date.now();
+
+      // Call completion callback with error
+      if (options.onComplete) {
+        options.onComplete({
+          success: false,
+          output: '',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }).catch(console.error);
+      }
     });
 
     return threadId;
@@ -137,10 +153,13 @@ export class AgentManager {
   private async executeAgent(
     threadId: string,
     prompt: string,
-    context?: ContextData
+    context?: ContextData,
+    onComplete?: (result: AgentResult) => void | Promise<void>
   ): Promise<void> {
     const session = this.activeAgents.get(threadId);
     if (!session) return;
+
+    let output = '';
 
     try {
       // Execute with CLI adapter
@@ -156,10 +175,27 @@ export class AgentManager {
           content: message.data,
         });
 
+        // Collect output from assistant messages
+        if (message.type === 'assistant' && message.data && typeof message.data === 'object') {
+          const data = message.data as Record<string, unknown>;
+          if (data.message && typeof data.message === 'string') {
+            output += data.message + '\n';
+          }
+        }
+
         // Check if completed
         if (message.type === 'result') {
           session.status = 'completed';
           session.completedAt = Date.now();
+
+          // Call completion callback
+          if (onComplete) {
+            await onComplete({
+              success: true,
+              output: output.trim(),
+              error: undefined,
+            });
+          }
           break;
         }
 
@@ -168,6 +204,15 @@ export class AgentManager {
           session.status = 'error';
           session.error = JSON.stringify(message.data);
           session.completedAt = Date.now();
+
+          // Call completion callback with error
+          if (onComplete) {
+            await onComplete({
+              success: false,
+              output: output.trim(),
+              error: JSON.stringify(message.data),
+            });
+          }
           break;
         }
       }
@@ -175,6 +220,15 @@ export class AgentManager {
       session.status = 'error';
       session.error = error instanceof Error ? error.message : 'Unknown error';
       session.completedAt = Date.now();
+
+      // Call completion callback with error
+      if (onComplete) {
+        await onComplete({
+          success: false,
+          output: output.trim(),
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
   }
 
