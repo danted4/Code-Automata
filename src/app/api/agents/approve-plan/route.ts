@@ -46,42 +46,40 @@ export async function POST(req: NextRequest) {
       'utf-8'
     );
 
+    // IMPORTANT: Save task BEFORE starting development so planApproved flag is persisted
+    await taskPersistence.saveTask(task);
+
     if (startDevelopment) {
-      // Start development immediately
-      await fs.appendFile(logsPath, `[Starting Development]\n`, 'utf-8');
-
-      const prompt = `Implement the following task according to the approved plan:
-
-**Task:** ${task.title}
-**Description:** ${task.description}
-
-**Approved Plan:**
-${task.planContent}
-
-Please follow the plan carefully and implement all the steps outlined.`;
+      // Start development immediately (this will generate subtasks and execute them)
+      await fs.appendFile(logsPath, `[Starting Development - Generating Subtasks]\n`, 'utf-8');
 
       try {
-        const threadId = await agentManager.startAgent(taskId, prompt, {
-          workingDir: task.worktreePath || process.cwd(),
+        const response = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agents/start-development`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId }),
         });
 
-        task.assignedAgent = threadId;
-        task.status = 'in_progress';
-        task.phase = 'in_progress';
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to start development');
+        }
 
-        await fs.appendFile(logsPath, `[Agent Started] Thread ID: ${threadId}\n`, 'utf-8');
+        const result = await response.json();
+        await fs.appendFile(logsPath, `[Development Started] Thread ID: ${result.threadId}\n`, 'utf-8');
+
+        // Don't update task here - the start-development endpoint will handle it
       } catch (error) {
         await fs.appendFile(
           logsPath,
-          `[Error Starting Agent] ${error instanceof Error ? error.message : 'Unknown error'}\n`,
+          `[Error Starting Development] ${error instanceof Error ? error.message : 'Unknown error'}\n`,
           'utf-8'
         );
         throw error;
       }
     }
 
-    await taskPersistence.saveTask(task);
-
+    // Task already saved above before starting development
     return NextResponse.json({
       success: true,
       message: startDevelopment ? 'Plan approved and development started' : 'Plan approved',

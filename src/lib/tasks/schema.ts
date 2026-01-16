@@ -84,6 +84,7 @@ export interface Task {
 export interface Subtask {
   id: string;
   content: string;
+  label: string; // Short label for UI display (e.g., "Create API endpoint")
   status: TaskStatus;
   activeForm?: string; // e.g., "Running tests" when in_progress
   completedAt?: number;

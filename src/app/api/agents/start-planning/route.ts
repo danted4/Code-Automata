@@ -110,6 +110,9 @@ export async function POST(req: NextRequest) {
           currentTask.planningStatus = 'waiting_for_answers';
           currentTask.status = 'pending'; // Change from 'planning' to 'pending'
           currentTask.assignedAgent = undefined; // Clear agent
+
+          await taskPersistence.saveTask(currentTask);
+          await appendToLog(logsPath, `[Task Updated Successfully]\n`);
         } else if (parsedOutput.plan) {
           // Plan generated directly
           await appendToLog(logsPath, `[Plan Generated]\n`);
@@ -126,41 +129,45 @@ export async function POST(req: NextRequest) {
             currentTask.planApproved = true;
             currentTask.planningStatus = 'plan_approved';
 
-            // Start development immediately
-            await appendToLog(logsPath, `[Starting Development Automatically]\n`);
+            // IMPORTANT: Save task BEFORE starting development so planApproved flag is persisted
+            await taskPersistence.saveTask(currentTask);
+            await appendToLog(logsPath, `[Task saved with planApproved = true]\n`);
 
-            const devPrompt = `Implement the following task according to the plan:
-
-**Task:** ${currentTask.title}
-**Description:** ${currentTask.description}
-
-**Plan:**
-${currentTask.planContent}
-
-Please follow the plan carefully and implement all the steps outlined.`;
+            // Start development immediately (generate subtasks and execute)
+            await appendToLog(logsPath, `[Starting Development Automatically - Generating Subtasks]\n`);
 
             try {
-              const devThreadId = await agentManager.startAgent(taskId, devPrompt, {
-                workingDir: currentTask.worktreePath || process.cwd(),
+              const response = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agents/start-development`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId }),
               });
 
-              currentTask.assignedAgent = devThreadId;
-              currentTask.status = 'in_progress';
-              currentTask.phase = 'in_progress';
+              if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to start development');
+              }
 
-              await appendToLog(logsPath, `[Development Agent Started] Thread ID: ${devThreadId}\n`);
+              const result = await response.json();
+              await appendToLog(logsPath, `[Development Started] Thread ID: ${result.threadId}\n`);
+
+              // Task already saved, and start-development will handle further updates
+              // No need to save again
             } catch (error) {
               await appendToLog(
                 logsPath,
                 `[Error Starting Development] ${error instanceof Error ? error.message : 'Unknown error'}\n`
               );
               currentTask.status = 'blocked';
+              await taskPersistence.saveTask(currentTask);
+              await appendToLog(logsPath, `[Task saved with blocked status]\n`);
             }
+          } else {
+            // Human review required - save task with plan ready
+            await taskPersistence.saveTask(currentTask);
+            await appendToLog(logsPath, `[Task Updated Successfully]\n`);
           }
         }
-
-        await taskPersistence.saveTask(currentTask);
-        await appendToLog(logsPath, `[Task Updated Successfully]\n`);
       } catch (parseError) {
         await appendToLog(
           logsPath,

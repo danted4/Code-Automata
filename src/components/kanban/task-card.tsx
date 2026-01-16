@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Play, PauseCircle } from 'lucide-react';
 import { QAStepperModal } from '@/components/tasks/qa-stepper-modal';
 import { PlanReviewModal } from '@/components/tasks/plan-review-modal';
+import { TaskDetailModal } from '@/components/tasks/task-detail-modal';
 
 interface TaskCardProps {
   task: Task;
@@ -25,6 +26,7 @@ export function TaskCard({ task }: TaskCardProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [showQAModal, setShowQAModal] = useState(false);
   const [showPlanReviewModal, setShowPlanReviewModal] = useState(false);
+  const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
@@ -134,13 +136,10 @@ export function TaskCard({ task }: TaskCardProps) {
     e.stopPropagation();
     setIsStarting(true);
     try {
-      const response = await fetch('/api/agents/start', {
+      const response = await fetch('/api/agents/start-development', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId: task.id,
-          prompt: `Work on task: ${task.title}\n\nDescription: ${task.description}`,
-        }),
+        body: JSON.stringify({ taskId: task.id }),
       });
 
       if (!response.ok) {
@@ -156,6 +155,15 @@ export function TaskCard({ task }: TaskCardProps) {
     }
   };
 
+  const handleCardClick = () => {
+    // Only open detail modal if task has subtasks and is in progress
+    if (task.status === 'in_progress' && task.subtasks && task.subtasks.length > 0) {
+      setShowTaskDetailModal(true);
+    }
+  };
+
+  const isClickable = task.status === 'in_progress' && task.subtasks && task.subtasks.length > 0;
+
   return (
     <Card
       ref={setNodeRef}
@@ -163,11 +171,13 @@ export function TaskCard({ task }: TaskCardProps) {
         ...style,
         background: 'var(--color-surface)',
         borderColor: 'var(--color-border)',
+        cursor: isClickable ? 'pointer' : undefined,
       }}
       {...listeners}
       {...attributes}
       data-testid={`task-card-${task.id}`}
-      className="cursor-grab active:cursor-grabbing hover:shadow-lg transition-shadow"
+      className={isClickable ? "hover:shadow-lg transition-shadow" : "cursor-grab active:cursor-grabbing hover:shadow-lg transition-shadow"}
+      onClick={handleCardClick}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--color-border-hover)';
       }}
@@ -425,6 +435,15 @@ export function TaskCard({ task }: TaskCardProps) {
           taskId={task.id}
           planContent={task.planContent}
           taskTitle={task.title}
+        />
+      )}
+
+      {/* Task Detail Modal (Subtasks & Logs) */}
+      {task.subtasks && task.subtasks.length > 0 && (
+        <TaskDetailModal
+          open={showTaskDetailModal}
+          onOpenChange={setShowTaskDetailModal}
+          task={task}
         />
       )}
     </Card>

@@ -122,6 +122,9 @@ export class AgentManager {
 
     session.status = 'stopped';
     session.completedAt = Date.now();
+
+    // Remove from active agents to free up slot
+    this.activeAgents.delete(threadId);
   }
 
   /**
@@ -188,6 +191,9 @@ export class AgentManager {
           session.status = 'completed';
           session.completedAt = Date.now();
 
+          // Remove from active agents to free up slot
+          this.activeAgents.delete(threadId);
+
           // Call completion callback
           if (onComplete) {
             await onComplete({
@@ -205,6 +211,9 @@ export class AgentManager {
           session.error = JSON.stringify(message.data);
           session.completedAt = Date.now();
 
+          // Remove from active agents to free up slot
+          this.activeAgents.delete(threadId);
+
           // Call completion callback with error
           if (onComplete) {
             await onComplete({
@@ -220,6 +229,9 @@ export class AgentManager {
       session.status = 'error';
       session.error = error instanceof Error ? error.message : 'Unknown error';
       session.completedAt = Date.now();
+
+      // Remove from active agents to free up slot
+      this.activeAgents.delete(threadId);
 
       // Call completion callback with error
       if (onComplete) {
