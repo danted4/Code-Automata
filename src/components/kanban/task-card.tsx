@@ -16,6 +16,8 @@ import { Play, PauseCircle } from 'lucide-react';
 import { QAStepperModal } from '@/components/tasks/qa-stepper-modal';
 import { PlanReviewModal } from '@/components/tasks/plan-review-modal';
 import { TaskDetailModal } from '@/components/tasks/task-detail-modal';
+import { toast } from 'sonner';
+import { useTaskStore } from '@/store/task-store';
 
 interface TaskCardProps {
   task: Task;
@@ -28,6 +30,7 @@ export function TaskCard({ task }: TaskCardProps) {
   const [showPlanReviewModal, setShowPlanReviewModal] = useState(false);
   const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
   const [isModalClosing, setIsModalClosing] = useState(false);
+  const { loadTasks } = useTaskStore();
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
@@ -63,13 +66,13 @@ export function TaskCard({ task }: TaskCardProps) {
 
       if (!response.ok) {
         const error = await response.json();
-        alert(error.error || 'Failed to start agent');
+        toast.error(error.error || 'Failed to start agent');
       } else {
-        // Reload page to see updated task with agent
-        window.location.reload();
+        toast.success('Agent started successfully');
+        await loadTasks();
       }
     } catch (error) {
-      alert('Failed to start agent');
+      toast.error('Failed to start agent');
     } finally {
       setIsStarting(false);
     }
@@ -89,12 +92,13 @@ export function TaskCard({ task }: TaskCardProps) {
 
       if (!response.ok) {
         const error = await response.json();
-        alert(error.error || 'Failed to stop agent');
+        toast.error(error.error || 'Failed to stop agent');
       } else {
-        window.location.reload();
+        toast.success('Agent stopped successfully');
+        await loadTasks();
       }
     } catch (error) {
-      alert('Failed to stop agent');
+      toast.error('Failed to stop agent');
     } finally {
       setIsStopping(false);
     }
@@ -112,12 +116,13 @@ export function TaskCard({ task }: TaskCardProps) {
 
       if (!response.ok) {
         const error = await response.json();
-        alert(error.error || 'Failed to start planning');
+        toast.error(error.error || 'Failed to start planning');
       } else {
-        window.location.reload();
+        toast.success('Planning started successfully');
+        await loadTasks();
       }
     } catch (error) {
-      alert('Failed to start planning');
+      toast.error('Failed to start planning');
     } finally {
       setIsStarting(false);
     }
@@ -145,12 +150,13 @@ export function TaskCard({ task }: TaskCardProps) {
 
       if (!response.ok) {
         const error = await response.json();
-        alert(error.error || 'Failed to start development');
+        toast.error(error.error || 'Failed to start development');
       } else {
-        window.location.reload();
+        toast.success('Development started successfully');
+        await loadTasks();
       }
     } catch (error) {
-      alert('Failed to start development');
+      toast.error('Failed to start development');
     } finally {
       setIsStarting(false);
     }
