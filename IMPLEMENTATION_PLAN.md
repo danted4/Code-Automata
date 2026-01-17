@@ -53,22 +53,26 @@ Build a Next.js web application that wraps amp CLI to provide Auto-Claude featur
 ### 🚧 IN PROGRESS / NEXT UP
 
 #### Phase 3: Git Worktree Integration (PRIORITY 1 - NEXT)
-**Status:** Planning Complete - Ready for Implementation
+**Status:** Phase 3.1-3.2 Complete - Ready for Testing
 
-##### Phase 3.1: WorktreeManager Implementation
-- [ ] Create `src/lib/git/worktree.ts` with WorktreeManager class
-  - [ ] `getMainRepoPath()` - Auto-detect project root
-  - [ ] `getMainBranch()` - Auto-detect main/master branch
-  - [ ] `createWorktree(taskId)` - Create branch + worktree at `.code-auto/worktrees/{task-id}`
-  - [ ] `deleteWorktree(taskId)` - Clean up with `--force` if needed
-  - [ ] `getWorktreeStatus(taskId)` - Check existence and status
-  - [ ] Comprehensive error handling with user-friendly messages
+##### Phase 3.1: WorktreeManager Implementation ✅
+- [x] Create `src/lib/git/worktree.ts` with WorktreeManager class
+  - [x] `getMainRepoPath()` - Auto-detect project root
+  - [x] `getMainBranch()` - Auto-detect main/master branch
+  - [x] `createWorktree(taskId)` - Create branch + worktree at `.code-auto/worktrees/{task-id}`
+  - [x] `deleteWorktree(taskId)` - Clean up with `--force` if needed
+  - [x] `getWorktreeStatus(taskId)` - Check existence and status
+  - [x] Comprehensive error handling with user-friendly messages
+  - [x] Singleton pattern for app-wide access
+  - [x] 18/18 integration tests passing
 
-##### Phase 3.2: Task Integration
-- [ ] Update Task schema: Add `worktreePath` and `branchName` fields
-- [ ] Update task creation endpoint: Auto-trigger worktree creation
-- [ ] Update task store: Persist worktree information
-- [ ] Pass `workingDirectory` parameter to CLI adapter on agent execution
+##### Phase 3.2: Task Integration ✅
+- [x] Task schema already has `worktreePath` and `branchName` fields
+- [x] Update task creation endpoint: Auto-trigger worktree creation
+- [x] Update task store: Persist worktree information
+- [x] Pass `workingDirectory` parameter to CLI adapter on agent execution
+- [x] Create `/api/git/worktree` endpoint for worktree CRUD operations
+- [x] Update `/api/tasks/update` to preserve worktree on completion
 
 ##### Phase 3.3: Testing & Validation
 - [ ] Test worktree creation on new task
@@ -462,15 +466,28 @@ After core workflow is solid with real agents and worktrees.
 
 ## Current Session (Session 5)
 
-### Completed
+### Completed ✅
 - [x] Key decision questions on worktree strategy
-- [x] Git worktree research and validation
+- [x] Git worktree research and validation  
 - [x] Implementation plan refined with git commands
 - [x] Architecture decisions documented
+- [x] **Phase 3.1:** WorktreeManager class created and tested
+- [x] **Phase 3.2:** Task integration endpoints created
+- [x] 18/18 worktree integration tests passing
+- [x] Build verification passed
 
-### Next Immediate Action
-**Phase 3.1: Create WorktreeManager** - Start implementing `src/lib/git/worktree.ts`
+### Next Steps (Phase 3.3: Testing & Validation)
+1. Test actual task creation with worktree via UI/API
+2. Run full workflow (planning → dev → review → human review) in isolated branch
+3. Verify changes stay in branch, not on main
+4. Test concurrent tasks with multiple worktrees
+5. Test with mock CLI (no amp SDK costs)
+
+### Then Phase 3.4 (UI Polish)
+- Display branch name on task cards
+- Show branch in human review modal  
+- Add git status indicators
 
 ---
 
-**Ready to implement Phase 3.1: WorktreeManager Implementation**
+**Phase 3.1-3.2 Complete. Ready for Phase 3.3: Testing & Validation**
