@@ -87,13 +87,25 @@ function SortableSubtaskItem({
       ref={setNodeRef}
       style={style}
       className="flex items-start gap-3 p-3 rounded-lg border"
-      {...attributes}
-      {...(isDraggable ? listeners : {})}
     >
       {/* Drag Handle - only show for draggable items */}
       {isDraggable && (
-        <div className="mt-0.5 cursor-grab active:cursor-grabbing">
-          <GripVertical className="w-5 h-5" style={{ color: 'var(--color-text-muted)' }} />
+        <div
+          className="mt-0.5 cursor-grab active:cursor-grabbing"
+          style={{
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            MozUserSelect: 'none',
+            msUserSelect: 'none',
+            touchAction: 'none',
+          }}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical
+            className="w-5 h-5"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
         </div>
       )}
 
@@ -202,7 +214,13 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
   // Drag-and-drop sensors
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5, // Require 5px movement before drag starts
+        delay: 0,
+        tolerance: 5,
+      },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
@@ -220,6 +238,11 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
   const handleDeleteSubtask = async (subtaskId: string) => {
     setIsDeleting(subtaskId);
+
+    // Optimistic update - remove immediately from local state
+    const originalSubtasks = [...subtasks];
+    setSubtasks(prev => prev.filter(s => s.id !== subtaskId));
+
     try {
       const response = await fetch('/api/tasks/delete-subtask', {
         method: 'POST',
@@ -233,13 +256,17 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
       if (!response.ok) {
         const error = await response.json();
         toast.error(error.error || 'Failed to delete subtask');
+        // Revert on error
+        setSubtasks(originalSubtasks);
         return;
       }
 
       toast.success('Subtask deleted successfully');
-      await loadTasks(); // Refresh tasks without page reload
+      await loadTasks(); // Refresh tasks to sync with backend
     } catch (error) {
       toast.error('Failed to delete subtask');
+      // Revert on error
+      setSubtasks(originalSubtasks);
       console.error(error);
     } finally {
       setIsDeleting(null);
@@ -248,6 +275,13 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
   const handleSkipSubtask = async (subtaskId: string) => {
     setIsSkipping(subtaskId);
+
+    // Optimistic update - mark as completed immediately
+    const originalSubtasks = [...subtasks];
+    setSubtasks(prev => prev.map(s =>
+      s.id === subtaskId ? { ...s, status: 'completed' as const } : s
+    ));
+
     try {
       const response = await fetch('/api/tasks/skip-subtask', {
         method: 'POST',
@@ -261,13 +295,17 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
       if (!response.ok) {
         const error = await response.json();
         toast.error(error.error || 'Failed to skip subtask');
+        // Revert on error
+        setSubtasks(originalSubtasks);
         return;
       }
 
       toast.success('Subtask skipped successfully');
-      await loadTasks(); // Refresh tasks without page reload
+      await loadTasks(); // Refresh tasks to sync with backend
     } catch (error) {
       toast.error('Failed to skip subtask');
+      // Revert on error
+      setSubtasks(originalSubtasks);
       console.error(error);
     } finally {
       setIsSkipping(null);

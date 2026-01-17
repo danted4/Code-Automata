@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { taskPersistence } from '@/lib/tasks/persistence';
+import { agentManager } from '@/lib/agents/singleton';
 
 export async function POST(req: NextRequest) {
   try {
@@ -46,8 +47,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // If this subtask is currently being executed by an agent, stop it
+    if (subtask.status === 'in_progress' && task.assignedAgent) {
+      try {
+        await agentManager.stopAgent(task.assignedAgent);
+      } catch (error) {
+        // Agent might already be stopped, continue anyway
+        console.log('Failed to stop agent, but continuing:', error);
+      }
+    }
+
     // Remove subtask from array
     task.subtasks.splice(subtaskIndex, 1);
+
+    // Check if all remaining subtasks are completed
+    const allCompleted = task.subtasks.length > 0 && task.subtasks.every(s => s.status === 'completed');
+
+    if (allCompleted) {
+      // All subtasks done - move to AI review
+      task.status = 'completed';
+      task.phase = 'ai_review';
+      task.assignedAgent = undefined;
+    } else if (task.subtasks.length === 0) {
+      // No subtasks left - mark as completed
+      task.status = 'completed';
+      task.phase = 'ai_review';
+      task.assignedAgent = undefined;
+    }
+
     await taskPersistence.saveTask(task);
 
     return NextResponse.json({

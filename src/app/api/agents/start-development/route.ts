@@ -236,6 +236,20 @@ async function executeSubtasksSequentially(taskId: string, subtasks: Subtask[], 
   for (let i = 0; i < subtasks.length; i++) {
     const subtask = subtasks[i];
 
+    // Load fresh task data to check current status
+    const task = await taskPersistence.loadTask(taskId);
+    if (!task) return;
+
+    // Check if this subtask was already completed (e.g., skipped by user)
+    if (task.subtasks[i].status === 'completed') {
+      await fs.appendFile(
+        logsPath,
+        `\n${'='.repeat(80)}\n[Subtask ${i + 1}/${subtasks.length}] ${subtask.label} - SKIPPED (already completed)\n${'='.repeat(80)}\n\n`,
+        'utf-8'
+      );
+      continue; // Skip to next subtask
+    }
+
     await fs.appendFile(
       logsPath,
       `\n${'='.repeat(80)}\n[Subtask ${i + 1}/${subtasks.length}] ${subtask.label}\n${'='.repeat(80)}\n\n`,
@@ -243,9 +257,6 @@ async function executeSubtasksSequentially(taskId: string, subtasks: Subtask[], 
     );
 
     // Update subtask to in_progress
-    const task = await taskPersistence.loadTask(taskId);
-    if (!task) return;
-
     task.subtasks[i].status = 'in_progress';
     await taskPersistence.saveTask(task);
 
@@ -294,10 +305,19 @@ Please implement this subtask following best practices.`;
     };
 
     // Start agent for this subtask
-    await agentManager.startAgent(taskId, prompt, {
+    const subtaskThreadId = await agentManager.startAgent(taskId, prompt, {
       workingDir: task.worktreePath || process.cwd(),
       onComplete: onSubtaskComplete,
     });
+
+    await fs.appendFile(logsPath, `[Agent Started for Subtask] Thread ID: ${subtaskThreadId}\n`, 'utf-8');
+
+    // Store the thread ID in task for potential cancellation
+    const taskWithThread = await taskPersistence.loadTask(taskId);
+    if (taskWithThread) {
+      taskWithThread.assignedAgent = subtaskThreadId;
+      await taskPersistence.saveTask(taskWithThread);
+    }
 
     // Wait for this subtask to complete before moving to next
     // (The completion callback will handle marking it complete)
