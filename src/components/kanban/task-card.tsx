@@ -16,6 +16,7 @@ import { Play, PauseCircle } from 'lucide-react';
 import { QAStepperModal } from '@/components/tasks/qa-stepper-modal';
 import { PlanReviewModal } from '@/components/tasks/plan-review-modal';
 import { TaskDetailModal } from '@/components/tasks/task-detail-modal';
+import { HumanReviewModal } from '@/components/tasks/human-review-modal';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
 
@@ -29,6 +30,7 @@ export function TaskCard({ task }: TaskCardProps) {
   const [showQAModal, setShowQAModal] = useState(false);
   const [showPlanReviewModal, setShowPlanReviewModal] = useState(false);
   const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
+  const [showHumanReviewModal, setShowHumanReviewModal] = useState(false);
   const [isModalClosing, setIsModalClosing] = useState(false);
   const { loadTasks } = useTaskStore();
 
@@ -170,6 +172,12 @@ export function TaskCard({ task }: TaskCardProps) {
       return;
     }
 
+    // Open human review modal if task is in human_review phase
+    if (task.phase === 'human_review' && task.subtasks && task.subtasks.length > 0) {
+      setShowHumanReviewModal(true);
+      return;
+    }
+
     // Open detail modal if task has subtasks and is in progress or ai_review phase
     if (task.subtasks && task.subtasks.length > 0 && !showTaskDetailModal && 
         (task.phase === 'in_progress' || task.phase === 'ai_review')) {
@@ -193,7 +201,7 @@ export function TaskCard({ task }: TaskCardProps) {
   };
 
   const isClickable = task.subtasks && task.subtasks.length > 0 && 
-                      (task.phase === 'in_progress' || task.phase === 'ai_review');
+                       (task.phase === 'in_progress' || task.phase === 'ai_review' || task.phase === 'human_review');
 
   return (
     <Card
@@ -252,6 +260,8 @@ export function TaskCard({ task }: TaskCardProps) {
                      ? task.subtasks.filter(s => s.type === 'dev')
                      : task.phase === 'ai_review'
                      ? task.subtasks.filter(s => s.type === 'qa')
+                     : task.phase === 'human_review'
+                     ? task.subtasks
                      : task.subtasks;
                    return Math.round((relevantSubtasks.filter((s) => s.status === 'completed').length / (relevantSubtasks.length || 1)) * 100);
                  })()}%
@@ -263,10 +273,13 @@ export function TaskCard({ task }: TaskCardProps) {
                 .filter((subtask) => {
                   // In progress phase: show only dev subtasks
                   // AI review phase: show only QA subtasks
+                  // Human review phase: show all subtasks (both dev and QA)
                   if (task.phase === 'in_progress') {
                     return subtask.type === 'dev';
                   } else if (task.phase === 'ai_review') {
                     return subtask.type === 'qa';
+                  } else if (task.phase === 'human_review') {
+                    return true; // Show all subtasks
                   }
                   return false;
                 })
@@ -279,7 +292,7 @@ export function TaskCard({ task }: TaskCardProps) {
                         subtask.status === 'completed'
                           ? subtask.type === 'qa'
                             ? '#a78bfa' // Purple for QA completions
-                            : 'var(--color-success)' // Green for dev completions
+                            : 'var(--color-success)' // Green/Blue for dev completions
                           : subtask.status === 'in_progress'
                           ? 'var(--color-info)'
                           : 'var(--color-border)',
@@ -444,6 +457,13 @@ export function TaskCard({ task }: TaskCardProps) {
               </Button>
             )}
           </>
+        ) : task.phase === 'human_review' ? (
+          /* Human Review Phase - Review & Approval */
+          <>
+            <div className="w-full text-xs py-2 px-3 rounded text-center" style={{ background: 'var(--color-success)', color: '#ffffff' }}>
+              ✓ Ready for human review
+            </div>
+          </>
         ) : (
           /* In Progress / Other Phases - Original Agent Buttons */
           <>
@@ -531,6 +551,15 @@ export function TaskCard({ task }: TaskCardProps) {
           task={task}
         />
       )}
-    </Card>
-  );
-}
+
+      {/* Human Review Modal */}
+      {task.subtasks && task.subtasks.length > 0 && (
+        <HumanReviewModal
+          open={showHumanReviewModal}
+          onOpenChange={setShowHumanReviewModal}
+          task={task}
+        />
+      )}
+      </Card>
+      );
+      }
