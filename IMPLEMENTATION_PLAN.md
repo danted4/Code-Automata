@@ -1,7 +1,7 @@
 # Code-Auto Implementation Plan - UPDATED
 
-**Last Updated:** January 17, 2026  
-**Current Status:** Phase 2 (Kanban Board & Planning) - 70% Complete
+**Last Updated:** January 17, 2026 (Updated with Worktree Strategy)  
+**Current Status:** Phase 2 (Kanban Board & Planning) - 100% Complete | Phase 3 (Worktree Integration) - Ready to Start
 
 ---
 
@@ -53,15 +53,36 @@ Build a Next.js web application that wraps amp CLI to provide Auto-Claude featur
 ### 🚧 IN PROGRESS / NEXT UP
 
 #### Phase 3: Git Worktree Integration (PRIORITY 1 - NEXT)
-- [ ] Implement WorktreeManager
-  - [ ] Auto-create worktree when task enters in_progress
-  - [ ] Auto-delete worktree when task completes or is cancelled
-  - [ ] Branch naming: `auto-claude/{task-id}`
-  - [ ] Handle edge cases (already exists, permission errors, etc.)
-- [ ] Update task-creation to trigger worktree setup
-- [ ] Update agent execution to use worktree as working directory
-- [ ] Test with mock CLI first (full workflow in isolated branch)
-- [ ] Add git status indicators to task cards
+**Status:** Planning Complete - Ready for Implementation
+
+##### Phase 3.1: WorktreeManager Implementation
+- [ ] Create `src/lib/git/worktree.ts` with WorktreeManager class
+  - [ ] `getMainRepoPath()` - Auto-detect project root
+  - [ ] `getMainBranch()` - Auto-detect main/master branch
+  - [ ] `createWorktree(taskId)` - Create branch + worktree at `.code-auto/worktrees/{task-id}`
+  - [ ] `deleteWorktree(taskId)` - Clean up with `--force` if needed
+  - [ ] `getWorktreeStatus(taskId)` - Check existence and status
+  - [ ] Comprehensive error handling with user-friendly messages
+
+##### Phase 3.2: Task Integration
+- [ ] Update Task schema: Add `worktreePath` and `branchName` fields
+- [ ] Update task creation endpoint: Auto-trigger worktree creation
+- [ ] Update task store: Persist worktree information
+- [ ] Pass `workingDirectory` parameter to CLI adapter on agent execution
+
+##### Phase 3.3: Testing & Validation
+- [ ] Test worktree creation on new task
+- [ ] Test full workflow (planning → dev → review → human review) in isolated branch
+- [ ] Verify changes stay in branch (don't touch main)
+- [ ] Test worktree cleanup on task completion
+- [ ] Test concurrent tasks with multiple worktrees
+- [ ] Test with mock CLI only (no amp SDK costs)
+
+##### Phase 3.4: UI Updates (After Core Works)
+- [ ] Display branch name on task cards
+- [ ] Show branch name in human review modal
+- [ ] Add git status indicator (✓ no changes, ⚠ changes pending)
+- [ ] Optional: Show worktree path in task details
 
 #### Phase 4: Real Agent Integration (PRIORITY 2 - AFTER WORKTREES)
 - [ ] Swap mock CLI for real amp SDK in development
@@ -245,33 +266,62 @@ src/
 ## Next Steps (Prioritized)
 
 ### PHASE 3: Git Worktree Integration (PRIORITY 1)
-**Estimated Time:** 2-3 days
+**Estimated Time:** 2-3 days  
+**Strategy:** Git research complete; implementation ready to start with Phase 3.1
 
-1. **Create `src/lib/git/worktree.ts`**
-   - `createWorktree(taskId, baseBranch)` - Create isolated branch
-   - `deleteWorktree(taskId)` - Clean up after completion
-   - `getWorktreeStatus(taskId)` - Check git status
-   - Error handling (already exists, no permissions, etc.)
+#### Git Worktree Architecture (Decided)
 
-2. **Update Task Creation Flow**
-   - After task created → Auto-trigger worktree creation
-   - Store `worktreePath` and `branchName` in task
-   - Handle errors gracefully
+**Key Insights:**
+- Git supports multiple linked worktrees per repository
+- All worktrees share the same `.git` directory (no data duplication)
+- Each worktree has independent `HEAD`, `index`, and branch tracking
+- Worktrees can be created/deleted independently without affecting others
 
-3. **Update Agent Execution**
-   - Pass `worktreePath` to CLI adapter
-   - All agent work happens in isolated branch
-   - Changes don't touch main branch
+**Our Approach:**
+- **Location:** `.code-auto/worktrees/{task-id}/`
+- **Branch naming:** `auto-claude/{task-id}` (one branch per task)
+- **Lifecycle:** Auto-create on task creation; auto-delete on completion (if no MR created)
+- **Multi-task:** Support concurrent worktrees (multiple agents on different tasks)
+- **Sequential subtasks:** All subtasks for same task work in same worktree
 
-4. **Test with Mock CLI**
-   - Create task → Verify worktree created
-   - Run through full workflow → Changes in branch
-   - Complete task → Verify branch exists (ready for PR)
+**Git Commands Used:**
+```bash
+# Create worktree with new branch
+git worktree add <path> -b <branch-name>
 
-5. **Update UI**
-   - Show git status on task cards
-   - Display branch name in human review modal
-   - Add git indicators (✓ no changes, ⚠ changes pending, etc.)
+# List all worktrees
+git worktree list
+
+# Delete worktree
+git worktree remove <path> [--force]
+```
+
+#### Implementation Phases
+
+**Phase 3.1: WorktreeManager (Foundation)**
+1. Create `src/lib/git/worktree.ts` with:
+   - Auto-detect main repo path and main branch
+   - Create/delete worktrees with error handling
+   - Query worktree status and git changes
+   - UUID-based naming fallback for conflict prevention
+
+**Phase 3.2: Task Integration (Core)**
+1. Update `Task` schema: Add `worktreePath` and `branchName` fields
+2. Update task creation: Trigger worktree creation immediately
+3. Update agent execution: Pass `workingDirectory` to CLI adapter
+4. Persist worktree info in task storage
+
+**Phase 3.3: Testing & Validation (Quality)**
+1. Create task → Verify worktree exists at correct path
+2. Run full workflow → Verify changes in branch, not main
+3. Multiple concurrent tasks → Verify independent worktrees
+4. Mock CLI only (cost-free testing)
+
+**Phase 3.4: UI Polish (UX)**
+1. Show branch name on task cards
+2. Display branch in human review modal
+3. Add git status indicators
+4. Optional: Show worktree path in details
 
 ### PHASE 4: Real Agent Integration (PRIORITY 2)
 **Estimated Time:** 1-2 days
@@ -306,11 +356,15 @@ After core workflow is solid with real agents and worktrees.
 ## Critical Implementation Notes
 
 ### For Worktree Integration:
-- **Base branch**: Determine from current repo (usually `main` or `master`)
-- **Branch naming**: `auto-claude/{task-id}` for uniqueness
-- **Cleanup**: Delete worktree on task completion or cancellation
-- **Safety**: Validate all git commands, restrict to `.code-auto/` worktrees
-- **Persistence**: Save worktree path in task.worktreePath
+- **Auto-detection**: Script detects main branch and repo root automatically
+- **Branch naming**: `auto-claude/{task-id}` + UUID suffix for conflict prevention
+- **Worktree location**: `.code-auto/worktrees/{task-id}/` (isolated from main)
+- **Lifecycle**: Create on task creation; delete on completion (unless MR exists)
+- **Multi-agent**: Multiple concurrent worktrees support parallel task execution
+- **Error handling**: Comprehensive try-catch with user-friendly error messages
+- **Safety**: All git operations validated and restricted to worktree paths
+- **Persistence**: Store `worktreePath` and `branchName` in Task schema
+- **CLI integration**: Pass `workingDirectory` parameter to CLI adapter for all agent execution
 
 ### For Real Agent Testing:
 - **Cost Control**: Start with 1 minimal prompt only
@@ -348,10 +402,13 @@ After core workflow is solid with real agents and worktrees.
 ### MVP Complete When:
 - [x] Kanban board displays tasks across 5 phases
 - [x] Can create/edit tasks from UI
-- [ ] Can start agent on task → Sees real-time output (ready to test)
 - [x] Multiple agents work with mock (tested with Mock adapter)
-- [ ] Each task has isolated worktree (NEXT)
-- [ ] Can create PR from completed task (After worktrees)
+- [ ] Each task has isolated worktree (PHASE 3 - NEXT)
+- [ ] Worktree creation works end-to-end
+- [ ] Changes stay in branch, not on main
+- [ ] Can delete worktree on completion
+- [ ] Full workflow works in isolated branch (planning → dev → review → human review)
+- [ ] Can create PR from completed task (Phase 5 - After worktrees)
 - [ ] Memory stores patterns/gotchas (Phase 6)
 - [ ] Context injected into agent prompts (Phase 6)
 - [ ] GitHub issues import as tasks (Phase 7)
@@ -393,11 +450,27 @@ After core workflow is solid with real agents and worktrees.
 **Session 4:** ✅ Human Review Phase & UI Polish
 - Human review modal, event propagation prevention, button styling
 
-**Session 5 (NEXT):** 🚧 Worktree Integration
-- Git worktree creation/management, isolated branch execution
+**Session 5:** 🚧 Worktree Integration (CURRENT)
+- Git research & architecture (COMPLETE)
+- WorktreeManager implementation (NEXT)
+- Task integration & testing
+- UI updates for git status
 
 **Session 6+:** Real Agents → Memory System → GitHub Integration
 
 ---
 
-**Ready to implement Phase 3: Git Worktree Integration**
+## Current Session (Session 5)
+
+### Completed
+- [x] Key decision questions on worktree strategy
+- [x] Git worktree research and validation
+- [x] Implementation plan refined with git commands
+- [x] Architecture decisions documented
+
+### Next Immediate Action
+**Phase 3.1: Create WorktreeManager** - Start implementing `src/lib/git/worktree.ts`
+
+---
+
+**Ready to implement Phase 3.1: WorktreeManager Implementation**
