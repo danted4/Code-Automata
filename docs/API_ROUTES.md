@@ -372,7 +372,7 @@ Manages git worktrees (create, delete, cleanup).
   "success": true,
   "worktreeInfo": {
     "path": "/path/to/.code-auto/worktrees/task-xxx",
-    "branchName": "auto-claude/task-xxx"
+    "branchName": "code-auto/task-xxx"
   },
   "message": "Worktree created at /path/to/..."
 }
@@ -440,8 +440,8 @@ Query worktree status and information.
 ```json
 {
   "worktrees": [
-    { "path": "/path/to/worktree1", "branch": "auto-claude/task-1" },
-    { "path": "/path/to/worktree2", "branch": "auto-claude/task-2" }
+    { "path": "/path/to/worktree1", "branch": "code-auto/task-1" },
+    { "path": "/path/to/worktree2", "branch": "code-auto/task-2" }
   ],
   "count": 2
 }
@@ -454,7 +454,7 @@ Query worktree status and information.
   "mainRepo": "/path/to/main/repo",
   "mainBranch": "main",
   "worktreePath": "/path/to/.code-auto/worktrees/task-xxx",
-  "branchName": "auto-claude/task-xxx"
+  "branchName": "code-auto/task-xxx"
 }
 ```
 
@@ -497,7 +497,7 @@ Creates a new task with automatic git worktree setup.
   "status": "pending",
   "subtasks": [],
   "worktreePath": "/path/to/.code-auto/worktrees/task-xxx",
-  "branchName": "auto-claude/task-xxx",
+  "branchName": "code-auto/task-xxx",
   "createdAt": 1234567890,
   "updatedAt": 1234567890,
   /* ... other fields */

@@ -6,7 +6,7 @@
  *
  * Architecture:
  * - One worktree per task at `.code-auto/worktrees/{task-id}/`
- * - One branch per task: `auto-claude/{task-id}`
+ * - One branch per task: `code-auto/{task-id}`
  * - All subtasks for a task work in the same worktree
  * - Multiple concurrent worktrees support parallel task execution
  */
@@ -122,7 +122,7 @@ export class WorktreeManager {
 
   /**
    * Create a new worktree for a task
-   * - Creates branch: auto-claude/{task-id}
+   * - Creates branch: code-auto/{task-id}
    * - Creates worktree at: .code-auto/worktrees/{task-id}/
    * - Branch auto-commits changes after each subtask
    *
@@ -133,7 +133,7 @@ export class WorktreeManager {
       const mainRepo = await this.getMainRepoPath();
       const mainBranch = await this.getMainBranch();
       const worktreePath = await this.getWorktreePath(taskId);
-      const branchName = `auto-claude/${taskId}`;
+      const branchName = `code-auto/${taskId}`;
 
       // Ensure base directory exists
       const basePath = await this.getWorktreeBasePath();
@@ -297,7 +297,7 @@ export class WorktreeManager {
         // Extract task ID from path (expects .code-auto/worktrees/{task-id})
         if (worktreePath.includes('.code-auto/worktrees/')) {
           const taskId = path.basename(worktreePath);
-          const branchName = `auto-claude/${taskId}`;
+          const branchName = `code-auto/${taskId}`;
 
           worktrees.push({
             path: worktreePath,

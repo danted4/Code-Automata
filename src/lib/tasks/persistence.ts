@@ -31,7 +31,7 @@ export class TaskPersistence {
     const filePath = path.join(TASKS_DIR, `${task.id}.json`);
     await fs.writeFile(filePath, JSON.stringify(task, null, 2));
 
-    // Also update implementation_plan.json for Auto-Claude compatibility
+    // Also update implementation_plan.json for Code-Auto compatibility
     await this.updateImplementationPlan();
   }
 
@@ -116,7 +116,7 @@ export class TaskPersistence {
   }
 
   /**
-   * Update implementation_plan.json (Auto-Claude compatibility)
+   * Update implementation_plan.json (Code-Auto compatibility)
    */
   private async updateImplementationPlan(): Promise<void> {
     const tasks = await this.listTasks();

@@ -2,7 +2,7 @@
  * Agent Manager
  *
  * Manages a pool of concurrent AI agent sessions
- * Supports up to 12 concurrent agents (matching Auto-Claude limit)
+ * Supports up to 12 concurrent agents (matching Code-Auto limit)
  */
 
 import { CLIAdapter } from '@/lib/cli/base';

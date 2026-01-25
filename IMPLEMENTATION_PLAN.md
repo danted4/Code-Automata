@@ -4,7 +4,7 @@
 **This file is the single source of truth.** All other project markdown planning/status docs were consolidated here and will be removed.
 
 ## What we’re building
-Code-Auto is a Next.js app that turns a “task” into an Auto-Claude style workflow:
+Code-Auto is a Next.js app that turns a “task” into an Code-Auto style workflow:
 
 - **Kanban workflow**: `planning → in_progress → ai_review → human_review → done`
 - **Isolated execution**: one **git worktree + branch per task**
@@ -16,7 +16,7 @@ Code-Auto is a Next.js app that turns a “task” into an Auto-Claude style wor
 ### Working
 - **Kanban UI + workflow plumbing**: task cards, phase transitions, modals (`src/components/**`)
 - **Task persistence**: file-based JSON in `.code-auto/tasks/` (`src/lib/tasks/persistence.ts`)
-- **Worktrees**: created on task create (best-effort), branch naming `auto-claude/{taskId}` (`src/lib/git/worktree.ts`, `src/app/api/tasks/create/route.ts`)
+- **Worktrees**: created on task create (best-effort), branch naming `code-auto/{taskId}` (`src/lib/git/worktree.ts`, `src/app/api/tasks/create/route.ts`)
 - **Git status UI + API**: `/api/git/status` (`src/app/api/git/status/route.ts`)
 - **SSE agent log streaming**: `/api/agents/stream` + UI terminal (`src/app/api/agents/stream/route.ts`, `src/components/agents/terminal.tsx`)
 - **Auto-plan route** (no human review): generates a plan + subtasks (`src/app/api/agents/auto-plan/route.ts`)
@@ -38,11 +38,11 @@ Code-Auto is a Next.js app that turns a “task” into an Auto-Claude style wor
 ### Data & persistence
 - **Tasks**: `.code-auto/tasks/{taskId}.json`
 - **Per-task logs**: `.code-auto/tasks/{taskId}/*-logs.txt` (planning/dev/review/auto-plan/direct execution)
-- **Auto-Claude compatibility view**: `.code-auto/implementation_plan.json` (updated on every task save)
+- **Code-Auto compatibility view**: `.code-auto/implementation_plan.json` (updated on every task save)
 
 ### Git worktrees
 - Worktree base: `.code-auto/worktrees/{taskId}/`
-- Branch per task: `auto-claude/{taskId}`
+- Branch per task: `code-auto/{taskId}`
 - Created in `POST /api/tasks/create` via `WorktreeManager.createWorktree()`
 
 ### Agent runtime

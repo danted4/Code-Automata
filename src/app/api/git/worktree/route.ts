@@ -126,7 +126,7 @@ export async function GET(req: NextRequest) {
         mainRepo,
         mainBranch,
         worktreePath,
-        branchName: `auto-claude/${taskId}`,
+        branchName: `code-auto/${taskId}`,
       });
     }
 

@@ -40,7 +40,7 @@ Tasks progress through a structured pipeline:
 Each task operates in complete isolation:
 
 - **Dedicated worktree**: `.code-auto/worktrees/{taskId}/`
-- **Dedicated branch**: `auto-claude/{taskId}`
+- **Dedicated branch**: `code-auto/{taskId}`
 - **No cross-contamination**: Parallel tasks never interfere with each other
 - **Clean main branch**: Changes only merge when explicitly approved
 

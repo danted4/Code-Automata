@@ -1,7 +1,7 @@
 /**
  * Agent manager registry (local dev)
  *
- * Auto-Claude-style alignment:
+ * Code-Auto-style alignment:
  * - Provider selection is per-task, not env-driven singleton
  * - Thread → manager lookup enables /stream + /stop to work with multiple providers
  *

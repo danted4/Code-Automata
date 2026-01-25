@@ -91,7 +91,7 @@ Persists theme selection to localStorage:
 ├── worktrees/                      # Git worktrees (one per task)
 │   ├── task-{id}/                  # Isolated working directory
 │   └── ...
-└── implementation_plan.json        # Auto-Claude compatibility summary
+└── implementation_plan.json        # Code-Auto compatibility summary
 ```
 
 ### Task Persistence ([src/lib/tasks/persistence.ts](../src/lib/tasks/persistence.ts))
@@ -113,7 +113,7 @@ class TaskPersistence {
 
 See [TYPE_REFERENCE.md](./TYPE_REFERENCE.md#task-types) for complete type definitions.
 
-**Auto-Claude Compatibility:** After each save/delete, `updateImplementationPlan()` regenerates `implementation_plan.json` with a summary of all tasks grouped by phase.
+**Code-Auto Compatibility:** After each save/delete, `updateImplementationPlan()` regenerates `implementation_plan.json` with a summary of all tasks grouped by phase.
 
 ## Request Flow Diagrams
 
@@ -137,7 +137,7 @@ sequenceDiagram
     Persist->>FS: Update implementation_plan.json
     API->>Git: createWorktree(taskId)
     Git->>FS: mkdir .code-auto/worktrees/{id}
-    Git->>Git: git worktree add -b auto-claude/{id}
+    Git->>Git: git worktree add -b code-auto/{id}
     Git-->>API: Return worktreeInfo
     API->>Persist: saveTask(task with worktreePath)
     API-->>Store: Return created task

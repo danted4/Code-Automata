@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
 
       // Execution
       worktreePath: body.worktreePath,
-      branchName: body.branchName || `auto-claude/${taskId}`,
+      branchName: body.branchName || `code-auto/${taskId}`,
 
       // Integrations
       githubIssue: body.githubIssue,

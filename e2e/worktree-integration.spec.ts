@@ -63,7 +63,7 @@ test.describe('Worktree Integration (Phase 3.3)', () => {
     const taskPath = path.join(tasksDir, `${taskId}.json`);
     const savedTask = JSON.parse(fs.readFileSync(taskPath, 'utf-8'));
     expect(savedTask.worktreePath).toBeTruthy();
-    expect(savedTask.branchName).toMatch(/^auto-claude\//);
+    expect(savedTask.branchName).toMatch(/^code-auto\//);
 
     console.log(`✓ Worktree created at: ${worktreePath}`);
   });
@@ -134,7 +134,7 @@ test.describe('Worktree Integration (Phase 3.3)', () => {
 
       // Verify branch name follows convention
       if (task.branchName) {
-        expect(task.branchName).toMatch(/^auto-claude\//);
+        expect(task.branchName).toMatch(/^code-auto\//);
       }
 
       // Verify worktree path is correct

@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
 
       assignedAgent: undefined,
       worktreePath: undefined,
-      branchName: `auto-claude/${taskId}`,
+      branchName: `code-auto/${taskId}`,
 
       githubIssue: undefined,
       gitlabIssue: undefined,

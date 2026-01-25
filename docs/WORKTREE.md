@@ -36,7 +36,7 @@ The `WorktreeManager` class in [src/lib/git/worktree.ts](../src/lib/git/worktree
 ```typescript
 interface WorktreeInfo {
   path: string;        // Full path to worktree directory
-  branchName: string;  // Git branch name (auto-claude/{task-id})
+  branchName: string;  // Git branch name (code-auto/{task-id})
   taskId: string;      // Unique task identifier
   mainRepo: string;    // Path to main repository
   mainBranch: string;  // Main branch name (main/master)
@@ -84,7 +84,7 @@ When a new task starts:
 const worktree = await manager.createWorktree('task-1234567890-abc');
 // Creates:
 //   - Directory: .code-auto/worktrees/task-1234567890-abc/
-//   - Branch: auto-claude/task-1234567890-abc
+//   - Branch: code-auto/task-1234567890-abc
 ```
 
 The worktree is created from the current main branch, ensuring a clean starting point.
@@ -131,7 +131,7 @@ Each worktree contains a complete copy of the repository, linked to the main `.g
 
 All task branches follow the pattern:
 ```
-auto-claude/{task-id}
+code-auto/{task-id}
 ```
 
 This convention:

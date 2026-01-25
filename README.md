@@ -22,7 +22,7 @@ Code-Auto automates AI-driven coding tasks by managing them through a Kanban-sty
 ## Features
 
 - **5-Phase Workflow**: Tasks progress through `planning → in_progress → ai_review → human_review → done`
-- **Git Isolation**: Per-task worktrees in `.code-auto/worktrees/{taskId}/` with branch `auto-claude/{taskId}`
+- **Git Isolation**: Per-task worktrees in `.code-auto/worktrees/{taskId}/` with branch `code-auto/{taskId}`
 - **Pluggable Execution**: CLIAdapter layer supporting multiple AI backends (Mock, Amp SDK)
 - **Live Streaming**: Agent output streamed to the UI via Server-Sent Events (SSE)
 - **File-Based Storage**: Tasks persisted as JSON in `.code-auto/tasks/`

@@ -71,7 +71,7 @@ See [CLI_ADAPTERS.md](./CLI_ADAPTERS.md) for detailed documentation.
 
 Manages git worktrees for task isolation:
 - Create/delete worktrees at `.code-auto/worktrees/{task-id}`
-- Branch naming: `auto-claude/{task-id}`
+- Branch naming: `code-auto/{task-id}`
 - Auto-detect main branch and repo root
 
 See [WORKTREE.md](./WORKTREE.md) for detailed documentation.

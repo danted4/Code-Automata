@@ -45,8 +45,8 @@ export class AmpAdapter implements CLIAdapter {
           label: 'Mode',
           type: 'select',
           options: [
-            { value: 'smart', label: 'Smart Mode (Claude 4.5 Opus - Higher Cost)' },
-            { value: 'rush', label: 'Rush Mode (Claude 4.5 Haiku - Lower Cost)' },
+            { value: 'smart', label: 'Smart Mode' },
+            { value: 'rush', label: 'Rush Mode' },
           ],
           default: 'smart',
           description:

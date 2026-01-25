@@ -37,7 +37,7 @@ interface Task {
   // Execution
   assignedAgent?: string;              // Thread ID if agent is working on this
   worktreePath?: string;               // Path to isolated worktree
-  branchName?: string;                 // auto-claude/{task-id}
+  branchName?: string;                 // code-auto/{task-id}
 
   // Integrations
   githubIssue?: number;
@@ -348,7 +348,7 @@ Information about a created worktree.
 ```typescript
 interface WorktreeInfo {
   path: string;                        // Full path to worktree directory
-  branchName: string;                  // Git branch name (auto-claude/{task-id})
+  branchName: string;                  // Git branch name (code-auto/{task-id})
   taskId: string;                      // Unique task identifier
   mainRepo: string;                    // Path to main repository
   mainBranch: string;                  // Main branch name (main/master)

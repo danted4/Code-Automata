@@ -3,7 +3,7 @@
 /**
  * Sidebar Navigation
  *
- * Left sidebar with project navigation and tools (matching Auto-Claude)
+ * Left sidebar with project navigation and tools (matching Code-Auto)
  */
 
 import { useState } from 'react';
