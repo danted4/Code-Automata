@@ -1,0 +1,36 @@
+{
+  "amp.permissions": [
+    {
+      "tool": "Read",
+      "action": "allow"
+    },
+    {
+      "tool": "glob",
+      "action": "allow"
+    },
+    {
+      "tool": "Grep",
+      "action": "allow"
+    },
+    {
+      "tool": "create_file",
+      "action": "reject",
+      "message": "Planning phase is read-only. Do not create files. Return ONLY valid JSON for the plan/questions."
+    },
+    {
+      "tool": "edit_file",
+      "action": "reject",
+      "message": "Planning phase is read-only. Do not edit files. Return ONLY valid JSON for the plan/questions."
+    },
+    {
+      "tool": "Bash",
+      "action": "reject",
+      "message": "Planning phase is read-only. Do not run Bash. Return ONLY valid JSON for the plan/questions."
+    },
+    {
+      "tool": "*",
+      "action": "reject",
+      "message": "Planning phase is read-only. Only use Read/glob/Grep. Return ONLY valid JSON."
+    }
+  ]
+}
