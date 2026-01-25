@@ -4,6 +4,9 @@
 /node_modules
 /.pnp
 .pnp.js
+/.claude
+/.code-auto
+.tmp
 
 # testing
 /coverage
@@ -34,3 +37,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/e2e/screenshots/
