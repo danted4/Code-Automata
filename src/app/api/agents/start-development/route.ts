@@ -100,9 +100,10 @@ export async function POST(req: NextRequest) {
         const currentTask = await taskPersistence.loadTask(taskId);
         if (!currentTask) return;
 
-        // Process subtasks from CLI - respect the type from the mock, default to 'dev'
+        // Process subtasks from CLI.
+        // Prefer explicit type if provided; otherwise infer "qa" for validation/testing/build steps.
         const processedSubtasks = subtasks.map(s => {
-          const type: 'dev' | 'qa' = s.type === 'qa' ? 'qa' : 'dev';
+          const type: 'dev' | 'qa' = inferSubtaskType(s);
           return {
             ...s,
             type,
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
         const devSubtasks = processedSubtasks.filter(s => s.type === 'dev');
         const qaSubtasks = processedSubtasks.filter(s => s.type === 'qa');
 
-        // If no QA subtasks came from CLI, generate them (~60% of dev count)
+        // If no QA subtasks came from CLI/inference, generate them (~60% of dev count)
         const finalQASubtasks = qaSubtasks.length > 0 ? qaSubtasks : Array.from({ length: Math.floor(devSubtasks.length * 0.6) }, (_, i) => ({
           id: `subtask-qa-${i + 1}`,
           content: `[AUTO] Verify implementation step ${i + 1} - Validate the corresponding development work`,
@@ -208,6 +209,7 @@ For each subtask, provide:
 - **content**: Detailed description of what needs to be done (be specific about files, logic, etc.)
 - **label**: Short label (3-5 words) for UI display (e.g., "Create API endpoint", "Add validation logic")
 - **activeForm**: Present continuous form for progress display (e.g., "Creating API endpoint", "Adding validation logic")
+- **type**: Either "dev" or "qa"
 
 **Guidelines:**
 1. Break down complex steps into smaller, manageable subtasks
@@ -215,6 +217,8 @@ For each subtask, provide:
 3. Order subtasks logically (dependencies first)
 4. Be specific about files, functions, and changes needed
 5. Cap at 15 subtasks maximum
+6. Include at least 2 QA subtasks ("type": "qa") that ONLY verify/test (e.g. run build/tests, validate docs/links/diagrams)
+7. Put verification steps (build/test/lint/validate/verify) under QA, not dev
 
 Return your subtasks in the following JSON format:
 {
@@ -223,18 +227,59 @@ Return your subtasks in the following JSON format:
       "id": "subtask-1",
       "content": "Create the API route file at src/app/api/example/route.ts with POST endpoint handler",
       "label": "Create API endpoint",
-      "activeForm": "Creating API endpoint"
+      "activeForm": "Creating API endpoint",
+      "type": "dev"
     },
     {
       "id": "subtask-2",
       "content": "Add input validation using Zod schema for request body parameters",
       "label": "Add input validation",
-      "activeForm": "Adding input validation"
+      "activeForm": "Adding input validation",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-qa-1",
+      "content": "Run the build and verify there are no errors; if there are, report them clearly without changing code",
+      "label": "Verify build",
+      "activeForm": "Verifying build",
+      "type": "qa"
     }
   ]
 }
 
 IMPORTANT: Return ONLY valid JSON. Do not include any markdown formatting or additional text.`;
+}
+
+function inferSubtaskType(subtask: Partial<Subtask>): 'dev' | 'qa' {
+  if (subtask.type === 'qa') return 'qa';
+  if (subtask.type === 'dev') return 'dev';
+
+  const haystack = `${subtask.label || ''} ${subtask.content || ''}`.toLowerCase();
+  const qaSignals = [
+    'validate',
+    'verification',
+    'verify',
+    'qa',
+    'test',
+    'tests',
+    'unit test',
+    'integration',
+    'e2e',
+    'lint',
+    'typecheck',
+    'type check',
+    'pnpm build',
+    'npm run build',
+    'run build',
+    'build passes',
+    'check diagrams',
+    'mermaid',
+    'cross-check',
+    'cross check',
+    'review',
+  ];
+  if (qaSignals.some((s) => haystack.includes(s))) return 'qa';
+  return 'dev';
 }
 
 /**

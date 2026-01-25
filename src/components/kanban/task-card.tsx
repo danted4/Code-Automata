@@ -395,7 +395,7 @@ export function TaskCard({ task }: TaskCardProps) {
               >
                 📋 Review Plan
               </Button>
-            ) : task.planApproved ? (
+            ) : task.planApproved && task.requiresHumanReview ? (
               <Button
                 data-testid="start-development-button"
                 size="sm"
@@ -418,6 +418,40 @@ export function TaskCard({ task }: TaskCardProps) {
                 <Play className="w-4 h-4" strokeWidth={2.5} />
                 {isStarting ? 'Starting...' : 'Start Development'}
               </Button>
+            ) : task.planApproved && !task.requiresHumanReview ? (
+              // No-human-review tasks auto-start development. If something goes wrong and we stay
+              // in planning without subtasks for a while, show a retry button.
+              task.subtasks.length === 0 && Date.now() - task.updatedAt > 10_000 ? (
+                <Button
+                  data-testid="start-development-button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleStartDevelopment}
+                  disabled={isStarting}
+                  className="w-full text-xs"
+                  style={{
+                    background: 'var(--color-primary)',
+                    color: 'var(--color-primary-text)',
+                    borderColor: 'var(--color-primary)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--color-primary-hover)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--color-primary)';
+                  }}
+                >
+                  <Play className="w-4 h-4" strokeWidth={2.5} />
+                  {isStarting ? 'Starting...' : 'Retry Auto-Start'}
+                </Button>
+              ) : (
+                <div
+                  className="w-full text-xs py-2 px-3 rounded text-center"
+                  style={{ background: 'var(--color-surface-hover)', color: 'var(--color-text-secondary)' }}
+                >
+                  🤖 Auto-starting development…
+                </div>
+              )
             ) : null}
           </>
         ) : task.phase === 'ai_review' ? (
@@ -451,28 +485,64 @@ export function TaskCard({ task }: TaskCardProps) {
                 </Button>
               </div>
             ) : (
-              <Button
-                data-testid="start-review-button"
-                size="sm"
-                variant="outline"
-                onClick={handleStartReview}
-                disabled={isStarting}
-                className="w-full text-xs"
-                style={{
-                  background: 'var(--color-primary)',
-                  color: 'var(--color-primary-text)',
-                  borderColor: 'var(--color-primary)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--color-primary-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--color-primary)';
-                }}
-              >
-                <Play className="w-4 h-4" strokeWidth={2.5} />
-                {isStarting ? 'Starting...' : 'Start Review'}
-              </Button>
+              // No-human-review tasks auto-start QA shortly after entering ai_review.
+              // Avoid briefly flashing "Start Review" while the background trigger spins up.
+              !task.requiresHumanReview ? (
+                Date.now() - task.updatedAt > 10_000 ? (
+                  <Button
+                    data-testid="start-review-button"
+                    size="sm"
+                    variant="outline"
+                    onClick={handleStartReview}
+                    disabled={isStarting}
+                    className="w-full text-xs"
+                    style={{
+                      background: 'var(--color-primary)',
+                      color: 'var(--color-primary-text)',
+                      borderColor: 'var(--color-primary)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--color-primary-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'var(--color-primary)';
+                    }}
+                  >
+                    <Play className="w-4 h-4" strokeWidth={2.5} />
+                    {isStarting ? 'Starting...' : 'Retry Auto-Start'}
+                  </Button>
+                ) : (
+                  <div
+                    className="w-full text-xs py-2 px-3 rounded text-center"
+                    style={{ background: 'var(--color-surface-hover)', color: 'var(--color-text-secondary)' }}
+                  >
+                    🤖 Auto-starting QA…
+                  </div>
+                )
+              ) : (
+                <Button
+                  data-testid="start-review-button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleStartReview}
+                  disabled={isStarting}
+                  className="w-full text-xs"
+                  style={{
+                    background: 'var(--color-primary)',
+                    color: 'var(--color-primary-text)',
+                    borderColor: 'var(--color-primary)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--color-primary-hover)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--color-primary)';
+                  }}
+                >
+                  <Play className="w-4 h-4" strokeWidth={2.5} />
+                  {isStarting ? 'Starting...' : 'Start Review'}
+                </Button>
+              )
             )}
           </>
         ) : task.phase === 'human_review' ? (

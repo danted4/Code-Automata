@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
       .filter(s => s.type === 'dev')
       .every(s => s.status === 'completed');
 
+    const shouldAutoStartReview = allDevCompleted && task.phase === 'in_progress';
     if (allDevCompleted && task.phase === 'in_progress') {
       // All dev subtasks done - move to AI review phase
       task.phase = 'ai_review';
@@ -73,6 +74,21 @@ export async function POST(req: NextRequest) {
     }
 
     await taskPersistence.saveTask(task);
+
+    // If we advanced to ai_review by skipping the last dev subtask, auto-start QA.
+    // This matches the auto-transition behavior in start-development.
+    if (shouldAutoStartReview) {
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agents/start-review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId }),
+        });
+      } catch (error) {
+        // Non-fatal: user can still start review manually.
+        console.log('Auto-start review failed:', error);
+      }
+    }
 
     return NextResponse.json({
       success: true,

@@ -6,12 +6,14 @@
  * Shows task subtasks and logs in tabbed interface
  */
 
-import { useState, useEffect } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Task, Subtask } from '@/lib/tasks/schema';
 import { CheckCircle2, Circle, Loader2, Trash2, SkipForward, GripVertical } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
+import { Button } from '@/components/ui/button';
+import { AgentLog } from '@/lib/agents/manager';
 import {
   DndContext,
   closestCenter,
@@ -201,10 +203,13 @@ function SortableSubtaskItem({
 
 export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>('subtasks');
-  const [logs, setLogs] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isSkipping, setIsSkipping] = useState<string | null>(null);
+  const [isSkippingCurrent, setIsSkippingCurrent] = useState(false);
   const [subtasks, setSubtasks] = useState<Subtask[]>(task.subtasks);
+  const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
+  const [logStatus, setLogStatus] = useState<'idle' | 'connecting' | 'running' | 'completed' | 'stopped' | 'error'>('idle');
+  const logsEndRef = useRef<HTMLDivElement>(null);
   const { loadTasks } = useTaskStore();
 
   // Update local subtasks when task changes
@@ -228,6 +233,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
   // Find current in_progress subtask for logs
   const currentSubtask = task.subtasks.find(s => s.status === 'in_progress');
+  const activeThreadId = task.assignedAgent;
 
   // Auto-switch to logs tab when a subtask is in progress
   useEffect(() => {
@@ -236,6 +242,100 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSubtask]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeTab !== 'logs') return;
+
+    setAgentLogs([]);
+
+    if (!activeThreadId) {
+      setLogStatus('idle');
+      return;
+    }
+
+    setLogStatus('connecting');
+
+    const eventSource = new EventSource(`/api/agents/stream?threadId=${activeThreadId}`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'connected') {
+          setLogStatus('running');
+          return;
+        }
+        if (data.type === 'status') {
+          // completed | error | stopped
+          setLogStatus(data.status || 'completed');
+          eventSource.close();
+          return;
+        }
+
+        setAgentLogs((prev) => [...prev, data]);
+      } catch (error) {
+        console.error('Failed to parse SSE message:', error);
+      }
+    };
+
+    eventSource.onerror = () => {
+      setLogStatus('error');
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [open, activeTab, activeThreadId]);
+
+  useEffect(() => {
+    if (activeTab !== 'logs') return;
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [agentLogs, activeTab]);
+
+  const statusColor = useMemo(() => {
+    switch (logStatus) {
+      case 'running':
+        return 'var(--color-info)';
+      case 'completed':
+        return 'var(--color-success)';
+      case 'error':
+        return 'var(--color-error)';
+      case 'stopped':
+        return 'var(--color-warning)';
+      default:
+        return 'var(--color-text-muted)';
+    }
+  }, [logStatus]);
+
+  const formatTimestamp = (timestamp: number) => new Date(timestamp).toLocaleTimeString();
+
+  const logsText = useMemo(() => {
+    const lines = agentLogs.map((log) => {
+      const content =
+        typeof log.content === 'string' ? log.content : JSON.stringify(log.content, null, 2);
+      return `[${formatTimestamp(log.timestamp)}] ${log.type}: ${content}`;
+    });
+    return [
+      `Task: ${task.title}`,
+      `Phase: ${task.phase}`,
+      `Thread: ${activeThreadId || '—'}`,
+      `Status: ${logStatus}`,
+      '',
+      ...lines,
+    ].join('\n');
+  }, [agentLogs, logStatus, task.phase, task.title, activeThreadId]);
+
+  const handleCopyLogs = async () => {
+    try {
+      await navigator.clipboard.writeText(logsText);
+      toast.success('Copied logs to clipboard');
+    } catch (e) {
+      toast.error('Failed to copy logs');
+      console.error(e);
+    }
+  };
 
   const handleDeleteSubtask = async (subtaskId: string) => {
     setIsDeleting(subtaskId);
@@ -310,6 +410,35 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
       console.error(error);
     } finally {
       setIsSkipping(null);
+    }
+  };
+
+  const handleSkipCurrentSubtask = async () => {
+    if (!currentSubtask) return;
+    setIsSkippingCurrent(true);
+    try {
+      const response = await fetch('/api/tasks/skip-subtask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: task.id,
+          subtaskId: currentSubtask.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to skip current subtask');
+        return;
+      }
+
+      toast.success(`Skipped: ${currentSubtask.label}`);
+      await loadTasks();
+    } catch (error) {
+      toast.error('Failed to skip current subtask');
+      console.error(error);
+    } finally {
+      setIsSkippingCurrent(false);
     }
   };
 
@@ -723,41 +852,89 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                  ) : null}
                  </>
                  ) : (
-            <div
-              className="rounded-lg p-4 font-mono text-xs"
-              style={{
-                background: 'var(--color-terminal-background)',
-                color: 'var(--color-terminal-text)',
-                minHeight: '100%',
-              }}
-            >
-                {currentSubtask ? (
-                  <div>
-                    <div className="mb-2 pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                      <span style={{ color: 'var(--color-info)' }}>▶ {currentSubtask.activeForm || currentSubtask.label}</span>
-                    </div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>
-                      [MOCK] Streaming logs will appear here...
-                      <br />
-                      [MOCK] Reading files...
-                      <br />
-                      [MOCK] Implementing changes...
-                      <br />
-                      <span className="animate-pulse">█</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ color: 'var(--color-text-muted)' }}>
-                    No active subtask. Logs will appear when a subtask starts executing.
-                  </div>
-                )}
-              </div>
-          )}
+                   <div
+                     className="rounded-lg p-4"
+                     style={{
+                       background: 'var(--color-terminal-background)',
+                       color: 'var(--color-terminal-text)',
+                       minHeight: '100%',
+                     }}
+                     // dnd-kit listens to pointer events; keep them inside the modal.
+                     onPointerDownCapture={(e) => e.stopPropagation()}
+                     onPointerMoveCapture={(e) => e.stopPropagation()}
+                     onPointerUpCapture={(e) => e.stopPropagation()}
+                   >
+                     {/* Header */}
+                     <div
+                       className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
+                       style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+                       onMouseDown={(e) => e.stopPropagation()}
+                       onClick={(e) => e.stopPropagation()}
+                       onPointerDownCapture={(e) => e.stopPropagation()}
+                     >
+                       <div className="text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>
+                         Thread: {activeThreadId || '—'}
+                       </div>
+                       <div className="flex items-center gap-2">
+                         <Button
+                           variant="secondary"
+                           size="sm"
+                           onClick={(e) => {
+                             e.stopPropagation();
+                             handleCopyLogs();
+                           }}
+                           disabled={!agentLogs.length}
+                           title={!agentLogs.length ? 'No logs to copy yet' : 'Copy logs to clipboard'}
+                         >
+                           Copy logs
+                         </Button>
+                         <div className="text-xs font-medium" style={{ color: statusColor }}>
+                           ● {logStatus.toUpperCase()}
+                         </div>
+                       </div>
+                     </div>
+
+                     {/* Terminal body */}
+                     <div className="mt-3 h-[420px] overflow-y-auto font-mono text-xs whitespace-pre-wrap break-words">
+                       {!activeThreadId ? (
+                         <div style={{ color: 'var(--color-text-muted)' }}>
+                           No active agent thread. Logs will appear when a subtask starts executing.
+                         </div>
+                       ) : agentLogs.length === 0 && logStatus === 'connecting' ? (
+                         <div style={{ color: 'var(--color-text-muted)' }}>Connecting to agent…</div>
+                       ) : (
+                         <>
+                           {currentSubtask && (
+                             <div className="mb-2 pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
+                               <span style={{ color: 'var(--color-info)' }}>
+                                 ▶ {currentSubtask.activeForm || currentSubtask.label}
+                               </span>
+                             </div>
+                           )}
+                           {agentLogs.map((log, i) => (
+                             <div key={i} className="mb-2">
+                               <span style={{ color: 'var(--color-text-muted)' }}>
+                                 [{formatTimestamp(log.timestamp)}]
+                               </span>{' '}
+                               <span style={{ color: 'var(--color-info)' }}>{log.type}:</span>{' '}
+                               <span style={{ color: 'var(--color-terminal-text)' }}>
+                                 {typeof log.content === 'string'
+                                   ? log.content
+                                   : JSON.stringify(log.content, null, 2)}
+                               </span>
+                             </div>
+                           ))}
+                           <div ref={logsEndRef} />
+                         </>
+                       )}
+                     </div>
+                   </div>
+                 )}
         </div>
 
         {/* Footer with progress */}
         <div className="pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center justify-between text-sm gap-3">
             <div style={{ color: 'var(--color-text-secondary)' }}>
               Progress: {(() => {
                 const relevantSubtasks = task.phase === 'in_progress' 
@@ -768,6 +945,22 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                 return `${relevantSubtasks.filter(s => s.status === 'completed').length}/${relevantSubtasks.length} completed`;
               })()}
             </div>
+            {currentSubtask && (
+              <button
+                onClick={handleSkipCurrentSubtask}
+                disabled={isSkippingCurrent}
+                className="px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                style={{
+                  background: 'var(--color-warning)',
+                  color: '#000000',
+                  opacity: isSkippingCurrent ? 0.6 : 1,
+                  whiteSpace: 'nowrap',
+                }}
+                title="Skip the currently running subtask (stops the agent)"
+              >
+                {isSkippingCurrent ? 'Skipping…' : 'Skip current'}
+              </button>
+            )}
             <div className="text-lg font-semibold" style={{ color: 'var(--color-info)' }}>
               {(() => {
                 const relevantSubtasks = task.phase === 'in_progress' 
