@@ -17,6 +17,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { GitBranch, Eye, Code2, Folder, AlertCircle, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Task, Subtask } from '@/lib/tasks/schema';
+import { toast } from 'sonner';
+import { useTaskStore } from '@/store/task-store';
 
 interface HumanReviewModalProps {
   open: boolean;
@@ -26,11 +28,13 @@ interface HumanReviewModalProps {
 
 export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [mrUrl, setMrUrl] = useState<string | null>(task.mergeRequestUrl || null);
   const [gitStatus, setGitStatus] = useState<{
     hasChanges: boolean;
     status: string;
     clean: boolean;
   } | null>(null);
+  const { loadTasks } = useTaskStore();
 
   // Separate dev and QA subtasks
   const devSubtasks = task.subtasks.filter(s => s.type === 'dev');
@@ -51,13 +55,69 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
 
   const handleCreateMR = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    // If already created, just open it
+    if (mrUrl) {
+      window.open(mrUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     setIsLoading(true);
     try {
-      // TODO: Implement MR creation
-      console.log('Creating MR for task:', task.id);
-      // await fetch('/api/review/create-mr', { ... });
+      const response = await fetch('/api/git/create-mr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: task.id }),
+      });
+
+      const data = await response.json().catch(() => ({} as any));
+      if (!response.ok) {
+        toast.error(data?.error || 'Failed to create MR');
+        return;
+      }
+
+      const url = data?.url as string | undefined;
+      if (url) {
+        setMrUrl(url);
+        toast.success('Merge request created');
+        // Open in a new tab for convenience
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } else {
+        toast.success('Merge request created');
+      }
     } catch (error) {
       console.error('Failed to create MR:', error);
+      toast.error('Failed to create MR');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMoveToDone = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/tasks/update', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: task.id,
+          phase: 'done',
+          status: 'completed',
+          assignedAgent: undefined,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({} as any));
+      if (!response.ok) {
+        toast.error(data?.error || 'Failed to move task to Done');
+        return;
+      }
+
+      toast.success('Moved task to Done');
+      await loadTasks();
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Failed to move task to Done:', error);
+      toast.error('Failed to move task to Done');
     } finally {
       setIsLoading(false);
     }
@@ -291,7 +351,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
                       e.currentTarget.style.background = 'var(--color-primary)';
                     }}
                   >
-                    {isLoading ? 'Creating...' : 'Create MR'}
+                    {isLoading ? 'Creating...' : mrUrl ? 'View MR' : 'Create MR'}
                   </Button>
                 </div>
               </Card>
@@ -503,8 +563,10 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
               e.currentTarget.style.opacity = '1';
             }}
             className="text-xs"
+            onClick={handleMoveToDone}
+            disabled={isLoading}
           >
-            ✓ Approve & Merge
+            {isLoading ? 'Moving...' : 'Move to Done'}
           </Button>
         </DialogFooter>
       </DialogContent>

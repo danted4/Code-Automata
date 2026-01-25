@@ -188,7 +188,7 @@ export function TaskCard({ task }: TaskCardProps) {
 
     // Open detail modal if task has subtasks and is in progress or ai_review phase
     if (task.subtasks && task.subtasks.length > 0 && !showTaskDetailModal && 
-        (task.phase === 'in_progress' || task.phase === 'ai_review')) {
+        (task.phase === 'in_progress' || task.phase === 'ai_review' || task.phase === 'done')) {
       setShowTaskDetailModal(true);
     }
   };
@@ -211,7 +211,7 @@ export function TaskCard({ task }: TaskCardProps) {
   const isClickable =
     (task.phase === 'planning' && task.status === 'planning' && !!task.assignedAgent) ||
     (task.subtasks && task.subtasks.length > 0 &&
-      (task.phase === 'in_progress' || task.phase === 'ai_review' || task.phase === 'human_review'));
+      (task.phase === 'in_progress' || task.phase === 'ai_review' || task.phase === 'human_review' || task.phase === 'done'));
 
   return (
     <Card
@@ -291,12 +291,12 @@ export function TaskCard({ task }: TaskCardProps) {
                 .filter((subtask) => {
                   // In progress phase: show only dev subtasks
                   // AI review phase: show only QA subtasks
-                  // Human review phase: show all subtasks (both dev and QA)
+                  // Human review & done: show all subtasks (both dev and QA)
                   if (task.phase === 'in_progress') {
                     return subtask.type === 'dev';
                   } else if (task.phase === 'ai_review') {
                     return subtask.type === 'qa';
-                  } else if (task.phase === 'human_review') {
+                  } else if (task.phase === 'human_review' || task.phase === 'done') {
                     return true; // Show all subtasks
                   }
                   return false;
@@ -550,6 +550,16 @@ export function TaskCard({ task }: TaskCardProps) {
           <>
             <div className="w-full text-xs py-2 px-3 rounded text-center" style={{ background: 'var(--color-success)', color: '#ffffff' }}>
               ✓ Ready for human review
+            </div>
+          </>
+        ) : task.phase === 'done' ? (
+          /* Done Phase - Read-only */
+          <>
+            <div
+              className="w-full text-xs py-2 px-3 rounded text-center"
+              style={{ background: 'var(--color-surface-hover)', color: 'var(--color-text-secondary)' }}
+            >
+              ✓ Completed
             </div>
           </>
         ) : (

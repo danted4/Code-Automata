@@ -74,6 +74,7 @@ export interface Task {
   // Integrations
   githubIssue?: number;
   gitlabIssue?: number;
+  mergeRequestUrl?: string; // GitHub PR / GitLab MR URL (if created)
 
   // Timestamps
   createdAt: number;

@@ -728,7 +728,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                      </div>
                    )}
                  </>
-               ) : task.phase === 'ai_review' ? (
+              ) : task.phase === 'ai_review' ? (
                  <>
                    {/* QA SUBTASKS SECTION */}
                    <div className="mb-6">
@@ -848,8 +848,68 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                        </div>
                      </div>
                    )}
-                 </>
-                 ) : null}
+                </>
+              ) : task.phase === 'done' ? (
+                <>
+                  <div className="mb-6">
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text-primary)' }}>
+                      ✅ What was completed
+                    </h3>
+
+                    <div className="space-y-3">
+                      {[...subtasks]
+                        .sort((a, b) => {
+                          // Dev first, then QA. Keep stable-ish order by id.
+                          if (a.type !== b.type) return a.type === 'dev' ? -1 : 1;
+                          return a.id.localeCompare(b.id);
+                        })
+                        .map((subtask, index) => (
+                          <div
+                            key={subtask.id}
+                            className="flex items-start gap-3 p-3 rounded-lg border"
+                            style={{
+                              background: 'var(--color-surface)',
+                              borderColor: 'var(--color-border)',
+                            }}
+                          >
+                            <div className="mt-0.5">{getSubtaskIcon(subtask)}</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                                  {index + 1}. {subtask.label}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className="text-xs px-2 py-0.5 rounded"
+                                    style={{
+                                      background: subtask.type === 'qa' ? '#a78bfa' : 'var(--color-success)',
+                                      color: '#ffffff',
+                                    }}
+                                    title={subtask.type === 'qa' ? 'QA' : 'Dev'}
+                                  >
+                                    {subtask.type.toUpperCase()}
+                                  </div>
+                                  <div
+                                    className="text-xs px-2 py-0.5 rounded"
+                                    style={{
+                                      background: 'var(--color-surface-hover)',
+                                      color: 'var(--color-text-secondary)',
+                                    }}
+                                  >
+                                    {subtask.status.replace('_', ' ')}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                                {subtask.content}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </>
+              ) : null}
                  </>
                  ) : (
                    <div
