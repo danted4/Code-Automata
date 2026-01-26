@@ -268,6 +268,7 @@ function inferSubtaskType(subtask: Partial<Subtask>): 'dev' | 'qa' {
     'lint',
     'typecheck',
     'type check',
+    'yarn build',
     'pnpm build',
     'npm run build',
     'run build',

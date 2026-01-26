@@ -90,7 +90,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 
 - **Node.js 18+** — [Download](https://nodejs.org/)
 - **Git 2.20+** — Required for worktree functionality
-- **npm** or **pnpm** — Package manager
+- **yarn** **npm** or **pnpm** — Package manager
 
 Verify your environment:
 
@@ -111,13 +111,13 @@ git --version   # Should be 2.20.0 or higher
 2. **Install dependencies:**
 
    ```bash
-   npm install
+   yarn install
    ```
 
 3. **Verify the setup:**
 
    ```bash
-   npm run build
+   yarn build
    ```
 
 ### Development
@@ -125,7 +125,7 @@ git --version   # Should be 2.20.0 or higher
 Start the development server:
 
 ```bash
-npm run dev
+yarn dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser to access the Kanban board.
@@ -134,13 +134,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser to access th
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start development server with hot reload |
-| `npm run build` | Build for production |
-| `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
-| `npm run test:e2e` | Run Playwright end-to-end tests |
-| `npm run test:e2e:ui` | Run tests with Playwright UI |
-| `npm run test:e2e:headed` | Run tests in headed browser mode |
+| `yarn dev` | Start development server with hot reload |
+| `yarn build` | Build for production |
+| `yarn start` | Start production server |
+| `yarn lint` | Run ESLint |
+| `yarn test:e2e` | Run Playwright end-to-end tests |
+| `yarn test:e2e:ui` | Run tests with Playwright UI |
+| `yarn test:e2e:headed` | Run tests in headed browser mode |
 
 ### Using Amp (Optional)
 
@@ -150,14 +150,14 @@ This project includes an Amp SDK adapter (`@sourcegraph/amp-sdk`) for real AI-po
 
 ```bash
 export AMP_API_KEY=your_key_here
-npm run dev
+yarn dev
 ```
 
 **Option 2: CLI authentication**
 
 ```bash
 amp login
-npm run dev
+yarn dev
 ```
 
 Without Amp configured, the system uses the `MockCLIAdapter` for simulated responses.

@@ -164,13 +164,13 @@ flowchart TD
 
 ### Local development
 ```bash
-npm install
-npm run dev
+yarn install
+yarn dev
 ```
 
 ### E2E tests
 ```bash
-npm run test:e2e
+yarn test:e2e
 ```
 
 ### Real Amp smoke test (minimal cost)
