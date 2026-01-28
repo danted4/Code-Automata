@@ -125,6 +125,19 @@ export function DeleteTaskModal({
             variant="outline" 
             onClick={() => onOpenChange(false)}
             disabled={isDeleting}
+            style={{
+              background: 'var(--color-surface-hover)',
+              color: 'var(--color-text-primary)',
+              borderColor: 'var(--color-border)',
+            }}
+            onMouseEnter={(e) => {
+              if (!isDeleting) {
+                e.currentTarget.style.background = 'var(--color-background)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--color-surface-hover)';
+            }}
           >
             Cancel
           </Button>

@@ -113,6 +113,7 @@ export function TaskCard({ task }: TaskCardProps) {
 
   const handleDeleteIconClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    e.preventDefault();
     setShowDeleteModal(true);
   };
 
@@ -202,6 +203,11 @@ export function TaskCard({ task }: TaskCardProps) {
       return;
     }
 
+    // Prevent opening if delete modal is open
+    if (showDeleteModal) {
+      return;
+    }
+
     // Planning mode: open live planning logs when an agent is running
     if (task.phase === 'planning' && task.status === 'planning' && task.assignedAgent) {
       setShowPlanningLogsModal(true);
@@ -263,32 +269,33 @@ export function TaskCard({ task }: TaskCardProps) {
         e.currentTarget.style.borderColor = 'var(--color-border)';
       }}
     >
-      {/* Delete Icon Button */}
-      <button
-        onClick={handleDeleteIconClick}
-        className="absolute top-2 left-2 p-1 rounded hover:opacity-70 transition-opacity z-10"
-        style={{ color: 'var(--color-destructive)' }}
-        aria-label="Delete task"
-        data-testid="delete-task-button"
-      >
-        <Trash2 className="w-4 h-4" />
-      </button>
-
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <CardTitle data-testid="task-title" className="text-sm font-medium line-clamp-2" style={{ color: 'var(--color-text-primary)' }}>
             {task.title}
           </CardTitle>
-          <Badge
-            data-testid="task-status"
-            className="whitespace-nowrap shrink-0"
-            style={{
-              background: getStatusColors(task.status).bg,
-              color: getStatusColors(task.status).text,
-            }}
-          >
-            {task.status.replace('_', ' ')}
-          </Badge>
+          <div className="flex items-center gap-2 shrink-0">
+            <Badge
+              data-testid="task-status"
+              className="whitespace-nowrap"
+              style={{
+                background: getStatusColors(task.status).bg,
+                color: getStatusColors(task.status).text,
+              }}
+            >
+              {task.status.replace('_', ' ')}
+            </Badge>
+            {/* Delete Icon Button */}
+            <button
+              onClick={handleDeleteIconClick}
+              className="p-1 rounded hover:opacity-70 transition-opacity"
+              style={{ color: 'var(--color-destructive)' }}
+              aria-label="Delete task"
+              data-testid="delete-task-button"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         {task.description && (
           <CardDescription data-testid="task-description" className="line-clamp-2 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
