@@ -215,4 +215,23 @@ test.describe('Kanban Board', () => {
     // Take screenshot of task list page (even if it's a 404 for now)
     await page.screenshot({ path: 'e2e/screenshots/09-navigation-test.png' });
   });
+
+  test('should show new task modal with tool select and readiness areas', async ({ page }) => {
+    await page.getByTestId('new-task-button').click();
+
+    const dialog = page.getByRole('dialog', { name: /create new task/i });
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+
+    const toolSelectArea = page.getByTestId('new-task-modal-tool-select-area');
+    await expect(toolSelectArea).toBeVisible();
+    await expect(toolSelectArea).toContainText('CLI Tool');
+
+    const readinessArea = page.getByTestId('new-task-modal-readiness-area');
+    await expect(readinessArea).toBeVisible();
+    await expect(readinessArea).toHaveText(
+      /Amp readiness|Cursor readiness|No readiness check for this tool|Checking…/
+    );
+
+    await page.keyboard.press('Escape');
+  });
 });

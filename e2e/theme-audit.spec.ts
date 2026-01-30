@@ -95,12 +95,13 @@ test.describe('Theme System Audit', () => {
 
     // Test 6: Switch to Light theme
     console.log('\n6. Testing Light Theme');
-    await page.click('[id="cli-tool"]'); // Click theme selector
-    await page.waitForTimeout(300);
-
-    // Find and click light theme option
-    const themeOptions = await page.locator('[role="option"]').all();
-    console.log(`   Found ${themeOptions.length} theme options`);
+    const themeSwitcherForOptions = await page.locator('text=Modern Dark').first();
+    if (await themeSwitcherForOptions.isVisible()) {
+      await themeSwitcherForOptions.click();
+      await page.waitForTimeout(300);
+      const themeOptions = await page.locator('[role="option"]').all();
+      console.log(`   Found ${themeOptions.length} theme options`);
+    }
 
     // Test 7: Take screenshots of each theme
     console.log('\n7. Taking screenshots for visual inspection');

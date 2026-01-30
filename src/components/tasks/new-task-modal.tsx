@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Loader2 } from 'lucide-react';
 import { useTaskStore } from '@/store/task-store';
 
 type AmpPreflightResult = {
@@ -402,11 +403,17 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
           </div>
 
           {/* CLI Tool Selection */}
-          <div className="space-y-2">
+          <div className="space-y-2" data-testid="new-task-modal-tool-select-area">
             <Label htmlFor="cli-tool">CLI Tool</Label>
             {isLoadingAdapters ? (
-              <div className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-                Loading CLI tools...
+              <div
+                className="flex h-10 w-full items-center justify-center rounded-md border px-3 py-2 text-sm"
+                style={{
+                  borderColor: 'var(--color-border)',
+                  background: 'var(--color-surface)',
+                }}
+              >
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--color-info)' }} />
               </div>
             ) : (
               <Select value={cliTool} onValueChange={handleCliChange}>
@@ -424,79 +431,80 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
             )}
           </div>
 
-          {/* Amp readiness panel */}
-          {cliTool === 'amp' && (
-            <div
-              className="space-y-2 rounded-md border p-3 text-sm"
-              style={{ borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium">Amp readiness</div>
-                <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {isCheckingAmp ? 'Checking…' : ampPreflight?.canRunAmp ? 'Ready' : 'Not ready'}
-                </div>
+          {/* Tool readiness container */}
+          <div
+            className="min-h-[88px] rounded-md border p-3"
+            style={{ borderColor: 'var(--color-border)' }}
+            data-testid="new-task-modal-readiness-area"
+          >
+            {isLoadingAdapters ||
+            (cliTool === 'amp' && isCheckingAmp) ||
+            (cliTool === 'cursor' && isCheckingCursor) ? (
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-text-muted)' }}>
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: 'var(--color-info)' }} />
+                <span>Checking…</span>
               </div>
-
-              {ampPreflight && (
-                <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  <div>CLI: {ampPreflight.ampCliPath ? ampPreflight.ampCliPath : 'not found'}</div>
-                  <div>Auth: {ampPreflight.authSource}</div>
-                </div>
-              )}
-
-              {ampPreflight && !ampPreflight.canRunAmp && ampPreflight.instructions.length > 0 && (
-                <div className="space-y-1 text-xs">
-                  <div className="font-medium">Fix steps</div>
-                  <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
-                    {ampPreflight.instructions.map((s, i) => (
-                      <li key={i}>{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Cursor readiness panel */}
-          {cliTool === 'cursor' && (
-            <div
-              className="space-y-2 rounded-md border p-3 text-sm"
-              style={{ borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium">Cursor readiness</div>
-                <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {isCheckingCursor
-                    ? 'Checking…'
-                    : cursorPreflight?.canRunCursor
-                      ? 'Ready'
-                      : 'Not ready'}
-                </div>
-              </div>
-
-              {cursorPreflight && (
-                <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  <div>
-                    CLI: {cursorPreflight.agentCliPath ? cursorPreflight.agentCliPath : 'not found'}
+            ) : cliTool === 'amp' ? (
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">Amp readiness</div>
+                  <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                    {ampPreflight?.canRunAmp ? 'Ready' : 'Not ready'}
                   </div>
-                  <div>Auth: {cursorPreflight.authSource}</div>
                 </div>
-              )}
-
-              {cursorPreflight &&
-                !cursorPreflight.canRunCursor &&
-                cursorPreflight.instructions.length > 0 && (
+                {ampPreflight && (
+                  <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                    <div>CLI: {ampPreflight.ampCliPath ? ampPreflight.ampCliPath : 'not found'}</div>
+                    <div>Auth: {ampPreflight.authSource}</div>
+                  </div>
+                )}
+                {ampPreflight && !ampPreflight.canRunAmp && ampPreflight.instructions.length > 0 && (
                   <div className="space-y-1 text-xs">
                     <div className="font-medium">Fix steps</div>
                     <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
-                      {cursorPreflight.instructions.map((s, i) => (
+                      {ampPreflight.instructions.map((s, i) => (
                         <li key={i}>{s}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-            </div>
-          )}
+              </div>
+            ) : cliTool === 'cursor' ? (
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">Cursor readiness</div>
+                  <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                    {cursorPreflight?.canRunCursor ? 'Ready' : 'Not ready'}
+                  </div>
+                </div>
+                {cursorPreflight && (
+                  <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                    <div>
+                      CLI:{' '}
+                      {cursorPreflight.agentCliPath ? cursorPreflight.agentCliPath : 'not found'}
+                    </div>
+                    <div>Auth: {cursorPreflight.authSource}</div>
+                  </div>
+                )}
+                {cursorPreflight &&
+                  !cursorPreflight.canRunCursor &&
+                  cursorPreflight.instructions.length > 0 && (
+                    <div className="space-y-1 text-xs">
+                      <div className="font-medium">Fix steps</div>
+                      <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
+                        {cursorPreflight.instructions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+            ) : (
+              <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
+                No readiness check for this tool
+              </p>
+            )}
+          </div>
 
           {/* Dynamic CLI Configuration */}
           {configSchema && configSchema.fields.length > 0 && (

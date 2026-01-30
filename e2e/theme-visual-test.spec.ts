@@ -1,4 +1,4 @@
-import { test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
 test.describe('Theme Visual Test', () => {
   test('capture all three themes', async ({ page }) => {
@@ -15,6 +15,8 @@ test.describe('Theme Visual Test', () => {
     // Open New Task modal for dark theme
     await page.click('[data-testid="new-task-button"]');
     await page.waitForTimeout(500);
+    await expect(page.getByTestId('new-task-modal-tool-select-area')).toBeVisible();
+    await expect(page.getByTestId('new-task-modal-readiness-area')).toBeVisible();
     await page.screenshot({
       path: 'e2e/screenshots/theme-modern-dark-modal.png',
       fullPage: true,

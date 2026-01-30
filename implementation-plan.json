@@ -1,0 +1,67 @@
+{
+  "subtasks": [
+    {
+      "id": "subtask-1",
+      "content": "In src/components/tasks/new-task-modal.tsx add import for Loader2 from lucide-react.",
+      "label": "Add Loader2 import",
+      "activeForm": "Adding Loader2 import",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-2",
+      "content": "Replace the CLI tool block in new-task-modal.tsx: when isLoadingAdapters is true, render a div with h-10 w-full and SelectTrigger-like styling (border, padding, rounded) containing a centered Loader2 with animate-spin and style={{ color: 'var(--color-info)' }}; when false, keep the existing Select with SelectTrigger and SelectContent.",
+      "label": "Reserve space for tool select",
+      "activeForm": "Reserving space for tool select",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-3",
+      "content": "Add a single tool readiness container after the CLI block in new-task-modal.tsx with min-h-[88px], rounded-md border p-3, and style borderColor: var(--color-border) so it matches the current Amp/Cursor panel dimensions and styling.",
+      "label": "Add tool readiness container",
+      "activeForm": "Adding tool readiness container",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-4",
+      "content": "Inside the readiness container: when isLoadingAdapters is true, show a theme-based loader (Loader2 with animate-spin and color: var(--color-info)) and the text 'Checking…' so initial load is smooth.",
+      "label": "Show loader when loading adapters",
+      "activeForm": "Showing loader when loading adapters",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-5",
+      "content": "Inside the readiness container: when cliTool === 'amp' render the existing Amp readiness content (title, status, CLI path, auth, fix steps); when cliTool === 'cursor' render the existing Cursor readiness content; when cliTool is neither (e.g. mock), render 'No readiness check for this tool' with muted text so height stays consistent.",
+      "label": "Branch readiness content by tool",
+      "activeForm": "Branching readiness content by tool",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-6",
+      "content": "Remove the two separate conditional blocks that render the Amp readiness panel and Cursor readiness panel (the {cliTool === 'amp' && (...)} and {cliTool === 'cursor' && (...)} blocks); all readiness UI must live inside the single readiness container added in subtask-3.",
+      "label": "Consolidate readiness into one block",
+      "activeForm": "Consolidating readiness into one block",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-7",
+      "content": "When cliTool is amp or cursor and isCheckingAmp or isCheckingCursor is true, show the same theme-based Loader2 and 'Checking…' inside the readiness container so preflight loading is consistent and theme-aware.",
+      "label": "Theme loader for preflight checking",
+      "activeForm": "Adding theme loader for preflight checking",
+      "type": "dev"
+    },
+    {
+      "id": "subtask-qa-1",
+      "content": "Manual verification: open the new task modal and confirm (1) no visible flicker or sudden height change when it opens, (2) tool select area shows reserved-height loader until CLI tools load then the dropdown without modal growth, (3) readiness block is always present with min-height and shows loader then correct content, (4) loaders use theme colors (var(--color-info)) in dark/light/retro, (5) switching between amp, cursor, and mock causes no layout jump or flicker. Report any failures without changing code.",
+      "label": "Manual modal and theme check",
+      "activeForm": "Manual modal and theme check",
+      "type": "qa"
+    },
+    {
+      "id": "subtask-qa-2",
+      "content": "Run yarn build and verify there are no build errors; run lint (e.g. yarn lint) and fix only pre-existing issues if any; run e2e tests that open the new task modal (e.g. kanban.spec.ts, theme-visual-test.spec.ts, theme-audit.spec.ts) and ensure they pass. Optionally add or extend an e2e assertion that the tool select and readiness areas are present. Report failures without changing implementation logic.",
+      "label": "Build, lint, and e2e verification",
+      "activeForm": "Build, lint, and e2e verification",
+      "type": "qa"
+    }
+  ]
+}
