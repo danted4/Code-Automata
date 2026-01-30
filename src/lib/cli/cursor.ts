@@ -46,6 +46,8 @@ const MODELS_CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 // Fallback models if dynamic fetch fails
 const FALLBACK_MODELS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'composer-1', label: 'Composer 1' },
   { value: 'opus-4.5-thinking', label: 'Claude 4.5 Opus (Thinking)' },
   { value: 'sonnet-4.5', label: 'Claude 4.5 Sonnet' },
   { value: 'sonnet-4.5-thinking', label: 'Claude 4.5 Sonnet (Thinking)' },
@@ -97,11 +99,6 @@ export class CursorAdapter implements CLIAdapter {
         if (match) {
           const [, modelId, displayName] = match;
           const fullLine = line;
-
-          // Skip 'auto' and 'composer-1' as they're special modes, not models
-          if (modelId === 'auto' || modelId === 'composer-1') {
-            continue;
-          }
 
           models.push({
             value: modelId.trim(),
