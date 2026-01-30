@@ -21,11 +21,13 @@ import { useProjectStore } from '@/store/project-store';
 import { WORKFLOW_PHASES, WorkflowPhase, Task } from '@/lib/tasks/schema';
 import { KanbanColumn } from './column';
 import { TaskCard } from './task-card';
+import { EditTaskModal } from '@/components/tasks/edit-task-modal';
 
 export function KanbanBoard() {
   const { tasks, loadTasks, updateTaskPhase } = useTaskStore();
   const projectPath = useProjectStore((s) => s.projectPath);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [editModalTask, setEditModalTask] = useState<Task | null>(null);
 
   // Disable pointer sensor activation delay for instant drag
   const sensors = useSensors(
@@ -105,19 +107,32 @@ export function KanbanBoard() {
   };
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex gap-4 p-4 overflow-x-auto h-full">
-        {WORKFLOW_PHASES.map((phase) => (
-          <KanbanColumn key={phase} phase={phase} tasks={tasks.filter((t) => t.phase === phase)} />
-        ))}
-      </div>
-      <DragOverlay dropAnimation={null}>
-        {activeTask ? (
-          <div className="rotate-3 scale-105">
-            <TaskCard task={activeTask} />
-          </div>
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+    <>
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="flex gap-4 p-4 overflow-x-auto h-full">
+          {WORKFLOW_PHASES.map((phase) => (
+            <KanbanColumn
+              key={phase}
+              phase={phase}
+              tasks={tasks.filter((t) => t.phase === phase)}
+              onEditBlockedTask={setEditModalTask}
+            />
+          ))}
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {activeTask ? (
+            <div className="rotate-3 scale-105">
+              <TaskCard task={activeTask} />
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+
+      <EditTaskModal
+        open={!!editModalTask}
+        onOpenChange={(open) => !open && setEditModalTask(null)}
+        task={editModalTask}
+      />
+    </>
   );
 }

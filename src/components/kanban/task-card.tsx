@@ -19,15 +19,15 @@ import { TaskDetailModal } from '@/components/tasks/task-detail-modal';
 import { HumanReviewModal } from '@/components/tasks/human-review-modal';
 import { PlanningLogsModal } from '@/components/tasks/planning-logs-modal';
 import { DeleteTaskModal } from '@/components/tasks/delete-task-modal';
-import { EditTaskModal } from '@/components/tasks/edit-task-modal';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
 
 interface TaskCardProps {
   task: Task;
+  onEditBlockedTask?: (task: Task | null) => void;
 }
 
-export function TaskCard({ task }: TaskCardProps) {
+export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [showQAModal, setShowQAModal] = useState(false);
@@ -36,7 +36,6 @@ export function TaskCard({ task }: TaskCardProps) {
   const [showHumanReviewModal, setShowHumanReviewModal] = useState(false);
   const [showPlanningLogsModal, setShowPlanningLogsModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [showEditTaskModal, setShowEditTaskModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isModalClosing, setIsModalClosing] = useState(false);
   const { loadTasks } = useTaskStore();
@@ -212,7 +211,7 @@ export function TaskCard({ task }: TaskCardProps) {
 
     // Planning mode: open edit modal when task is blocked (user can modify and restart)
     if (task.phase === 'planning' && task.status === 'blocked') {
-      setShowEditTaskModal(true);
+      onEditBlockedTask?.(task);
       return;
     }
 
@@ -785,13 +784,6 @@ export function TaskCard({ task }: TaskCardProps) {
         task={task}
         onConfirmDelete={handleDeleteTask}
         isDeleting={isDeleting}
-      />
-
-      {/* Edit Task Modal (for blocked tasks) */}
-      <EditTaskModal
-        open={showEditTaskModal}
-        onOpenChange={setShowEditTaskModal}
-        task={showEditTaskModal ? task : null}
       />
     </Card>
   );

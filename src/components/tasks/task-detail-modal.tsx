@@ -979,6 +979,17 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                     }}
                     disabled={!agentLogs.length}
                     title={!agentLogs.length ? 'No logs to copy yet' : 'Copy logs to clipboard'}
+                    style={{
+                      background: 'var(--color-surface)',
+                      color: 'var(--color-text-primary)',
+                      borderColor: 'var(--color-border)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--color-surface-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'var(--color-surface)';
+                    }}
                   >
                     Copy logs
                   </Button>

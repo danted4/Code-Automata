@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useTaskStore } from '@/store/task-store';
+import { CliReadinessPanel, CliReadinessPlaceholder } from '@/components/tasks/cli-readiness-panel';
 
 type AmpPreflightResult = {
   ampCliPath: string | null;
@@ -401,102 +402,88 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
             />
           </div>
 
-          {/* CLI Tool Selection */}
-          <div className="space-y-2">
-            <Label htmlFor="cli-tool">CLI Tool</Label>
-            {isLoadingAdapters ? (
-              <div className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-                Loading CLI tools...
-              </div>
-            ) : (
-              <Select value={cliTool} onValueChange={handleCliChange}>
-                <SelectTrigger id="cli-tool">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableAdapters.map((adapter) => (
-                    <SelectItem key={adapter.name} value={adapter.name}>
-                      {adapter.displayName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          {/* Amp readiness panel */}
-          {cliTool === 'amp' && (
-            <div
-              className="space-y-2 rounded-md border p-3 text-sm"
-              style={{ borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium">Amp readiness</div>
-                <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {isCheckingAmp ? 'Checking…' : ampPreflight?.canRunAmp ? 'Ready' : 'Not ready'}
-                </div>
-              </div>
-
-              {ampPreflight && (
-                <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  <div>CLI: {ampPreflight.ampCliPath ? ampPreflight.ampCliPath : 'not found'}</div>
-                  <div>Auth: {ampPreflight.authSource}</div>
-                </div>
-              )}
-
-              {ampPreflight && !ampPreflight.canRunAmp && ampPreflight.instructions.length > 0 && (
-                <div className="space-y-1 text-xs">
-                  <div className="font-medium">Fix steps</div>
-                  <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
-                    {ampPreflight.instructions.map((s, i) => (
-                      <li key={i}>{s}</li>
+          {/* CLI Tool + Readiness - reserve space for both from first paint to avoid layout shift */}
+          <div className="space-y-4" style={{ minHeight: '202px' }}>
+            {/* CLI Tool Selection */}
+            <div className="space-y-2 min-h-[76px]">
+              <Label htmlFor="cli-tool">CLI Tool</Label>
+              {isLoadingAdapters ? (
+                <div
+                  className="h-10 rounded-md animate-pulse"
+                  style={{ background: 'var(--color-surface-hover)' }}
+                />
+              ) : (
+                <Select value={cliTool} onValueChange={handleCliChange}>
+                  <SelectTrigger id="cli-tool">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableAdapters.map((adapter) => (
+                      <SelectItem key={adapter.name} value={adapter.name}>
+                        {adapter.displayName}
+                      </SelectItem>
                     ))}
-                  </ul>
-                </div>
+                  </SelectContent>
+                </Select>
               )}
             </div>
-          )}
 
-          {/* Cursor readiness panel */}
-          {cliTool === 'cursor' && (
-            <div
-              className="space-y-2 rounded-md border p-3 text-sm"
-              style={{ borderColor: 'var(--color-border)' }}
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium">Cursor readiness</div>
-                <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                  {isCheckingCursor
-                    ? 'Checking…'
-                    : cursorPreflight?.canRunCursor
-                      ? 'Ready'
-                      : 'Not ready'}
+            {/* CLI readiness - always present; placeholder when loading adapters or mock selected */}
+            {isLoadingAdapters || cliTool === 'mock' ? (
+              <CliReadinessPlaceholder />
+            ) : cliTool === 'amp' ? (
+              <CliReadinessPanel
+                title="Amp readiness"
+                isLoading={isCheckingAmp}
+                statusLabel={ampPreflight?.canRunAmp ? 'Ready' : 'Not ready'}
+              >
+                <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  <div>CLI: {ampPreflight?.ampCliPath ? ampPreflight.ampCliPath : 'not found'}</div>
+                  <div>Auth: {ampPreflight?.authSource ?? '—'}</div>
                 </div>
-              </div>
-
-              {cursorPreflight && (
+                {ampPreflight &&
+                  !ampPreflight.canRunAmp &&
+                  ampPreflight.instructions.length > 0 && (
+                    <div className="space-y-1 text-xs pt-2">
+                      <div className="font-medium">Fix steps</div>
+                      <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
+                        {ampPreflight.instructions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </CliReadinessPanel>
+            ) : cliTool === 'cursor' ? (
+              <CliReadinessPanel
+                title="Cursor readiness"
+                isLoading={isCheckingCursor}
+                statusLabel={cursorPreflight?.canRunCursor ? 'Ready' : 'Not ready'}
+              >
                 <div className="space-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   <div>
-                    CLI: {cursorPreflight.agentCliPath ? cursorPreflight.agentCliPath : 'not found'}
+                    CLI:{' '}
+                    {cursorPreflight?.agentCliPath ? cursorPreflight.agentCliPath : 'not found'}
                   </div>
-                  <div>Auth: {cursorPreflight.authSource}</div>
+                  <div>Auth: {cursorPreflight?.authSource ?? '—'}</div>
                 </div>
-              )}
-
-              {cursorPreflight &&
-                !cursorPreflight.canRunCursor &&
-                cursorPreflight.instructions.length > 0 && (
-                  <div className="space-y-1 text-xs">
-                    <div className="font-medium">Fix steps</div>
-                    <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
-                      {cursorPreflight.instructions.map((s, i) => (
-                        <li key={i}>{s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-            </div>
-          )}
+                {cursorPreflight &&
+                  !cursorPreflight.canRunCursor &&
+                  cursorPreflight.instructions.length > 0 && (
+                    <div className="space-y-1 text-xs pt-2">
+                      <div className="font-medium">Fix steps</div>
+                      <ul className="list-disc pl-5" style={{ color: 'var(--color-text-muted)' }}>
+                        {cursorPreflight.instructions.map((s, i) => (
+                          <li key={i}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </CliReadinessPanel>
+            ) : (
+              <CliReadinessPlaceholder />
+            )}
+          </div>
 
           {/* Dynamic CLI Configuration */}
           {configSchema && configSchema.fields.length > 0 && (
@@ -531,7 +518,21 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
         </div>
 
         <DialogFooter>
-          <Button variant="destructive" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="destructive"
+            onClick={() => onOpenChange(false)}
+            style={{
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              borderColor: 'var(--color-border)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--color-surface-hover)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--color-surface)';
+            }}
+          >
             Cancel
           </Button>
           <Button

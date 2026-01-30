@@ -155,6 +155,17 @@ export function PlanningLogsModal({
               }}
               disabled={logs.length === 0}
               title={logs.length === 0 ? 'No logs to copy yet' : 'Copy logs to clipboard'}
+              style={{
+                background: 'var(--color-surface)',
+                color: 'var(--color-text-primary)',
+                borderColor: 'var(--color-border)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--color-surface-hover)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--color-surface)';
+              }}
             >
               Copy logs
             </Button>
@@ -205,7 +216,20 @@ export function PlanningLogsModal({
           className="pt-4 flex justify-end gap-2 border-t"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <Button variant="destructive" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="destructive"
+            onClick={() => onOpenChange(false)}
+            style={{
+              background: 'var(--color-destructive)',
+              color: 'var(--color-destructive-text)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--color-destructive-hover)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--color-destructive)';
+            }}
+          >
             Close
           </Button>
         </div>

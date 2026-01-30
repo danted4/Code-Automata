@@ -13,9 +13,10 @@ import { TaskCard } from './task-card';
 interface KanbanColumnProps {
   phase: WorkflowPhase;
   tasks: Task[];
+  onEditBlockedTask?: (task: Task | null) => void;
 }
 
-export function KanbanColumn({ phase, tasks }: KanbanColumnProps) {
+export function KanbanColumn({ phase, tasks, onEditBlockedTask }: KanbanColumnProps) {
   const { setNodeRef } = useDroppable({
     id: phase,
   });
@@ -62,7 +63,7 @@ export function KanbanColumn({ phase, tasks }: KanbanColumnProps) {
         className="p-3 space-y-3 min-h-[200px] max-h-[calc(100vh-12rem)] overflow-y-auto"
       >
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} />
+          <TaskCard key={task.id} task={task} onEditBlockedTask={onEditBlockedTask} />
         ))}
         {tasks.length === 0 && (
           <div
