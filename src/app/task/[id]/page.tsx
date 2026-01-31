@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft } from 'lucide-react';
+import { apiFetch } from '@/lib/api-client';
 
 export default function TaskDetailPage() {
   const params = useParams();
@@ -26,7 +27,7 @@ export default function TaskDetailPage() {
   useEffect(() => {
     async function loadTask() {
       try {
-        const response = await fetch('/api/tasks/list');
+        const response = await apiFetch('/api/tasks/list');
         const tasks = await response.json();
         const foundTask = tasks.find((t: Task) => t.id === taskId);
         setTask(foundTask || null);

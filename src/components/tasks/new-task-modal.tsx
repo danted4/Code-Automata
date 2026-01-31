@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useTaskStore } from '@/store/task-store';
+import { apiFetch } from '@/lib/api-client';
 import { CliReadinessPanel, CliReadinessPlaceholder } from '@/components/tasks/cli-readiness-panel';
 
 type AmpPreflightResult = {
@@ -298,7 +299,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
 
       // Always start planning immediately, regardless of human review requirement
       try {
-        await fetch('/api/agents/start-planning', {
+        await apiFetch('/api/agents/start-planning', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

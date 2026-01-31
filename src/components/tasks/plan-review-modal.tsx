@@ -31,6 +31,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { apiFetch } from '@/lib/api-client';
 
 interface PlanReviewModalProps {
   open: boolean;
@@ -58,7 +59,7 @@ export function PlanReviewModal({
   const handleApproveOnly = async () => {
     setIsApproving(true);
     try {
-      const response = await fetch('/api/agents/approve-plan', {
+      const response = await apiFetch('/api/agents/approve-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -86,7 +87,7 @@ export function PlanReviewModal({
   const handleApproveAndStart = async () => {
     setIsApproving(true);
     try {
-      const response = await fetch('/api/agents/approve-plan', {
+      const response = await apiFetch('/api/agents/approve-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -133,7 +134,7 @@ export function PlanReviewModal({
   const handleSaveInlineEdit = async () => {
     setIsSaving(true);
     try {
-      const response = await fetch('/api/agents/modify-plan', {
+      const response = await apiFetch('/api/agents/modify-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -167,7 +168,7 @@ export function PlanReviewModal({
 
     setIsSaving(true);
     try {
-      const response = await fetch('/api/agents/modify-plan', {
+      const response = await apiFetch('/api/agents/modify-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

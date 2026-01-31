@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { PlanningQuestion } from '@/lib/tasks/schema';
+import { apiFetch } from '@/lib/api-client';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface QAStepperModalProps {
@@ -122,7 +123,7 @@ export function QAStepperModal({ open, onOpenChange, taskId, questions }: QAStep
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('/api/agents/submit-answers', {
+      const response = await apiFetch('/api/agents/submit-answers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

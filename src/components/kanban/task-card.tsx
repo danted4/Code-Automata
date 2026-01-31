@@ -21,6 +21,7 @@ import { PlanningLogsModal } from '@/components/tasks/planning-logs-modal';
 import { DeleteTaskModal } from '@/components/tasks/delete-task-modal';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
+import { apiFetch } from '@/lib/api-client';
 
 interface TaskCardProps {
   task: Task;
@@ -63,7 +64,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
     e.stopPropagation(); // Prevent drag when clicking button
     setIsStarting(true);
     try {
-      const response = await fetch('/api/agents/start', {
+      const response = await apiFetch('/api/agents/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -92,7 +93,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
 
     setIsStopping(true);
     try {
-      const response = await fetch('/api/agents/stop', {
+      const response = await apiFetch('/api/agents/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ threadId: task.assignedAgent }),
@@ -121,7 +122,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
   const handleDeleteTask = async () => {
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/tasks/delete?taskId=${task.id}`, {
+      const response = await apiFetch(`/api/tasks/delete?taskId=${task.id}`, {
         method: 'DELETE',
       });
 
@@ -154,7 +155,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
     e.stopPropagation();
     setIsStarting(true);
     try {
-      const response = await fetch('/api/agents/start-development', {
+      const response = await apiFetch('/api/agents/start-development', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: task.id }),

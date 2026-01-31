@@ -128,9 +128,6 @@ function enhanceEnvForPackagedApp() {
     }
   }
 }
-let nextServer = null;
-let serverPort = DEFAULT_PORT;
-let appUrl = null; // Reuse same URL when reopening window (keeps localStorage)
 
 /**
  * Check if a port is available.

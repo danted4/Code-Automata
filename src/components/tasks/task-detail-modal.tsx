@@ -18,6 +18,7 @@ import { Task, Subtask } from '@/lib/tasks/schema';
 import { CheckCircle2, Circle, Loader2, Trash2, SkipForward, GripVertical } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
+import { apiFetch, buildStreamUrl } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { AgentLog } from '@/lib/agents/manager';
 import {
@@ -252,7 +253,8 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
     setLogStatus('connecting');
 
-    const eventSource = new EventSource(`/api/agents/stream?threadId=${activeThreadId}`);
+    const url = buildStreamUrl('/api/agents/stream', { threadId: activeThreadId });
+    const eventSource = new EventSource(url);
 
     eventSource.onmessage = (event) => {
       try {
@@ -341,7 +343,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
     setSubtasks((prev) => prev.filter((s) => s.id !== subtaskId));
 
     try {
-      const response = await fetch('/api/tasks/delete-subtask', {
+      const response = await apiFetch('/api/tasks/delete-subtask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -380,7 +382,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
     );
 
     try {
-      const response = await fetch('/api/tasks/skip-subtask', {
+      const response = await apiFetch('/api/tasks/skip-subtask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -413,7 +415,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
     if (!currentSubtask) return;
     setIsSkippingCurrent(true);
     try {
-      const response = await fetch('/api/tasks/skip-subtask', {
+      const response = await apiFetch('/api/tasks/skip-subtask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -501,7 +503,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
     // Persist to backend
     try {
-      const response = await fetch('/api/tasks/reorder-subtasks', {
+      const response = await apiFetch('/api/tasks/reorder-subtasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

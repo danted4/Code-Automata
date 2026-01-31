@@ -9,6 +9,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Card } from '@/components/ui/card';
 import { AgentLog } from '@/lib/agents/manager';
+import { buildStreamUrl } from '@/lib/api-client';
 
 interface AgentTerminalProps {
   threadId: string;
@@ -21,7 +22,8 @@ export function AgentTerminal({ threadId }: AgentTerminalProps) {
 
   useEffect(() => {
     // Connect to SSE stream
-    const eventSource = new EventSource(`/api/agents/stream?threadId=${threadId}`);
+    const url = buildStreamUrl('/api/agents/stream', { threadId });
+    const eventSource = new EventSource(url);
 
     eventSource.onmessage = (event) => {
       try {
