@@ -26,6 +26,74 @@ const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
 const PORT_RANGE = 10; // try 3000..3009 if default is busy
 
 let mainWindow = null;
+
+/**
+ * Common CLI paths on macOS (agent, amp, gh, cursor, code).
+ * Always add these for packaged apps since shell PATH may be empty/unreliable.
+ */
+function getCommonCliPaths() {
+  const home = os.homedir();
+  return [
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.cursor', 'bin'),
+    path.join(home, 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    path.join(home, '.npm-global', 'bin'),
+    path.join(home, '.yarn', 'bin'),
+  ].filter((p) => fs.existsSync(p));
+}
+
+/**
+ * When packaged, GUI apps get minimal PATH and no shell env (CURSOR_API_KEY etc).
+ * Enhance process.env with user's login shell PATH so `which agent` and CLI tools work.
+ */
+function enhanceEnvForPackagedApp() {
+  if (isDev) return;
+  const home = os.homedir();
+  const shellEnv = { ...process.env, HOME: home, USER: process.env.USER || os.userInfo().username };
+  const commonPaths = getCommonCliPaths();
+  const commonPathStr = commonPaths.join(':');
+
+  let shellPath = '';
+  const shells = [...new Set([process.env.SHELL, '/bin/zsh', '/bin/bash'].filter(Boolean))];
+  for (const sh of shells) {
+    try {
+      shellPath = execSync(`${sh} -l -c 'echo $PATH'`, {
+        encoding: 'utf8',
+        timeout: 3000,
+        env: shellEnv,
+      }).trim();
+      if (shellPath) break;
+    } catch {
+      continue;
+    }
+  }
+
+  const merged = [shellPath, commonPathStr, process.env.PATH].filter(Boolean).join(':');
+  if (merged) process.env.PATH = merged;
+
+  const envVars = ['CURSOR_API_KEY', 'AMP_API_KEY'];
+  for (const name of envVars) {
+    if (!process.env[name]) {
+      for (const sh of ['/bin/zsh', '/bin/bash'].filter(Boolean)) {
+        try {
+          const val = execSync(`${sh} -l -c 'echo $${name}'`, {
+            encoding: 'utf8',
+            timeout: 2000,
+            env: shellEnv,
+          }).trim();
+          if (val && !val.startsWith('$')) {
+            process.env[name] = val;
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+}
 let nextServer = null;
 let serverPort = DEFAULT_PORT;
 let appUrl = null; // Reuse same URL when reopening window (keeps localStorage)
@@ -123,6 +191,7 @@ async function startNextServerInBackground() {
   serverPort = port;
   const url = `http://localhost:${port}`;
   appUrl = url;
+  process.env.NEXT_PUBLIC_APP_URL = url;
   try {
     const next = require('next');
     const nextApp = next({ dev: false, dir: appPath });
@@ -418,6 +487,7 @@ function setDockIcon() {
 
 app.whenReady().then(() => {
   app.setName('Code-Auto');
+  enhanceEnvForPackagedApp();
   setDockIcon();
   nativeTheme.on('updated', setDockIcon);
   createWindow();

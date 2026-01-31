@@ -10,15 +10,92 @@
  * - This is best-effort and intentionally avoids returning any sensitive tokens.
  * - We may hydrate `process.env.AMP_API_KEY` from locally stored CLI config if found,
  *   but we never include the token in the returned result.
+ * - In packaged Electron apps, GUI processes get minimal PATH; we augment PATH with
+ *   common CLI locations so `which amp` and `amp whoami` work.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, execSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+/** Common CLI paths (npm global, nvm, volta, homebrew, etc.) */
+const COMMON_CLI_PATHS = [
+  path.join(os.homedir(), '.local', 'bin'),
+  path.join(os.homedir(), '.cursor', 'bin'),
+  path.join(os.homedir(), 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  path.join(os.homedir(), '.npm-global', 'bin'),
+  path.join(os.homedir(), '.nvm', 'versions', 'node'),
+  path.join(os.homedir(), '.volta', 'bin'),
+  path.join(os.homedir(), '.fnm', 'node-versions'),
+  path.join(os.homedir(), '.yarn', 'bin'),
+];
+
+/** Build env with augmented PATH for packaged Electron app (GUI gets minimal PATH). */
+function getExecEnv(): NodeJS.ProcessEnv {
+  const base = { ...process.env };
+  const pathSep = process.platform === 'win32' ? ';' : ':';
+  const home = base.HOME || os.homedir();
+  const user = base.USER || os.userInfo().username;
+  const shellEnv = { ...base, HOME: home, USER: user };
+
+  let pathStr = base.PATH || '';
+
+  // When PATH is minimal (packaged app) or in Electron, get PATH from user's login shell
+  const pathLooksMinimal =
+    !pathStr ||
+    pathStr.length < 100 ||
+    (!pathStr.includes('homebrew') &&
+      !pathStr.includes('local') &&
+      !pathStr.includes(os.homedir()));
+  if (process.versions?.electron || pathLooksMinimal) {
+    const shells = [...new Set([process.env.SHELL, '/bin/zsh', '/bin/bash'].filter(Boolean))];
+    for (const sh of shells) {
+      try {
+        const shellPath = execSync(`${sh} -l -c 'echo $PATH'`, {
+          encoding: 'utf8',
+          timeout: 3000,
+          env: shellEnv,
+        }).trim();
+        if (shellPath && !shellPath.startsWith('$')) {
+          pathStr = shellPath;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Fallback: add common paths (nvm needs current version subdir, so we scan)
+  const fsSync = require('node:fs');
+  const extraPaths: string[] = [];
+  for (const p of COMMON_CLI_PATHS) {
+    try {
+      if (fsSync.existsSync(p) && fsSync.statSync(p).isDirectory()) {
+        if (p.includes('.nvm') || p.includes('.fnm')) {
+          const subs = fsSync.readdirSync(p, { withFileTypes: true });
+          for (const s of subs) {
+            const bin = path.join(p, s.name, 'bin');
+            if (fsSync.existsSync(bin)) extraPaths.push(bin);
+          }
+        } else {
+          extraPaths.push(p);
+        }
+      }
+    } catch {
+      /* skip */
+    }
+  }
+
+  const merged = [extraPaths.join(pathSep), pathStr].filter(Boolean).join(pathSep);
+  return { ...base, PATH: merged, HOME: home, USER: user };
+}
 
 export type AmpAuthSource = 'cli_login' | 'env' | 'missing';
 
@@ -71,8 +148,12 @@ async function listDirSafe(dir: string): Promise<string[]> {
 
 async function whichAmp(): Promise<string | null> {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
+  const execEnv = getExecEnv();
   try {
-    const { stdout } = await execFileAsync(cmd, ['amp'], { timeout: 1500 });
+    const { stdout } = await execFileAsync(cmd, ['amp'], {
+      timeout: 1500,
+      env: execEnv,
+    });
     const resolved = stdout.trim().split('\n')[0]?.trim();
     return resolved ? resolved : null;
   } catch {
@@ -81,9 +162,13 @@ async function whichAmp(): Promise<string | null> {
 }
 
 async function tryAmpWhoami(ampCliPath: string): Promise<boolean> {
+  const execEnv = getExecEnv();
   try {
     // Best-effort: this should be fast and non-interactive
-    await withTimeoutMs(execFileAsync(ampCliPath, ['whoami'], { timeout: 1500 }), 1750);
+    await withTimeoutMs(
+      execFileAsync(ampCliPath, ['whoami'], { timeout: 1500, env: execEnv }),
+      1750
+    );
     return true;
   } catch {
     return false;
