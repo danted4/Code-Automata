@@ -12,6 +12,7 @@ import { getTaskPersistence } from '@/lib/tasks/persistence';
 import { Subtask } from '@/lib/tasks/schema';
 import { startAgentForTask } from '@/lib/agents/registry';
 import { getProjectDir } from '@/lib/project-dir';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -76,8 +77,12 @@ export async function POST(req: NextRequest) {
       'utf-8'
     );
 
-    // Execute QA subtasks one by one
-    await executeQASubtasksSequentially(taskId, qaSubtasks, logsPath, taskPersistence, projectDir);
+    // Execute QA subtasks in background - return immediately so client gets quick response
+    executeQASubtasksSequentially(taskId, qaSubtasks, logsPath, taskPersistence, projectDir).catch(
+      (err) => {
+        console.error('[start-review] Error executing QA subtasks:', err);
+      }
+    );
 
     return NextResponse.json({
       success: true,
@@ -208,6 +213,10 @@ Please verify and test this thoroughly following best practices.`;
             logsPath,
             `\n${'='.repeat(80)}\n[ALL QA SUBTASKS COMPLETED - Moving to Human Review]\n${'='.repeat(80)}\n`,
             'utf-8'
+          );
+          // Clean planning artifacts before human review (ensure not in final output)
+          await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+            () => {}
           );
         }
 

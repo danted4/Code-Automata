@@ -17,6 +17,7 @@ import { getTaskPersistence } from '@/lib/tasks/persistence';
 import { Subtask } from '@/lib/tasks/schema';
 import { getAgentManagerForTask, startAgentForTask } from '@/lib/agents/registry';
 import { getProjectDir } from '@/lib/project-dir';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -121,6 +122,11 @@ export async function POST(req: NextRequest) {
         currentTask.assignedAgent = undefined;
         await taskPersistence.saveTask(currentTask);
 
+        // Clean planning artifacts (agent may have written implementation-plan.json)
+        await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+          () => {}
+        );
+
         await fs.appendFile(
           logsPath,
           `[Plan auto-approved]\n` +
@@ -213,6 +219,11 @@ export async function POST(req: NextRequest) {
             taskToUpdate.subtasks = [...devSubtasks, ...finalQASubtasks];
             taskToUpdate.assignedAgent = undefined;
             await taskPersistence.saveTask(taskToUpdate);
+
+            // Clean planning artifacts before execution (ensure not in final output)
+            await cleanPlanningArtifactsFromWorktree(taskToUpdate.worktreePath || projectDir).catch(
+              () => {}
+            );
 
             await fs.appendFile(
               logsPath,
@@ -389,6 +400,5 @@ Return your subtasks in the following JSON format:
   ]
 }
 
-IMPORTANT: Return ONLY valid JSON. Do not include any markdown formatting or additional text.
-Do NOT create or write any files in the workspace. Return only the JSON in your response.`;
+CRITICAL: The system ONLY captures your text output. You MUST output the raw JSON as plain text in your message - writing to a file does NOT work. No markdown fences, no extra text.`;
 }

@@ -109,6 +109,14 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
         const response = await apiFetch('/api/cli/adapters');
         const adapters = await response.json();
         setAvailableAdapters(adapters);
+        // If task has mock selected but mock isn't available (packaged app), fall back to first adapter
+        if (
+          adapters.length > 0 &&
+          task?.cliTool === 'mock' &&
+          !adapters.some((a: { name: string }) => a.name === 'mock')
+        ) {
+          setCliTool(adapters[0].name);
+        }
       } catch (error) {
         console.error('Failed to load CLI adapters:', error);
       } finally {

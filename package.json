@@ -9,7 +9,7 @@
     "next:dev": "next dev",
     "next:build": "next build",
     "icon:build": "node scripts/build-dock-icon.js",
-    "start": "yarn icon:build && concurrently \"yarn next:dev\" \"wait-on http://localhost:3000 http://localhost:3000/api/tasks/list -t 90000 && electron .\"",
+    "start": "yarn icon:build && node scripts/dev.js",
     "build": "rm -rf dist-electron && yarn next:build && electron-builder",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

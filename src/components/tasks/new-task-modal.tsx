@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useTaskStore } from '@/store/task-store';
+import { apiFetch } from '@/lib/api-client';
 import { CliReadinessPanel, CliReadinessPlaceholder } from '@/components/tasks/cli-readiness-panel';
 
 type AmpPreflightResult = {
@@ -93,7 +94,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
         const adapters = await response.json();
         setAvailableAdapters(adapters);
 
-        // Set default CLI tool and config
+        // Set default CLI tool and config (first adapter; Mock is hidden in packaged app)
         if (adapters.length > 0) {
           const defaultAdapter = adapters[0];
           setCliTool(defaultAdapter.name);
@@ -298,7 +299,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
 
       // Always start planning immediately, regardless of human review requirement
       try {
-        await fetch('/api/agents/start-planning', {
+        await apiFetch('/api/agents/start-planning', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

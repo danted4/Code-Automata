@@ -15,6 +15,7 @@ import {
   generatePlanValidationFeedback,
   validatePlanMarkdown,
 } from '@/lib/validation/plan-validator';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -120,6 +121,10 @@ export async function POST(req: NextRequest) {
           currentTask.assignedAgent = undefined; // Clear agent
 
           await taskPersistence.saveTask(currentTask);
+          // Clean planning artifacts (agent may have written planning-questions.json)
+          await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+            () => {}
+          );
           await appendToLog(logsPath, `[Task Updated Successfully]\n`);
         } else if (output?.plan) {
           // Plan generated directly
@@ -205,6 +210,10 @@ export async function POST(req: NextRequest) {
 
             // IMPORTANT: Save task BEFORE starting development so planApproved flag is persisted
             await taskPersistence.saveTask(currentTask);
+            // Clean planning artifacts before starting dev (agent may have written to files)
+            await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+              () => {}
+            );
             await appendToLog(logsPath, `[Task saved with planApproved = true]\n`);
 
             // Start development immediately (generate subtasks and execute)
@@ -248,6 +257,10 @@ export async function POST(req: NextRequest) {
           } else {
             // Human review required - save task with plan ready
             await taskPersistence.saveTask(currentTask);
+            // Clean planning artifacts (agent may have written implementation-plan.json)
+            await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+              () => {}
+            );
             await appendToLog(logsPath, `[Task Updated Successfully]\n`);
           }
         }
@@ -441,23 +454,11 @@ Return your questions in the following JSON format:
   ]
 }
 
-Do NOT create or write any files in the workspace. Return only the JSON in your response.
-
-====================
-CRITICAL FINAL INSTRUCTION:
-====================
-After you analyze the task and formulate your questions, you MUST output a final response containing ONLY the JSON object above.
-
-Your LAST message must be the raw JSON with NO:
-- Markdown code fences (\`\`\`json)
-- Explanatory text before or after
-- Comments or additional formatting
-
-Just the pure JSON object starting with { and ending with }.
-
-Example of what your final output should look like:
-{"questions":[{"id":"q1","question":"...","options":[...],"required":true,"order":1}]}
-====================`
+CRITICAL - Your response MUST contain the raw JSON as plain text in your message:
+- The system ONLY captures your text/chat output. We cannot read files you create.
+- You MUST output the JSON directly in your final message - writing to a file does NOT work.
+- No markdown code fences, no explanatory text before or after.
+- Your last message must be the raw JSON object, e.g. {"questions":[{"id":"q1","question":"...","options":[...],"required":true,"order":1}]}`
     );
   } else {
     // Generate plan directly
@@ -483,28 +484,12 @@ Return your plan in the following JSON format:
   "plan": "# Implementation Plan\\n\\n## Overview\\n...full markdown plan here..."
 }
 
-Do NOT create or write any files in the workspace. Return only the JSON in your response.
-
-====================
-CRITICAL FINAL INSTRUCTION:
-====================
-After you finish reading files and analyzing the codebase, you MUST provide a FINAL TEXT RESPONSE containing the JSON object.
-
-DO NOT just stop after your analysis. You MUST output a final message.
-
-Your final response must be ONLY the raw JSON with NO:
-- Markdown code fences (\`\`\`json)
-- Explanatory text before or after  
-- Comments or additional formatting
-- Just thinking - you must OUTPUT TEXT
-
-The JSON must be a complete, valid object starting with { and ending with }.
-
-Example of what your FINAL OUTPUT should look like:
-{"plan":"# Implementation Plan\\n\\n## Overview\\nThis task requires adding a delete icon...\\n\\n## Technical Approach\\n..."}
-
-IMPORTANT: After your analysis, RESPOND with the JSON. Do not just stop thinking.
-====================`
+CRITICAL - Your response MUST contain the raw JSON as plain text in your message:
+- The system ONLY captures your text/chat output. We cannot read files you create.
+- You MUST output the JSON directly in your final message - writing to a file does NOT work.
+- No markdown code fences, no explanatory text before or after.
+- After your analysis, you MUST OUTPUT TEXT - do not just stop thinking.
+- Your last message must be the raw JSON object, e.g. {"plan":"# Implementation Plan\\n\\n## Overview\\n..."}`
     );
   }
 }
@@ -526,10 +511,7 @@ ${feedback}
 
 Regenerate the plan so it passes validation.
 
-IMPORTANT:
-- Return ONLY valid JSON, no markdown fences, no extra text.
-- Output shape must be: { "plan": "<markdown>" }
-- Do NOT create or write any files in the workspace. Return only the JSON in your response.`;
+IMPORTANT: The system ONLY captures your text output. You MUST output the raw JSON as plain text in your message - writing to a file does NOT work.`;
 }
 
 /**

@@ -10,12 +10,16 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { taskPersistence } from '@/lib/tasks/persistence';
+import { getTaskPersistence } from '@/lib/tasks/persistence';
+import { getProjectDir } from '@/lib/project-dir';
 import { stopAgentByThreadId } from '@/lib/agents/registry';
 import { getWorktreeManager } from '@/lib/git/worktree';
 
 export async function DELETE(req: NextRequest) {
   try {
+    const projectDir = await getProjectDir(req);
+    const taskPersistence = getTaskPersistence(projectDir);
+
     // Extract taskId from query parameter
     const { searchParams } = new URL(req.url);
     const taskId = searchParams.get('taskId');
@@ -53,7 +57,7 @@ export async function DELETE(req: NextRequest) {
     if (task.worktreePath || task.branchName) {
       try {
         console.log(`[Task ${taskId}] Deleting worktree at: ${task.worktreePath}`);
-        const worktreeManager = getWorktreeManager();
+        const worktreeManager = getWorktreeManager(projectDir);
         await worktreeManager.deleteWorktree(taskId, true); // force=true to handle uncommitted changes
         console.log(`[Task ${taskId}] Worktree deleted successfully`);
       } catch (error) {

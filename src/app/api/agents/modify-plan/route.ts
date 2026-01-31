@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTaskPersistence } from '@/lib/tasks/persistence';
 import { startAgentForTask } from '@/lib/agents/registry';
 import { getProjectDir } from '@/lib/project-dir';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -94,8 +95,7 @@ Return your updated plan in the following JSON format:
   "plan": "# Implementation Plan\\n\\n## Overview\\n...full updated markdown plan here..."
 }
 
-IMPORTANT: Return ONLY valid JSON. Do not include any markdown formatting around the JSON.
-Do NOT create or write any files in the workspace. Return only the JSON in your response.`;
+CRITICAL: The system ONLY captures your text output. You MUST output the raw JSON as plain text in your message - writing to a file does NOT work. No markdown fences, no extra text.`;
 
       // Create completion handler
       const onComplete = async (result: { success: boolean; output: string; error?: string }) => {
@@ -148,6 +148,36 @@ Do NOT create or write any files in the workspace. Return only the JSON in your 
             `[Parse Error] Failed to parse JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n`,
             'utf-8'
           );
+
+          // Fallback: agent may have written plan to implementation-plan.json
+          const workingDir = task.worktreePath || projectDir;
+          for (const basename of ['implementation-plan.json', 'implementation_plan.json']) {
+            try {
+              const filePath = path.join(workingDir, basename);
+              const fileContent = await fs.readFile(filePath, 'utf-8');
+              const fileParsed = JSON.parse(fileContent) as { plan?: string };
+              if (fileParsed?.plan && typeof fileParsed.plan === 'string') {
+                await fs.appendFile(
+                  logsPath,
+                  `[Fallback] Found plan in ${basename}, using it.\n`,
+                  'utf-8'
+                );
+                const currentTask = await taskPersistence.loadTask(taskId);
+                if (currentTask) {
+                  currentTask.planContent = fileParsed.plan;
+                  currentTask.planningStatus = 'plan_ready';
+                  currentTask.status = 'pending';
+                  currentTask.assignedAgent = undefined;
+                  await taskPersistence.saveTask(currentTask);
+                  await cleanPlanningArtifactsFromWorktree(task.worktreePath || projectDir);
+                  await fs.appendFile(logsPath, `[Task Updated Successfully]\n`, 'utf-8');
+                }
+                return;
+              }
+            } catch {
+              /* continue */
+            }
+          }
 
           const currentTask = await taskPersistence.loadTask(taskId);
           if (currentTask) {

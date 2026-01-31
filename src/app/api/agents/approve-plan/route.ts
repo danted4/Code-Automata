@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTaskPersistence } from '@/lib/tasks/persistence';
 import { getProjectDir } from '@/lib/project-dir';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -50,6 +51,11 @@ export async function POST(req: NextRequest) {
 
     // IMPORTANT: Save task BEFORE starting development so planApproved flag is persisted
     await taskPersistence.saveTask(task);
+
+    // Clean planning artifacts from worktree (implementation-plan.json, etc.) before dev
+    if (task.worktreePath) {
+      await cleanPlanningArtifactsFromWorktree(task.worktreePath).catch(() => {});
+    }
 
     if (startDevelopment) {
       // Start development immediately (this will generate subtasks and execute them)

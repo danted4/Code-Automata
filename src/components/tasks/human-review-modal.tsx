@@ -43,6 +43,7 @@ import { Task } from '@/lib/tasks/schema';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
 import { useProjectStore } from '@/store/project-store';
+import { apiFetch } from '@/lib/api-client';
 import type { AvailableEditor } from '@/types/electron';
 
 interface HumanReviewModalProps {
@@ -103,7 +104,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
   // Fetch git status when modal opens
   useEffect(() => {
     if (open && task.branchName) {
-      fetch(`/api/git/status?taskId=${task.id}`)
+      apiFetch(`/api/git/status?taskId=${task.id}`)
         .then((res) => res.json())
         .then((data) => setGitStatus(data))
         .catch((err) => console.error('Failed to fetch git status:', err));
@@ -138,7 +139,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     }
     setIsLoading(true);
     try {
-      const response = await fetch('/api/git/create-mr', {
+      const response = await apiFetch('/api/git/create-mr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: task.id }),
@@ -171,7 +172,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     e.stopPropagation();
     setIsLoading(true);
     try {
-      const response = await fetch('/api/tasks/update', {
+      const response = await apiFetch('/api/tasks/update', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

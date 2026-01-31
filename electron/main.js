@@ -19,7 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const net = require('net');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
 const isDev = !app.isPackaged;
 const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
@@ -128,9 +128,6 @@ function enhanceEnvForPackagedApp() {
     }
   }
 }
-let nextServer = null;
-let serverPort = DEFAULT_PORT;
-let appUrl = null; // Reuse same URL when reopening window (keeps localStorage)
 
 /**
  * Check if a port is available.

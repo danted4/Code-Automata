@@ -10,7 +10,12 @@ import { CursorAdapter } from '@/lib/cli/cursor';
 
 export async function GET() {
   try {
-    const adapters = CLIFactory.getAvailableAdapters();
+    let adapters = CLIFactory.getAvailableAdapters();
+
+    // Hide Mock CLI in packaged/production app (Electron in-process)
+    if (process.versions?.electron) {
+      adapters = adapters.filter((a) => a.name !== 'mock');
+    }
 
     // Prefetch Cursor models to warm the cache before getConfigSchema() is called
     const prefetchPromises = adapters.map(async (adapter) => {

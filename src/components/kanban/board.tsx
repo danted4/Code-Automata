@@ -18,6 +18,7 @@ import {
 } from '@dnd-kit/core';
 import { useTaskStore } from '@/store/task-store';
 import { useProjectStore } from '@/store/project-store';
+import { apiFetch } from '@/lib/api-client';
 import { WORKFLOW_PHASES, WorkflowPhase, Task } from '@/lib/tasks/schema';
 import { KanbanColumn } from './column';
 import { TaskCard } from './task-card';
@@ -87,7 +88,7 @@ export function KanbanBoard() {
     // Auto-start agent when moving to "In Progress" phase
     if (newPhase === 'in_progress' && !task.assignedAgent) {
       try {
-        const response = await fetch('/api/agents/start', {
+        const response = await apiFetch('/api/agents/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -102,6 +103,27 @@ export function KanbanBoard() {
         }
       } catch (error) {
         console.error('Failed to auto-start agent:', error);
+      }
+    }
+
+    // Auto-start AI review when moving to "AI Review" phase (manual drag or automatic)
+    if (
+      newPhase === 'ai_review' &&
+      !task.assignedAgent &&
+      task.subtasks?.some((s) => s.type === 'qa')
+    ) {
+      try {
+        const response = await apiFetch('/api/agents/start-review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId: task.id }),
+        });
+
+        if (response.ok) {
+          loadTasks();
+        }
+      } catch (error) {
+        console.error('Failed to auto-start AI review:', error);
       }
     }
   };

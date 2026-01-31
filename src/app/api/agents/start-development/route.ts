@@ -17,6 +17,7 @@ import {
   generateValidationFeedback,
   validateSubtasks,
 } from '@/lib/validation/subtask-validator';
+import { cleanPlanningArtifactsFromWorktree } from '@/lib/worktree/cleanup';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -147,6 +148,11 @@ export async function POST(req: NextRequest) {
 
           await fs.appendFile(logsPath, `[Subtasks saved to task]\n`, 'utf-8');
 
+          // Clean planning artifacts from worktree before dev execution
+          await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+            () => {}
+          );
+
           // Start sequential execution
           await fs.appendFile(
             logsPath,
@@ -202,9 +208,8 @@ Rules:
 - Each subtask must have id, content, label (all non-empty strings)
 - Include at least 2 QA subtasks (type: "qa") for verification/testing
 - Escape any quotes inside strings (use \\" for literal quotes)
-- Do not wrap the JSON in \`\`\`json code blocks
-- Return nothing else - only the JSON object
-- Do NOT create or write any files in the workspace. Return only the JSON in your response.`;
+- You MUST output the raw JSON as plain text in your message - writing to a file does NOT work.
+- Your final message must be ONLY the JSON object`;
 
             const currentTask = await taskPersistence.loadTask(taskId);
             if (!currentTask) return;
@@ -341,23 +346,11 @@ Return your subtasks in the following JSON format:
   ]
 }
 
-Do NOT create or write any files in the workspace. Return only the JSON in your response.
-
-====================
-CRITICAL FINAL INSTRUCTION:
-====================
-After you analyze the plan and formulate your subtasks, you MUST output a final response containing ONLY the JSON object above.
-
-Your LAST message must be the raw JSON with NO:
-- Markdown code fences (\`\`\`json)
-- Explanatory text before or after
-- Comments or additional formatting
-
-Just the pure JSON object starting with { and ending with }.
-
-Example of what your final output should look like:
-{"subtasks":[{"id":"subtask-1","content":"...","label":"...","activeForm":"...","type":"dev"}]}
-====================`;
+CRITICAL - Your response MUST contain the raw JSON as plain text in your message:
+- The system ONLY captures your text/chat output. We cannot read files you create.
+- You MUST output the JSON directly in your final message - writing to a file does NOT work.
+- No markdown code fences, no explanatory text before or after.
+- Your last message must be the raw JSON object, e.g. {"subtasks":[{"id":"subtask-1","content":"...","label":"...","activeForm":"...","type":"dev"}]}`;
 }
 
 function inferSubtaskType(subtask: Partial<Subtask>): 'dev' | 'qa' {
@@ -507,6 +500,11 @@ Please implement this subtask following best practices.`;
             logsPath,
             `\n${'='.repeat(80)}\n[ALL DEV SUBTASKS COMPLETED - Moving to AI Review]\n${'='.repeat(80)}\n`,
             'utf-8'
+          );
+
+          // Clean planning artifacts before AI review (ensure not in final output)
+          await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+            () => {}
           );
 
           // Automatically start AI review
@@ -789,6 +787,10 @@ Please verify and test this thoroughly following best practices.`;
             logsPath,
             `\n${'='.repeat(80)}\n[ALL QA SUBTASKS COMPLETED - Moving to Human Review]\n${'='.repeat(80)}\n`,
             'utf-8'
+          );
+          // Clean planning artifacts before human review (ensure not in final output)
+          await cleanPlanningArtifactsFromWorktree(currentTask.worktreePath || projectDir).catch(
+            () => {}
           );
         }
 

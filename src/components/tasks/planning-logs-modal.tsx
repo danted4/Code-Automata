@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { AgentLog } from '@/lib/agents/manager';
+import { buildStreamUrl } from '@/lib/api-client';
 import { toast } from 'sonner';
 
 interface PlanningLogsModalProps {
@@ -42,7 +43,8 @@ export function PlanningLogsModal({
     setLogs([]);
     setStatus('connecting');
 
-    const eventSource = new EventSource(`/api/agents/stream?threadId=${threadId}`);
+    const url = buildStreamUrl('/api/agents/stream', { threadId });
+    const eventSource = new EventSource(url);
 
     eventSource.onmessage = (event) => {
       try {

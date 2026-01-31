@@ -21,6 +21,7 @@ import { PlanningLogsModal } from '@/components/tasks/planning-logs-modal';
 import { DeleteTaskModal } from '@/components/tasks/delete-task-modal';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
+import { apiFetch } from '@/lib/api-client';
 
 interface TaskCardProps {
   task: Task;
@@ -30,6 +31,7 @@ interface TaskCardProps {
 export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isStartingReview, setIsStartingReview] = useState(false);
   const [showQAModal, setShowQAModal] = useState(false);
   const [showPlanReviewModal, setShowPlanReviewModal] = useState(false);
   const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
@@ -63,7 +65,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
     e.stopPropagation(); // Prevent drag when clicking button
     setIsStarting(true);
     try {
-      const response = await fetch('/api/agents/start', {
+      const response = await apiFetch('/api/agents/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -92,7 +94,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
 
     setIsStopping(true);
     try {
-      const response = await fetch('/api/agents/stop', {
+      const response = await apiFetch('/api/agents/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ threadId: task.assignedAgent }),
@@ -121,7 +123,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
   const handleDeleteTask = async () => {
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/tasks/delete?taskId=${task.id}`, {
+      const response = await apiFetch(`/api/tasks/delete?taskId=${task.id}`, {
         method: 'DELETE',
       });
 
@@ -154,7 +156,7 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
     e.stopPropagation();
     setIsStarting(true);
     try {
-      const response = await fetch('/api/agents/start-development', {
+      const response = await apiFetch('/api/agents/start-development', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: task.id }),
@@ -171,6 +173,30 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
       toast.error('Failed to start development');
     } finally {
       setIsStarting(false);
+    }
+  };
+
+  const handleStartReview = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsStartingReview(true);
+    try {
+      const response = await apiFetch('/api/agents/start-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: task.id }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to start AI review');
+      } else {
+        toast.success('AI review started');
+        await loadTasks();
+      }
+    } catch (_error) {
+      toast.error('Failed to start AI review');
+    } finally {
+      setIsStartingReview(false);
     }
   };
 
@@ -557,8 +583,32 @@ export function TaskCard({ task, onEditBlockedTask }: TaskCardProps) {
                   {isStopping ? 'Pausing...' : 'Pause'}
                 </Button>
               </div>
+            ) : Date.now() - task.updatedAt > 15_000 ? (
+              // QA didn't start within 15s (manual drag, agent stopped, or auto-trigger failed)
+              <Button
+                data-testid="retry-ai-review-button"
+                size="sm"
+                variant="outline"
+                onClick={handleStartReview}
+                disabled={isStartingReview}
+                className="w-full text-xs"
+                style={{
+                  background: 'var(--color-phase-validate)',
+                  color: '#ffffff',
+                  borderColor: 'var(--color-phase-validate)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = '0.9';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = '1';
+                }}
+              >
+                <Play className="w-4 h-4" strokeWidth={2.5} />
+                {isStartingReview ? 'Starting...' : 'Retry AI Review'}
+              </Button>
             ) : (
-              // QA auto-starts when dev completes. Never show Start Review button to avoid flash.
+              // QA auto-starts when dev completes. Show Auto-starting for up to 15s.
               <div
                 className="w-full text-xs py-2 px-3 rounded text-center"
                 style={{
