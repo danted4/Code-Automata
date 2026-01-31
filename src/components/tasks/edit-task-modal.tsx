@@ -82,6 +82,7 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
   const [cliConfig, setCliConfig] = useState<Record<string, unknown>>({});
   const [requiresHumanReview, setRequiresHumanReview] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [availableAdapters, setAvailableAdapters] = useState<CLIAdapter[]>([]);
   const [isLoadingAdapters, setIsLoadingAdapters] = useState(true);
   const [ampPreflight, setAmpPreflight] = useState<AmpPreflightResult | null>(null);
@@ -219,6 +220,34 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
     }));
   };
 
+  const handleResume = async () => {
+    if (!task) return;
+
+    setIsResuming(true);
+    try {
+      const res = await apiFetch('/api/agents/retry-plan-parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: task.id }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to resume task');
+        return;
+      }
+
+      toast.success('Task resumed successfully');
+      onOpenChange(false);
+      await loadTasks();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to resume');
+    } finally {
+      setIsResuming(false);
+    }
+  };
+
   const handleSaveAndRestart = async () => {
     if (!task || !description.trim()) {
       toast.error('Please fill in the description');
@@ -351,7 +380,9 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
         <DialogHeader>
           <DialogTitle>Edit &amp; Restart Task</DialogTitle>
           <DialogDescription>
-            This task was blocked. Update the settings below and restart planning.
+            {task.status === 'blocked' && task.planningStatus === 'generating_plan'
+              ? 'This task was blocked during plan generation. Try Resume to re-parse the plan from logs, or update settings and restart planning.'
+              : 'This task was blocked. Update the settings below and restart planning.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -516,6 +547,21 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
           >
             Cancel
           </Button>
+          {task.status === 'blocked' && task.planningStatus === 'generating_plan' && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleResume}
+              disabled={isResuming}
+              style={{
+                background: 'var(--color-surface)',
+                color: 'var(--color-primary)',
+                borderColor: 'var(--color-primary)',
+              }}
+            >
+              {isResuming ? 'Resuming…' : 'Resume'}
+            </Button>
+          )}
           <Button
             onClick={handleSaveAndRestart}
             disabled={
