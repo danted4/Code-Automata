@@ -34,6 +34,7 @@ Code-Auto runs as a **desktop app** (Electron) on macOS, Windows, and Linux. On 
 - **Pluggable Execution**: CLIAdapter layer supporting multiple AI backends (Mock, Amp SDK, Cursor Agent CLI)
 - **Live Streaming**: Agent output streamed to the UI via Server-Sent Events (SSE)
 - **File-Based Storage**: Tasks persisted as JSON in `.code-auto/tasks/`
+- **Review Locally**: In Human Review phase, open Cursor or VS Code at the task worktree; open folder in file manager
 
 ## Architecture
 
@@ -258,7 +259,7 @@ src/
 
 ## Documentation
 
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — Master plan and backlog (single source of truth)
+- [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — Master plan and backlog (single source of truth)
 - [docs/OVERVIEW.md](docs/OVERVIEW.md) — High-level introduction, features, and how the system works
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture, module structure, and design patterns
 - [docs/API_ROUTES.md](docs/API_ROUTES.md) — Complete API reference for all endpoints

@@ -1,11 +1,11 @@
 # Code-Auto — Master Implementation Plan
 
 **Last updated:** 2026-01-30  
-**This file is the single source of truth.** All other project markdown planning/status docs were consolidated here and will be removed.
+**Location:** `docs/IMPLEMENTATION_PLAN.md` — Master plan and backlog (single source of truth).
 
-## What we’re building
+## What we're building
 
-Code-Auto is a Next.js app that turns a “task” into an Code-Auto style workflow:
+Code-Auto is a Next.js app that turns a "task" into a Code-Auto style workflow:
 
 - **Kanban workflow**: `planning → in_progress → ai_review → human_review → done`
 - **Isolated execution**: one **git worktree + branch per task**
@@ -27,17 +27,19 @@ Code-Auto is a Next.js app that turns a “task” into an Code-Auto style workf
 - **Git status UI + API**: `/api/git/status` (`src/app/api/git/status/route.ts`)
 - **SSE agent log streaming**: `/api/agents/stream` + UI terminal (`src/app/api/agents/stream/route.ts`, `src/components/agents/terminal.tsx`)
 - **Auto-plan route** (no human review): generates a plan + subtasks (`src/app/api/agents/auto-plan/route.ts`)
-- **Subtask JSON validation + feedback** (for subtask generation prompts): `src/lib/validation/subtask-validator.ts` + logic inside `src/lib/cli/amp.ts`
+- **Subtask JSON validation + feedback** (for subtask generation prompts): `src/lib/validation/subtask-validator.ts` + logic inside `src/lib/cli/amp.ts` and `src/lib/cli/cursor.ts`
+- **Review Locally** (Human Review phase): Open Cursor or VS Code at worktree path; open folder in file manager. IDE detection, Electron IPC handlers (`electron/main.js`, `electron/preload.js`), HumanReviewModal (`src/components/tasks/human-review-modal.tsx`).
+- **Task stays in planning until subtasks ready**: Task remains in `planning` phase until dev + QA subtasks are generated and validated; only then moves to `in_progress` (`src/app/api/agents/start-development/route.ts`).
+- **Fix-agent retry for plan/subtask JSON**: When plan or subtask JSON parsing fails, a fix agent retries up to 2 times before blocking (`src/app/api/agents/submit-answers/route.ts`, `src/app/api/agents/start-development/route.ts`).
+- **Resume blocked tasks**: `POST /api/agents/retry-plan-parse` re-parses plan from logs for tasks blocked during plan generation; Edit Task modal shows Resume button (`src/app/api/agents/retry-plan-parse/route.ts`, `src/components/tasks/edit-task-modal.tsx`).
 
-### Implemented, but has correctness gaps (see “Known issues”)
+### Implemented, but has correctness gaps (see "Known issues")
 
-- **Dev vs QA sequential execution separation** is not robust.
-- **Subtask wait timeout** is likely too short for real agent runs.
+- **Subtask wait timeout** is configurable via `CODE_AUTO_SUBTASK_WAIT_MS` (default 30 min); may need tuning for real agent runs.
 
 ### Not implemented yet (explicit TODOs in code)
 
-- **Human review actions**: create MR/PR, stage local review, open VS Code/folder
-  - TODOs in `src/components/tasks/human-review-modal.tsx`
+- **Human review actions**: create MR/PR (Create MR button exists; push/create PR flow may need endpoints)
 - **Memory context injection** into agent start route
   - TODO in `src/app/api/agents/start/route.ts`
 - **Settings UI**: there is no `src/app/settings/*` route currently.
@@ -92,10 +94,11 @@ Code-Auto is a Next.js app that turns a “task” into an Code-Auto style workf
 flowchart TD
   CreateTask["POST /api/tasks/create"] --> Planning[planning]
   Planning -->|"requiresHumanReview=true"| Questions["/api/agents/start-planning (questions)"]
-  Questions -->|"answers submitted"| Plan["/api/agents/start-planning (plan)"]
+  Questions -->|"answers submitted"| Plan["/api/agents/submit-answers + plan gen"]
   Planning -->|"requiresHumanReview=false"| Plan
-  Plan --> Dev["/api/agents/start-development"]
-  Dev --> AIReview[ai_review]
+  Plan -->|"plan approved"| Dev["/api/agents/start-development"]
+  Dev -->|"subtasks generated"| InProgress[in_progress]
+  InProgress --> AIReview[ai_review]
   AIReview --> HumanReview[human_review]
   HumanReview --> Done[done]
 ```
@@ -113,9 +116,12 @@ flowchart TD
 - **If** `requiresHumanReview=true`:
   - agent returns `{ questions: [...] }` JSON
   - task moves to `planningStatus=waiting_for_answers`
+  - User submits answers via `POST /api/agents/submit-answers`
+  - Plan generation runs with fix-agent retry on parse failure
 - **Else**:
   - agent returns `{ plan: "...markdown..." }` JSON
   - task is auto-approved and triggers `POST /api/agents/start-development`
+- **Resume blocked tasks**: `POST /api/agents/retry-plan-parse` for tasks blocked during plan generation (parse failure)
 
 ### Auto-plan (no human review)
 
@@ -127,9 +133,9 @@ flowchart TD
 ### Development + sequential execution + QA auto-run
 
 - **Route**: `POST /api/agents/start-development`
-  - Generates subtasks
-  - Saves them onto the task
-  - Executes subtasks sequentially
+  - Task stays in `planning` until subtasks are generated and validated (fix-agent retry on parse failure)
+  - Generates subtasks, saves them onto the task
+  - Moves to `in_progress`, executes dev subtasks sequentially
   - When all dev subtasks complete, moves to `ai_review` and auto-starts QA verification
   - When all QA subtasks complete, moves to `human_review`
 
@@ -148,20 +154,15 @@ flowchart TD
 
 ## Known issues / risks (must-fix before relying on real Amp runs)
 
-### 1) Dev/QA sequencing can run QA at the wrong time
+### 1) 60s "wait for subtask completion" default
 
-- `start-development` generates dev+qa subtasks, saves combined list to `task.subtasks`, but sequential execution uses the raw list passed in.
-- **Impact**: if QA subtasks are included in that list, they may run during dev and then again in AI review.
+- `waitForSubtaskCompletion()` and `waitForQASubtaskCompletion()` max wait is configurable via `CODE_AUTO_SUBTASK_WAIT_MS` (default 30 min).
+- **Impact**: real tasks may need longer; tune env var as needed.
 
-### 2) 60s “wait for subtask completion” is too short
-
-- `waitForSubtaskCompletion()` and `waitForQASubtaskCompletion()` max wait is 60s.
-- **Impact**: real tasks can exceed 60s; the loop may proceed while the agent is still running.
-
-### 3) SSE is in-memory only
+### 2) SSE is in-memory only
 
 - Logs are stored in memory in the server process.
-- **Impact**: server restarts lose logs; multi-instance deployments won’t share state.
+- **Impact**: server restarts lose logs; multi-instance deployments won't share state.
 
 ## Canonical backlog (single TODO list)
 
@@ -171,20 +172,14 @@ flowchart TD
   - Use `task.cliTool` and `task.cliConfig` instead of singleton defaults.
 - **Make working directory per thread** for Amp adapter:
   - Use `threadId → workingDir` mapping when building SDK options.
-- **Separate dev execution from QA execution**:
-  - Execute only `type=dev` in dev phase; only `type=qa` in AI review.
-- **Replace 60s waits** with a robust completion mechanism:
-  - Wait on `AgentSession.status` and/or extend timeouts with sensible defaults.
 
-### P1 — Finish the “human review” loop
+### P1 — Finish the "human review" loop
 
-- Implement MR/PR creation and local review actions currently TODO:
-  - `src/components/tasks/human-review-modal.tsx`
-- Add endpoints to support those actions (push branch, create PR, open folder/editor).
+- Implement MR/PR creation (push branch, create PR) — Create MR button exists; backend flow may need endpoints.
+- Memory context injection path (currently TODO in `src/app/api/agents/start/route.ts`).
 
 ### P2 — Memory + settings + integrations
 
-- Add memory persistence and context injection path (currently TODO in `src/app/api/agents/start/route.ts`).
 - Add a settings page (no `src/app/settings/*` currently).
 - Cost tracking dashboard + budget alerts.
 - GitHub/GitLab issue import and PR sync.
@@ -212,14 +207,14 @@ yarn test:e2e
    - `which amp` returns a path
    - `amp login` completed (preferred) **or** `AMP_API_KEY` is set
    - `GET /api/amp/preflight` returns `canRunAmp: true`
-2. Create a task with `cliTool: "amp"` (New Task modal should show “Amp readiness: Ready”).
+2. Create a task with `cliTool: "amp"` (New Task modal should show "Amp readiness: Ready").
 3. Trigger a low-cost run:
-   - `POST /api/agents/execute-direct` with a tiny prompt (e.g. “create TEST.md with hello”)
-4. Verify file changes landed in the task’s worktree (`task.worktreePath`) and not in the main repo root.
+   - `POST /api/agents/execute-direct` with a tiny prompt (e.g. "create TEST.md with hello")
+4. Verify file changes landed in the task's worktree (`task.worktreePath`) and not in the main repo root.
 
 ## Definition of done (MVP)
 
 - A task can reliably go from creation → planning → dev subtasks → QA subtasks → human review.
-- All file changes happen inside the task’s worktree.
+- All file changes happen inside the task's worktree.
 - UI shows real-time logs.
-- Human review provides a path to produce a PR/MR (or at least stage changes locally).
+- Human review provides Review Locally (open Cursor/VS Code/folder) and Create MR path.

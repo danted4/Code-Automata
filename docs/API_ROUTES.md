@@ -87,7 +87,7 @@ Starts an AI agent to plan a task. Behavior depends on `requiresHumanReview` fla
 
 ### POST `/api/agents/start-development`
 
-Starts the development phase after plan approval. Generates subtasks from the approved plan and executes them sequentially.
+Starts the development phase after plan approval. Task remains in `planning` until subtasks (dev + qa) are generated and validated. Generates subtasks from the approved plan, then executes them sequentially. Uses fix-agent retry (up to 2 attempts) on subtask JSON parse/validation failure.
 
 **Request Body:**
 
@@ -103,7 +103,7 @@ Starts the development phase after plan approval. Generates subtasks from the ap
 {
   "success": true,
   "threadId": "thread-uuid-here",
-  "message": "Development started - generating subtasks"
+  "message": "Generating subtasks - task remains in planning until subtasks are ready"
 }
 ```
 
@@ -285,7 +285,7 @@ Modifies an existing plan via inline edit or AI feedback regeneration.
 
 ### POST `/api/agents/submit-answers`
 
-Submits answers to planning questions and triggers plan generation.
+Submits answers to planning questions and triggers plan generation. Uses fix-agent retry (up to 2 attempts) on plan JSON parse failure.
 
 **Request Body:**
 
@@ -319,6 +319,35 @@ Submits answers to planning questions and triggers plan generation.
 
 - `400` - Missing `taskId` or `answers`
 - `404` - Task not found
+- `500` - Server error
+
+---
+
+### POST `/api/agents/retry-plan-parse`
+
+Re-parses the plan from planning logs for tasks blocked during plan generation (JSON parse failure). Resumes the task if extraction succeeds.
+
+**Request Body:**
+
+```json
+{
+  "taskId": "task-1234567890-abc12"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "success": true,
+  "message": "Plan extracted successfully. Task resumed."
+}
+```
+
+**Error Responses:**
+
+- `400` - Missing `taskId`, task not blocked, or `planningStatus` not `generating_plan`
+- `404` - Task not found or planning logs not found
 - `500` - Server error
 
 ---

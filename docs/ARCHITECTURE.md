@@ -146,13 +146,13 @@ stateDiagram-v2
 
 ### Phase Descriptions
 
-| Phase            | Description                                                          | Entry Trigger  | Exit Trigger                 |
-| ---------------- | -------------------------------------------------------------------- | -------------- | ---------------------------- |
-| **planning**     | AI generates questions, user answers, AI creates implementation plan | Task created   | Plan approved by user        |
-| **in_progress**  | Development subtasks executed by AI agents in worktree               | Plan approved  | All `dev` subtasks completed |
-| **ai_review**    | QA agents verify implementation against requirements                 | Dev complete   | All `qa` subtasks pass       |
-| **human_review** | Developer reviews changes, approves or requests changes              | QA complete    | User approves or merges PR   |
-| **done**         | Task complete, branch ready for merge                                | Human approval | N/A (terminal state)         |
+| Phase            | Description                                                            | Entry Trigger  | Exit Trigger                 |
+| ---------------- | ---------------------------------------------------------------------- | -------------- | ---------------------------- |
+| **planning**     | AI generates questions, user answers, AI creates implementation plan   | Task created   | Plan approved by user        |
+| **in_progress**  | Development subtasks executed by AI agents in worktree                 | Plan approved  | All `dev` subtasks completed |
+| **ai_review**    | QA agents verify implementation against requirements                   | Dev complete   | All `qa` subtasks pass       |
+| **human_review** | Developer reviews changes; Review Locally (open Cursor/VS Code/folder) | QA complete    | User approves or merges PR   |
+| **done**         | Task complete, branch ready for merge                                  | Human approval | N/A (terminal state)         |
 
 ### Valid State Transitions
 
@@ -174,14 +174,14 @@ flowchart LR
     style Backward fill:#2e1a1a,stroke:#f87171,color:#fff
 ```
 
-| Transition                     | Trigger                                     | Automation                          |
-| ------------------------------ | ------------------------------------------- | ----------------------------------- |
-| `planning` → `in_progress`     | User clicks "Approve Plan"                  | Worktree created, dev agent spawned |
-| `in_progress` → `ai_review`    | All `dev` subtasks reach `completed` status | QA agent auto-spawned               |
-| `ai_review` → `human_review`   | All `qa` subtasks reach `completed` status  | Notification sent to user           |
-| `ai_review` → `in_progress`    | QA subtask fails or reports issues          | Dev agent re-spawned for fixes      |
-| `human_review` → `done`        | User approves or merges PR                  | Branch cleanup optional             |
-| `human_review` → `in_progress` | User requests changes                       | Dev agent re-spawned                |
+| Transition                     | Trigger                                     | Automation                                                          |
+| ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------- |
+| `planning` → `in_progress`     | User approves plan; subtasks generated      | Task stays in planning until subtasks ready; then dev agent spawned |
+| `in_progress` → `ai_review`    | All `dev` subtasks reach `completed` status | QA agent auto-spawned                                               |
+| `ai_review` → `human_review`   | All `qa` subtasks reach `completed` status  | Notification sent to user                                           |
+| `ai_review` → `in_progress`    | QA subtask fails or reports issues          | Dev agent re-spawned for fixes                                      |
+| `human_review` → `done`        | User approves or merges PR                  | Branch cleanup optional                                             |
+| `human_review` → `in_progress` | User requests changes                       | Dev agent re-spawned                                                |
 
 ### Planning Phase Sub-States
 

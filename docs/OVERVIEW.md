@@ -99,6 +99,16 @@ Two planning modes available:
 | **With Human Review** | AI asks clarifying questions → User answers → AI generates plan → User approves |
 | **Auto-Plan**         | AI generates plan and subtasks directly without user intervention               |
 
+### Review Locally (Human Review Phase)
+
+In the Human Review phase, you can:
+
+- **Open in Cursor or VS Code** — Opens the task's worktree in your preferred IDE. The app auto-detects which editors are installed (Cursor preferred).
+- **Open in File Explorer** — Opens the worktree folder in the system file manager (Finder, Explorer, etc.).
+- **Create MR** — Create a merge request for the task branch.
+
+Worktree path is derived from project root + `.code-auto/worktrees/{taskId}`. When not running in Electron (e.g. web), these actions are disabled with a "Use desktop app" message.
+
 ### Concurrent Agent Management
 
 The AgentManager supports:
@@ -130,13 +140,13 @@ stateDiagram-v2
 
 ### Phase Summary
 
-| Phase            | Purpose                                           | Entry Trigger  | Exit Trigger                 | Automation                                              |
-| ---------------- | ------------------------------------------------- | -------------- | ---------------------------- | ------------------------------------------------------- |
-| **Planning**     | Generate implementation plan via AI-assisted Q&A  | Task created   | User approves plan           | AI generates questions → user answers → AI creates plan |
-| **In Progress**  | Execute development subtasks in isolated worktree | Plan approved  | All `dev` subtasks completed | Dev agent spawned; worktree created                     |
-| **AI Review**    | Automated QA verification of implementation       | Dev complete   | All `qa` subtasks pass       | QA agent auto-spawned                                   |
-| **Human Review** | Developer inspects changes and approves/rejects   | QA passes      | User approves or merges PR   | Notification sent                                       |
-| **Done**         | Task complete, branch ready for merge             | Human approval | N/A (terminal)               | Optional branch cleanup                                 |
+| Phase            | Purpose                                           | Entry Trigger                     | Exit Trigger                 | Automation                                                          |
+| ---------------- | ------------------------------------------------- | --------------------------------- | ---------------------------- | ------------------------------------------------------------------- |
+| **Planning**     | Generate implementation plan via AI-assisted Q&A  | Task created                      | User approves plan           | AI generates questions → user answers → AI creates plan             |
+| **In Progress**  | Execute development subtasks in isolated worktree | Plan approved; subtasks generated | All `dev` subtasks completed | Task stays in planning until subtasks ready; then dev agent spawned |
+| **AI Review**    | Automated QA verification of implementation       | Dev complete                      | All `qa` subtasks pass       | QA agent auto-spawned                                               |
+| **Human Review** | Developer inspects changes and approves/rejects   | QA passes                         | User approves or merges PR   | Review Locally (open Cursor/VS Code/folder)                         |
+| **Done**         | Task complete, branch ready for merge             | Human approval                    | N/A (terminal)               | Optional branch cleanup                                             |
 
 ### Planning Phase Sub-States
 

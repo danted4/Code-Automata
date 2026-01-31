@@ -297,8 +297,7 @@ Modal for final human review before merge.
 - Git integration status display
 - Actions:
   - Create Merge Request
-  - Review Changes Locally
-  - Open in VS Code
+  - Review Locally (open Cursor or VS Code at worktree; IDE picker with auto-detection)
   - Open in File Explorer
 - Approve & Merge button
 
