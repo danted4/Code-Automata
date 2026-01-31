@@ -26,6 +26,40 @@ const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
 const PORT_RANGE = 10; // try 3000..3009 if default is busy
 
 let mainWindow = null;
+let nextServer = null;
+let serverPort = DEFAULT_PORT;
+let appUrl = null; // Reuse same URL when reopening window (keeps localStorage)
+
+/**
+ * Check if a port is available.
+ * @param {number} port
+ * @returns {Promise<boolean>}
+ */
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Find first available port in range [start, start + count).
+ * @param {number} start
+ * @param {number} count
+ * @returns {Promise<number|null>}
+ */
+async function findAvailablePort(start, count) {
+  for (let i = 0; i < count; i++) {
+    const port = start + i;
+    if (await isPortAvailable(port)) return port;
+  }
+  return null;
+}
 
 /**
  * Common CLI paths on macOS (agent, amp, gh, cursor, code).
