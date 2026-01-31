@@ -15,6 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -107,7 +108,7 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
             within your home directory.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
+        <DialogBody className="space-y-4 py-4">
           {recentPaths.length > 0 && (
             <div className="space-y-2">
               <Label>Recent Projects</Label>
@@ -193,7 +194,7 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
               {error}
             </p>
           )}
-        </div>
+        </DialogBody>
         <DialogFooter>
           <Button
             variant="outline"

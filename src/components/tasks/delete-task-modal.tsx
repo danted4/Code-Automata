@@ -13,6 +13,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -49,7 +50,7 @@ export function DeleteTaskModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <DialogBody className="space-y-4 py-4">
           {/* Task Details */}
           <div className="space-y-3">
             <div>
@@ -132,7 +133,7 @@ export function DeleteTaskModal({
               </div>
             </div>
           </div>
-        </div>
+        </DialogBody>
 
         <DialogFooter>
           <Button

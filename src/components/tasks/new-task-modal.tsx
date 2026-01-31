@@ -14,6 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -378,7 +379,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <DialogBody className="space-y-4 py-4">
           {/* Task Name */}
           <div className="space-y-2">
             <Label htmlFor="title">Task Name</Label>
@@ -515,7 +516,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
               </p>
             </div>
           </div>
-        </div>
+        </DialogBody>
 
         <DialogFooter>
           <Button

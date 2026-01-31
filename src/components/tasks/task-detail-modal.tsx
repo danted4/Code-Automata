@@ -530,13 +530,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-[800px] max-h-[90vh] overflow-hidden flex flex-col"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onDragStart={(e) => e.stopPropagation()}
-        onDrag={(e) => e.stopPropagation()}
-      >
+      <DialogContent className="sm:max-w-[800px]">
         <DialogHeader>
           <DialogTitle>{task.title || task.id}</DialogTitle>
           <DialogDescription>{task.description}</DialogDescription>
@@ -544,10 +538,8 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
 
         {/* Tabs */}
         <div
-          className="flex gap-1 border-b"
+          className="flex shrink-0 gap-1 border-b"
           style={{ borderColor: 'var(--color-border)' }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={(e) => {
@@ -595,14 +587,7 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
         </div>
 
         {/* Tab Content */}
-        <div
-          className="flex-1 overflow-y-auto py-4 px-2"
-          style={{ minHeight: '500px', maxHeight: '500px' }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          onDragStart={(e) => e.stopPropagation()}
-          onDrag={(e) => e.stopPropagation()}
-        >
+        <div className="min-h-0 flex-1 overflow-y-auto py-4 px-2">
           {activeTab === 'subtasks' ? (
             <>
               {task.phase === 'in_progress' ? (
@@ -953,18 +938,11 @@ export function TaskDetailModal({ open, onOpenChange, task }: TaskDetailModalPro
                 color: 'var(--color-terminal-text)',
                 minHeight: '100%',
               }}
-              // dnd-kit listens to pointer events; keep them inside the modal.
-              onPointerDownCapture={(e) => e.stopPropagation()}
-              onPointerMoveCapture={(e) => e.stopPropagation()}
-              onPointerUpCapture={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div
                 className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
                 style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                onPointerDownCapture={(e) => e.stopPropagation()}
               >
                 <div className="text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>
                   Thread: {activeThreadId || '—'}

@@ -115,18 +115,7 @@ export function PlanningLogsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-[900px] max-h-[90vh] overflow-hidden flex flex-col"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onDragStart={(e) => e.stopPropagation()}
-        onDrag={(e) => e.stopPropagation()}
-        // dnd-kit listens to pointer events; ensure the modal doesn't trigger board/card drag.
-        onPointerDownCapture={(e) => e.stopPropagation()}
-        onPointerMoveCapture={(e) => e.stopPropagation()}
-        onPointerUpCapture={(e) => e.stopPropagation()}
-        onPointerCancelCapture={(e) => e.stopPropagation()}
-      >
+      <DialogContent className="sm:max-w-[900px]">
         <DialogHeader>
           <DialogTitle>Planning logs</DialogTitle>
           <DialogDescription>
@@ -136,11 +125,8 @@ export function PlanningLogsModal({
 
         {/* Header bar */}
         <div
-          className="flex items-center justify-between gap-2 rounded-md border px-3 py-2"
+          className="flex shrink-0 items-center justify-between gap-2 rounded-md border px-3 py-2"
           style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDownCapture={(e) => e.stopPropagation()}
         >
           <div className="text-xs font-mono" style={{ color: 'var(--color-text-muted)' }}>
             Thread: {threadId}
@@ -177,17 +163,12 @@ export function PlanningLogsModal({
 
         {/* Terminal */}
         <div
-          className="mt-3 flex-1 overflow-hidden rounded-lg border"
+          className="mt-3 min-h-0 flex-1 overflow-hidden rounded-lg border"
           style={{
             borderColor: 'var(--color-border)',
             background: 'var(--color-terminal-background)',
             color: 'var(--color-terminal-text)',
           }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDownCapture={(e) => e.stopPropagation()}
-          onPointerMoveCapture={(e) => e.stopPropagation()}
-          onPointerUpCapture={(e) => e.stopPropagation()}
         >
           <div className="h-full overflow-y-auto p-4 font-mono text-xs">
             {logs.length === 0 && status === 'connecting' && (

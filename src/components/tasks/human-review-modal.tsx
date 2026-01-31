@@ -18,6 +18,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -179,35 +180,9 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     }
   };
 
-  const handleModalClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-  };
-
-  const handlePointerDown = (e: React.PointerEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-  };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-  };
-
-  const handleDragStart = (e: React.DragEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto"
-        onClick={handleModalClick}
-        onMouseDown={handleMouseDown}
-        onPointerDown={handlePointerDown}
-        onDragStart={handleDragStart}
-      >
+      <DialogContent className="sm:max-w-[700px]">
         <DialogHeader>
           <DialogTitle>Human Review - Ready for Merge</DialogTitle>
           <DialogDescription>
@@ -265,13 +240,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
           )}
         </DialogHeader>
 
-        <div
-          className="space-y-6 py-4"
-          onClick={handleModalClick}
-          onMouseDown={handleMouseDown}
-          onPointerDown={handlePointerDown}
-          onDragStart={handleDragStart}
-        >
+        <DialogBody className="space-y-6 py-4">
           {/* Completed Work Summary */}
           <div className="space-y-4">
             <h3 className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>
@@ -570,15 +539,9 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
               <span className="font-medium">Task ID:</span> {task.id}
             </p>
           </div>
-        </div>
+        </DialogBody>
 
-        <DialogFooter
-          className="gap-2"
-          onClick={handleModalClick}
-          onMouseDown={handleMouseDown}
-          onPointerDown={handlePointerDown}
-          onDragStart={handleDragStart}
-        >
+        <DialogFooter className="gap-2">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}

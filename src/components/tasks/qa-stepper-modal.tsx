@@ -14,6 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -152,7 +153,7 @@ export function QAStepperModal({ open, onOpenChange, taskId, questions }: QAStep
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[700px]">
         <DialogHeader>
           <DialogTitle>Answer Planning Questions</DialogTitle>
           <DialogDescription>
@@ -160,8 +161,11 @@ export function QAStepperModal({ open, onOpenChange, taskId, questions }: QAStep
           </DialogDescription>
         </DialogHeader>
 
-        {/* Question Navigation */}
-        <div className="py-3 border-t border-b" style={{ borderColor: 'var(--color-border)' }}>
+        <div
+          className="shrink-0 py-3 border-t border-b"
+          style={{ borderColor: 'var(--color-border)' }}
+        >
+          {/* Question Navigation */}
           <div className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>
             Question {currentQuestionIndex + 1} of {questions.length}
           </div>
@@ -208,60 +212,62 @@ export function QAStepperModal({ open, onOpenChange, taskId, questions }: QAStep
           </div>
         </div>
 
-        {/* Current Question */}
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <div className="flex items-start gap-2">
-              <Label
-                className="text-base font-medium"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                {currentQuestion.question}
-              </Label>
-              {currentQuestion.required && (
-                <span className="text-xs" style={{ color: 'var(--color-error)' }}>
-                  *
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* MCQ Options */}
-          <RadioGroup value={currentAnswer.selectedOption} onValueChange={handleOptionChange}>
+        <DialogBody>
+          {/* Current Question */}
+          <div className="space-y-4 py-4">
             <div className="space-y-2">
-              {currentQuestion.options.map((option, idx) => (
-                <div key={idx} className="flex items-center space-x-2">
-                  <RadioGroupItem value={option} id={`option-${idx}`} />
-                  <Label
-                    htmlFor={`option-${idx}`}
-                    className="cursor-pointer font-normal"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    {option}
-                  </Label>
-                </div>
-              ))}
+              <div className="flex items-start gap-2">
+                <Label
+                  className="text-base font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  {currentQuestion.question}
+                </Label>
+                {currentQuestion.required && (
+                  <span className="text-xs" style={{ color: 'var(--color-error)' }}>
+                    *
+                  </span>
+                )}
+              </div>
             </div>
-          </RadioGroup>
 
-          {/* Additional Text Input */}
-          <div className="space-y-2 pt-2">
-            <Label
-              htmlFor="additional-text"
-              className="text-sm"
-              style={{ color: 'var(--color-text-muted)' }}
-            >
-              Additional notes or custom answer (optional)
-            </Label>
-            <Textarea
-              id="additional-text"
-              placeholder="Add any additional context or a custom answer..."
-              value={currentAnswer.additionalText}
-              onChange={(e) => handleTextChange(e.target.value)}
-              rows={3}
-            />
+            {/* MCQ Options */}
+            <RadioGroup value={currentAnswer.selectedOption} onValueChange={handleOptionChange}>
+              <div className="space-y-2">
+                {currentQuestion.options.map((option, idx) => (
+                  <div key={idx} className="flex items-center space-x-2">
+                    <RadioGroupItem value={option} id={`option-${idx}`} />
+                    <Label
+                      htmlFor={`option-${idx}`}
+                      className="cursor-pointer font-normal"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      {option}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </RadioGroup>
+
+            {/* Additional Text Input */}
+            <div className="space-y-2 pt-2">
+              <Label
+                htmlFor="additional-text"
+                className="text-sm"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Additional notes or custom answer (optional)
+              </Label>
+              <Textarea
+                id="additional-text"
+                placeholder="Add any additional context or a custom answer..."
+                value={currentAnswer.additionalText}
+                onChange={(e) => handleTextChange(e.target.value)}
+                rows={3}
+              />
+            </div>
           </div>
-        </div>
+        </DialogBody>
 
         {/* Navigation Footer */}
         <DialogFooter className="flex justify-between items-center gap-2">
