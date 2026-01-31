@@ -1,15 +1,19 @@
 /**
  * Submit Planning Answers API Route
  *
- * Receives answers to planning questions and triggers plan generation
+ * Receives answers to planning questions and triggers plan generation.
+ * When JSON extraction fails, runs a fix agent to repair the output (up to MAX_PARSE_RETRIES).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getTaskPersistence } from '@/lib/tasks/persistence';
 import { startAgentForTask } from '@/lib/agents/registry';
 import { getProjectDir } from '@/lib/project-dir';
+import { extractAndValidateJSON } from '@/lib/validation/subtask-validator';
 import fs from 'fs/promises';
 import path from 'path';
+
+const MAX_PARSE_RETRIES = 2; // Initial parse + up to 2 fix-agent attempts
 
 export async function POST(req: NextRequest) {
   try {
@@ -69,71 +73,124 @@ export async function POST(req: NextRequest) {
     // Build plan generation prompt with answers
     const prompt = buildPlanGenerationPrompt(task, answers);
 
-    // Create completion handler
-    const onComplete = async (result: { success: boolean; output: string; error?: string }) => {
-      await fs.appendFile(
-        logsPath,
-        `\n[Plan Generation Completed] Success: ${result.success}\n`,
-        'utf-8'
-      );
-
-      if (!result.success) {
-        await fs.appendFile(logsPath, `[Error] ${result.error}\n`, 'utf-8');
-
-        // Update task to blocked
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (currentTask) {
-          currentTask.status = 'blocked';
-          currentTask.assignedAgent = undefined;
-          await taskPersistence.saveTask(currentTask);
-        }
-        return;
-      }
-
-      await fs.appendFile(logsPath, `[Output]\n${result.output}\n`, 'utf-8');
-
-      // Parse JSON output
-      try {
-        const jsonMatch = result.output.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          throw new Error('No JSON found in output');
-        }
-
-        const parsedOutput = JSON.parse(jsonMatch[0]);
-        await fs.appendFile(logsPath, `[Parsed JSON successfully]\n`, 'utf-8');
-
-        // Load current task
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (!currentTask) return;
-
-        // Update task with plan
-        if (parsedOutput.plan) {
-          await fs.appendFile(logsPath, `[Plan Generated]\n`, 'utf-8');
-
-          currentTask.planContent = parsedOutput.plan;
-          currentTask.planningStatus = 'plan_ready';
-          currentTask.status = 'pending';
-          currentTask.assignedAgent = undefined;
-
-          await taskPersistence.saveTask(currentTask);
-          await fs.appendFile(logsPath, `[Task Updated Successfully]\n`, 'utf-8');
-        }
-      } catch (parseError) {
+    // Create completion handler with parse-retry loop (fix agent when JSON extraction fails)
+    const createOnComplete = (parseAttempt: number) => {
+      return async (result: { success: boolean; output: string; error?: string }) => {
+        const isFixAttempt = parseAttempt > 0;
         await fs.appendFile(
           logsPath,
-          `[Parse Error] Failed to parse JSON: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n`,
+          `\n[${isFixAttempt ? 'Fix Agent' : 'Plan Generation'} Completed] Success: ${result.success}\n`,
           'utf-8'
         );
 
-        // Update task to blocked
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (currentTask) {
-          currentTask.status = 'blocked';
-          currentTask.assignedAgent = undefined;
-          await taskPersistence.saveTask(currentTask);
+        if (!result.success) {
+          await fs.appendFile(logsPath, `[Error] ${result.error}\n`, 'utf-8');
+
+          const currentTask = await taskPersistence.loadTask(taskId);
+          if (currentTask) {
+            currentTask.status = 'blocked';
+            currentTask.assignedAgent = undefined;
+            await taskPersistence.saveTask(currentTask);
+          }
+          return;
         }
-      }
+
+        await fs.appendFile(logsPath, `[Output]\n${result.output}\n`, 'utf-8');
+
+        // Parse JSON output (handles markdown code blocks and nested braces in plan content)
+        try {
+          const { data: parsedOutput, error: jsonError } = extractAndValidateJSON(result.output);
+          if (jsonError || !parsedOutput) {
+            throw new Error(jsonError || 'No JSON found in output');
+          }
+          await fs.appendFile(logsPath, `[Parsed JSON successfully]\n`, 'utf-8');
+
+          const currentTask = await taskPersistence.loadTask(taskId);
+          if (!currentTask) return;
+
+          const planContent = (parsedOutput as { plan?: string }).plan;
+          if (planContent) {
+            await fs.appendFile(logsPath, `[Plan Generated]\n`, 'utf-8');
+
+            currentTask.planContent = planContent;
+            currentTask.planningStatus = 'plan_ready';
+            currentTask.status = 'pending';
+            currentTask.assignedAgent = undefined;
+
+            await taskPersistence.saveTask(currentTask);
+            await fs.appendFile(logsPath, `[Task Updated Successfully]\n`, 'utf-8');
+            return;
+          }
+          throw new Error('Parsed JSON has no "plan" field');
+        } catch (parseError) {
+          const errMsg = parseError instanceof Error ? parseError.message : 'Unknown error';
+          await fs.appendFile(logsPath, `[Parse Error] Failed to parse JSON: ${errMsg}\n`, 'utf-8');
+
+          // Retry: run fix agent to repair the output
+          if (parseAttempt < MAX_PARSE_RETRIES) {
+            await fs.appendFile(
+              logsPath,
+              `\n[Parse Retry] Attempt ${parseAttempt + 1}/${MAX_PARSE_RETRIES} - Starting fix agent...\n`,
+              'utf-8'
+            );
+
+            const fixPrompt = `Your previous response could not be parsed as valid JSON.
+
+Parse error: ${errMsg}
+
+Here is your previous output (it may contain markdown fences, extra text, or invalid JSON - extract and fix it):
+
+---
+${result.output}
+---
+
+Your task: Extract the implementation plan from the output above and return ONLY valid JSON with no markdown fences, no extra text.
+
+Required format:
+{
+  "plan": "<markdown string - the full implementation plan content>"
+}
+
+Rules:
+- Escape any quotes inside the plan string (use \\" for literal quotes)
+- Do not wrap the JSON in \`\`\`json code blocks
+- Return nothing else - only the JSON object`;
+
+            const currentTask = await taskPersistence.loadTask(taskId);
+            if (!currentTask) return;
+
+            const { threadId: fixThreadId } = await startAgentForTask({
+              task: currentTask,
+              prompt: fixPrompt,
+              workingDir: currentTask.worktreePath || projectDir,
+              projectDir,
+              onComplete: createOnComplete(parseAttempt + 1),
+            });
+
+            currentTask.assignedAgent = fixThreadId;
+            currentTask.status = 'planning';
+            currentTask.planningStatus = 'generating_plan';
+            await taskPersistence.saveTask(currentTask);
+            await fs.appendFile(
+              logsPath,
+              `[Fix Agent Started] Thread ID: ${fixThreadId}\n`,
+              'utf-8'
+            );
+          } else {
+            // Max retries reached - block the task
+            const currentTask = await taskPersistence.loadTask(taskId);
+            if (currentTask) {
+              currentTask.status = 'blocked';
+              currentTask.assignedAgent = undefined;
+              await taskPersistence.saveTask(currentTask);
+            }
+            await fs.appendFile(logsPath, `[Max Parse Retries Reached] Task blocked.\n`, 'utf-8');
+          }
+        }
+      };
     };
+
+    const onComplete = createOnComplete(0);
 
     // Start plan generation agent
     await fs.appendFile(logsPath, `[Starting Plan Generation]\n`, 'utf-8');

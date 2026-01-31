@@ -1,10 +1,10 @@
 /**
  * Start Development API Route
  *
- * Starts development phase:
- * 1. Generate subtasks from approved plan
- * 2. Validate subtasks JSON
- * 3. Execute subtasks sequentially
+ * Task stays in planning phase until subtasks (dev + qa) are generated successfully.
+ * 1. Generate subtasks from approved plan (task remains in planning)
+ * 2. Parse & validate subtasks JSON (with fix-agent retry on failure)
+ * 3. Only then move to in_progress and execute subtasks sequentially
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,6 +19,8 @@ import {
 } from '@/lib/validation/subtask-validator';
 import fs from 'fs/promises';
 import path from 'path';
+
+const MAX_PARSE_RETRIES = 2; // Initial parse + up to 2 fix-agent attempts
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,9 +55,10 @@ export async function POST(req: NextRequest) {
     // Initialize log file
     await fs.writeFile(
       logsPath,
-      `Development started for task: ${task.title}\n` +
+      `Subtask generation started for task: ${task.title}\n` +
         `Task ID: ${taskId}\n` +
         `Started at: ${new Date().toISOString()}\n` +
+        `(Task remains in planning until subtasks are generated successfully)\n` +
         `${'='.repeat(80)}\n\n`,
       'utf-8'
     );
@@ -63,118 +66,181 @@ export async function POST(req: NextRequest) {
     // Build subtask generation prompt
     const prompt = buildSubtaskGenerationPrompt(task);
 
-    // Create completion handler for subtask generation
-    const onSubtasksGenerated = async (result: {
-      success: boolean;
-      output: string;
-      error?: string;
-    }) => {
-      await fs.appendFile(
-        logsPath,
-        `\n[Subtask Generation Completed] Success: ${result.success}\n`,
-        'utf-8'
-      );
-
-      if (!result.success) {
-        await fs.appendFile(logsPath, `[Error] ${result.error}\n`, 'utf-8');
-
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (currentTask) {
-          currentTask.status = 'blocked';
-          currentTask.assignedAgent = undefined;
-          await taskPersistence.saveTask(currentTask);
-        }
-        return;
-      }
-
-      await fs.appendFile(logsPath, `[Output]\n${result.output}\n`, 'utf-8');
-
-      // Parse subtasks JSON
-      try {
-        const { data: parsedOutput, error: jsonError } = extractAndValidateJSON(result.output);
-        if (jsonError) throw new Error(jsonError);
-        await fs.appendFile(logsPath, `[Parsed JSON successfully]\n`, 'utf-8');
-
-        // Validate subtasks structure
-        const validation = validateSubtasks(parsedOutput);
-        if (!validation.valid) {
-          const feedback = generateValidationFeedback(validation);
-          throw new Error(feedback);
-        }
-
-        const subtasks: Subtask[] = (parsedOutput?.subtasks ?? []) as Subtask[];
-
-        await fs.appendFile(logsPath, `[Validated ${subtasks.length} subtasks]\n`, 'utf-8');
-
-        // Save subtasks to task
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (!currentTask) return;
-
-        // Process subtasks from CLI.
-        // Prefer explicit type if provided; otherwise infer "qa" for validation/testing/build steps.
-        const processedSubtasks = subtasks.map((s) => {
-          const type: 'dev' | 'qa' = inferSubtaskType(s);
-          return {
-            ...s,
-            type,
-            status: 'pending' as const,
-            activeForm: s.activeForm || `Working on ${s.label}`,
-          };
-        });
-
-        // Separate dev and QA subtasks
-        const devSubtasks = processedSubtasks.filter((s) => s.type === 'dev');
-        const qaSubtasks = processedSubtasks.filter((s) => s.type === 'qa');
-
-        // If no QA subtasks came from CLI/inference, generate them (~60% of dev count)
-        const finalQASubtasks =
-          qaSubtasks.length > 0
-            ? qaSubtasks
-            : Array.from({ length: Math.floor(devSubtasks.length * 0.6) }, (_, i) => ({
-                id: `subtask-qa-${i + 1}`,
-                content: `[AUTO] Verify implementation step ${i + 1} - Validate the corresponding development work`,
-                label: `Verify Step ${i + 1}`,
-                type: 'qa' as const,
-                status: 'pending' as const,
-                activeForm: `Verifying Step ${i + 1}`,
-              }));
-
-        currentTask.subtasks = [...devSubtasks, ...finalQASubtasks];
-        currentTask.status = 'in_progress';
-        currentTask.assignedAgent = undefined; // Clear agent after subtask generation
-        await taskPersistence.saveTask(currentTask);
-
-        await fs.appendFile(logsPath, `[Subtasks saved to task]\n`, 'utf-8');
-
-        // Start sequential execution
+    // Create completion handler with parse-retry loop (fix agent when JSON/validation fails)
+    const createOnSubtasksGenerated = (parseAttempt: number) => {
+      return async (result: { success: boolean; output: string; error?: string }) => {
+        const isFixAttempt = parseAttempt > 0;
         await fs.appendFile(
           logsPath,
-          `\n${'='.repeat(80)}\n[Starting Sequential Execution]\n${'='.repeat(80)}\n\n`,
+          `\n[${isFixAttempt ? 'Fix Agent' : 'Subtask Generation'} Completed] Success: ${result.success}\n`,
           'utf-8'
         );
 
-        // Execute DEV subtasks one by one (QA runs later in ai_review)
-        await executeSubtasksSequentially(
-          taskPersistence,
-          projectDir,
-          taskId,
-          devSubtasks,
-          logsPath
-        );
-      } catch (parseError) {
-        await fs.appendFile(
-          logsPath,
-          `[Parse Error] Failed to parse/validate subtasks: ${parseError instanceof Error ? parseError.message : 'Unknown error'}\n`,
-          'utf-8'
-        );
+        if (!result.success) {
+          await fs.appendFile(logsPath, `[Error] ${result.error}\n`, 'utf-8');
 
-        const currentTask = await taskPersistence.loadTask(taskId);
-        if (currentTask) {
-          currentTask.status = 'blocked';
+          const currentTask = await taskPersistence.loadTask(taskId);
+          if (currentTask) {
+            currentTask.status = 'blocked';
+            currentTask.assignedAgent = undefined;
+            await taskPersistence.saveTask(currentTask);
+          }
+          return;
+        }
+
+        await fs.appendFile(logsPath, `[Output]\n${result.output}\n`, 'utf-8');
+
+        // Parse and validate subtasks JSON
+        try {
+          const { data: parsedOutput, error: jsonError } = extractAndValidateJSON(result.output);
+          if (jsonError || !parsedOutput) {
+            throw new Error(jsonError || 'No JSON found in output');
+          }
+          await fs.appendFile(logsPath, `[Parsed JSON successfully]\n`, 'utf-8');
+
+          // Validate subtasks structure
+          const validation = validateSubtasks(parsedOutput);
+          if (!validation.valid) {
+            const feedback = generateValidationFeedback(validation);
+            throw new Error(feedback);
+          }
+
+          const subtasks: Subtask[] = (parsedOutput?.subtasks ?? []) as Subtask[];
+
+          await fs.appendFile(logsPath, `[Validated ${subtasks.length} subtasks]\n`, 'utf-8');
+
+          // Save subtasks to task - NOW move to in_progress (subtasks generated successfully)
+          const currentTask = await taskPersistence.loadTask(taskId);
+          if (!currentTask) return;
+
+          // Process subtasks from CLI.
+          const processedSubtasks = subtasks.map((s) => {
+            const type: 'dev' | 'qa' = inferSubtaskType(s);
+            return {
+              ...s,
+              type,
+              status: 'pending' as const,
+              activeForm: s.activeForm || `Working on ${s.label}`,
+            };
+          });
+
+          const devSubtasks = processedSubtasks.filter((s) => s.type === 'dev');
+          const qaSubtasks = processedSubtasks.filter((s) => s.type === 'qa');
+
+          const finalQASubtasks =
+            qaSubtasks.length > 0
+              ? qaSubtasks
+              : Array.from({ length: Math.floor(devSubtasks.length * 0.6) }, (_, i) => ({
+                  id: `subtask-qa-${i + 1}`,
+                  content: `[AUTO] Verify implementation step ${i + 1} - Validate the corresponding development work`,
+                  label: `Verify Step ${i + 1}`,
+                  type: 'qa' as const,
+                  status: 'pending' as const,
+                  activeForm: `Verifying Step ${i + 1}`,
+                }));
+
+          currentTask.subtasks = [...devSubtasks, ...finalQASubtasks];
+          currentTask.phase = 'in_progress'; // Only now move to development
+          currentTask.status = 'in_progress';
           currentTask.assignedAgent = undefined;
           await taskPersistence.saveTask(currentTask);
+
+          await fs.appendFile(logsPath, `[Subtasks saved to task]\n`, 'utf-8');
+
+          // Start sequential execution
+          await fs.appendFile(
+            logsPath,
+            `\n${'='.repeat(80)}\n[Starting Sequential Execution]\n${'='.repeat(80)}\n\n`,
+            'utf-8'
+          );
+
+          await executeSubtasksSequentially(
+            taskPersistence,
+            projectDir,
+            taskId,
+            devSubtasks,
+            logsPath
+          );
+        } catch (parseError) {
+          const errMsg = parseError instanceof Error ? parseError.message : 'Unknown error';
+          await fs.appendFile(logsPath, `[Parse/Validation Error] ${errMsg}\n`, 'utf-8');
+
+          // Retry: run fix agent to repair the output
+          if (parseAttempt < MAX_PARSE_RETRIES) {
+            await fs.appendFile(
+              logsPath,
+              `\n[Parse Retry] Attempt ${parseAttempt + 1}/${MAX_PARSE_RETRIES} - Starting fix agent...\n`,
+              'utf-8'
+            );
+
+            const fixPrompt = `Your previous response could not be parsed or validated as valid subtasks JSON.
+
+Error: ${errMsg}
+
+Here is your previous output (it may contain markdown fences, extra text, or invalid JSON - extract and fix it):
+
+---
+${result.output}
+---
+
+Your task: Extract the subtasks from the output above and return ONLY valid JSON with no markdown fences, no extra text.
+
+Required format:
+{
+  "subtasks": [
+    {
+      "id": "subtask-1",
+      "content": "Detailed description of work",
+      "label": "Short label",
+      "activeForm": "Optional: present continuous form",
+      "type": "dev" or "qa"
+    }
+  ]
+}
+
+Rules:
+- Each subtask must have id, content, label (all non-empty strings)
+- Include at least 2 QA subtasks (type: "qa") for verification/testing
+- Escape any quotes inside strings (use \\" for literal quotes)
+- Do not wrap the JSON in \`\`\`json code blocks
+- Return nothing else - only the JSON object`;
+
+            const currentTask = await taskPersistence.loadTask(taskId);
+            if (!currentTask) return;
+
+            const { threadId: fixThreadId } = await startAgentForTask({
+              task: currentTask,
+              prompt: fixPrompt,
+              workingDir: currentTask.worktreePath || projectDir,
+              projectDir,
+              onComplete: createOnSubtasksGenerated(parseAttempt + 1),
+            });
+
+            currentTask.assignedAgent = fixThreadId;
+            currentTask.status = 'planning'; // Stay in planning during retry
+            currentTask.phase = 'planning';
+            await taskPersistence.saveTask(currentTask);
+            await fs.appendFile(
+              logsPath,
+              `[Fix Agent Started] Thread ID: ${fixThreadId}\n`,
+              'utf-8'
+            );
+          } else {
+            // Max retries reached - block the task (stays in planning)
+            const currentTask = await taskPersistence.loadTask(taskId);
+            if (currentTask) {
+              currentTask.status = 'blocked';
+              currentTask.assignedAgent = undefined;
+              await taskPersistence.saveTask(currentTask);
+            }
+            await fs.appendFile(
+              logsPath,
+              `[Max Parse Retries Reached] Task blocked. Subtasks could not be parsed/validated.\n`,
+              'utf-8'
+            );
+          }
         }
-      }
+      };
     };
 
     // Start subtask generation agent
@@ -185,13 +251,13 @@ export async function POST(req: NextRequest) {
       prompt,
       workingDir: task.worktreePath || projectDir,
       projectDir,
-      onComplete: onSubtasksGenerated,
+      onComplete: createOnSubtasksGenerated(0),
     });
 
-    // Update task status
+    // Keep task in planning phase until subtasks are generated successfully
     task.assignedAgent = threadId;
-    task.status = 'in_progress';
-    task.phase = 'in_progress';
+    task.status = 'planning';
+    task.phase = 'planning';
     await taskPersistence.saveTask(task);
 
     await fs.appendFile(logsPath, `[Agent Started] Thread ID: ${threadId}\n`, 'utf-8');
@@ -199,7 +265,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       threadId,
-      message: 'Development started - generating subtasks',
+      message: 'Generating subtasks - task remains in planning until subtasks are ready',
     });
   } catch (error) {
     return NextResponse.json(
