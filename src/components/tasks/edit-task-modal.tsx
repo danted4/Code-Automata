@@ -121,15 +121,32 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
     }
   }, [open]);
 
-  // Amp readiness
+  // Amp readiness (delay + retry for packaged app env race)
   useEffect(() => {
-    async function checkAmp() {
-      setIsCheckingAmp(true);
+    if (!open || cliTool !== 'amp') {
+      if (open) setAmpPreflight(null);
+      setIsCheckingAmp(false);
+      return;
+    }
+    let cancelled = false;
+    setIsCheckingAmp(true);
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
       try {
         const res = await apiFetch('/api/amp/preflight');
         const data = await res.json();
+        if (cancelled) return;
         if (res.ok) {
-          setAmpPreflight(data);
+          if (!data.canRunAmp && data.ampCliPath === null) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (cancelled) return;
+            const retry = await apiFetch('/api/amp/preflight');
+            const retryData = await retry.json();
+            if (retry.ok) setAmpPreflight(retryData);
+            else setAmpPreflight(data);
+          } else {
+            setAmpPreflight(data);
+          }
         } else {
           setAmpPreflight({
             ampCliPath: null,
@@ -139,33 +156,51 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
           });
         }
       } catch (e) {
-        setAmpPreflight({
-          ampCliPath: null,
-          authSource: 'missing',
-          canRunAmp: false,
-          instructions: [e instanceof Error ? e.message : 'Amp preflight failed'],
-        });
+        if (!cancelled) {
+          setAmpPreflight({
+            ampCliPath: null,
+            authSource: 'missing',
+            canRunAmp: false,
+            instructions: [e instanceof Error ? e.message : 'Amp preflight failed'],
+          });
+        }
       } finally {
-        setIsCheckingAmp(false);
+        if (!cancelled) setIsCheckingAmp(false);
       }
-    }
-
-    if (open && cliTool === 'amp') {
-      checkAmp();
-    } else if (open) {
-      setAmpPreflight(null);
-    }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      setIsCheckingAmp(false);
+    };
   }, [open, cliTool]);
 
-  // Cursor readiness
+  // Cursor readiness (delay + retry for packaged app env race)
   useEffect(() => {
-    async function checkCursor() {
-      setIsCheckingCursor(true);
+    if (!open || cliTool !== 'cursor') {
+      if (open) setCursorPreflight(null);
+      setIsCheckingCursor(false);
+      return;
+    }
+    let cancelled = false;
+    setIsCheckingCursor(true);
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
       try {
         const res = await apiFetch('/api/cursor/preflight');
         const data = await res.json();
+        if (cancelled) return;
         if (res.ok) {
-          setCursorPreflight(data);
+          if (!data.canRunCursor && data.agentCliPath === null) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (cancelled) return;
+            const retry = await apiFetch('/api/cursor/preflight');
+            const retryData = await retry.json();
+            if (retry.ok) setCursorPreflight(retryData);
+            else setCursorPreflight(data);
+          } else {
+            setCursorPreflight(data);
+          }
         } else {
           setCursorPreflight({
             agentCliPath: null,
@@ -175,22 +210,23 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
           });
         }
       } catch (e) {
-        setCursorPreflight({
-          agentCliPath: null,
-          authSource: 'missing',
-          canRunCursor: false,
-          instructions: [e instanceof Error ? e.message : 'Cursor preflight failed'],
-        });
+        if (!cancelled) {
+          setCursorPreflight({
+            agentCliPath: null,
+            authSource: 'missing',
+            canRunCursor: false,
+            instructions: [e instanceof Error ? e.message : 'Cursor preflight failed'],
+          });
+        }
       } finally {
-        setIsCheckingCursor(false);
+        if (!cancelled) setIsCheckingCursor(false);
       }
-    }
-
-    if (open && cliTool === 'cursor') {
-      checkCursor();
-    } else if (open) {
-      setCursorPreflight(null);
-    }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      setIsCheckingCursor(false);
+    };
   }, [open, cliTool]);
 
   const currentAdapter = availableAdapters.find((a) => a.name === cliTool);

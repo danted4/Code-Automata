@@ -12,6 +12,7 @@ A Next.js ( Electron Desktop ) application for orchestrating AI coding tasks thr
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
+  - [Release Assets](#release-assets)
 - [API Overview](#api-overview)
 - [CLI Adapters](#cli-adapters)
 - [Workflow](#workflow)
@@ -126,6 +127,15 @@ git --version   # Should be 2.20.0 or higher
    yarn build
    ```
 
+### Release Assets
+
+Pre-built packages are available in [GitHub Releases](https://github.com/danted4/Code-Auto/releases):
+
+| Asset                           | Platform              | Description                 |
+| ------------------------------- | --------------------- | --------------------------- |
+| `Code-Auto-2.0.1-arm64.dmg`     | macOS (Apple Silicon) | Disk image for installation |
+| `Code-Auto-2.0.1-arm64-mac.zip` | macOS (Apple Silicon) | Zip archive                 |
+
 ### Development
 
 Start the Electron desktop app (recommended):
@@ -236,6 +246,8 @@ See [docs/CURSOR_INTEGRATION.md](docs/CURSOR_INTEGRATION.md) for detailed Cursor
 └──────────┘    └─────────────┘    └───────────┘    └──────────────┘    └──────┘
 ```
 
+See [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) for a step-by-step breakdown with screenshots.
+
 1. **Planning**: Task is defined and queued
 2. **In Progress**: AI agent executes the task in isolated worktree
 3. **AI Review**: Automated checks run on changes
@@ -259,6 +271,7 @@ src/
 
 ## Documentation
 
+- [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) — Step-by-step Kanban workflow with screenshots
 - [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — Master plan and backlog (single source of truth)
 - [docs/OVERVIEW.md](docs/OVERVIEW.md) — High-level introduction, features, and how the system works
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture, module structure, and design patterns
@@ -269,6 +282,7 @@ src/
 - [docs/DATA_FLOW.md](docs/DATA_FLOW.md) — Data flow patterns, Zustand stores, and state management
 - [docs/TYPE_REFERENCE.md](docs/TYPE_REFERENCE.md) — TypeScript interfaces and type definitions
 - [docs/WORKTREE.md](docs/WORKTREE.md) — Git worktree isolation strategy and WorktreeManager API
+- [docs/PACKAGED_APP.md](docs/PACKAGED_APP.md) — Packaged app (DMG) considerations, env handling, and checklist
 
 ## License
 
