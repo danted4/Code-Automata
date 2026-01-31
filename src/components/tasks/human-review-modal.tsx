@@ -6,11 +6,11 @@
  * Modal for reviewing completed development and QA work before merging
  * Provides options for:
  * - Creating MR for review (if git enabled)
- * - Reviewing changes locally (if git enabled)
- * - Opening in VS Code or file explorer
+ * - Review Locally: open worktree in Cursor or VS Code (Electron)
+ * - Open in file explorer (Electron)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -23,6 +23,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   GitBranch,
   Eye,
   Code2,
@@ -30,15 +37,31 @@ import {
   AlertCircle,
   CheckCircle2,
   AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 import { Task } from '@/lib/tasks/schema';
 import { toast } from 'sonner';
 import { useTaskStore } from '@/store/task-store';
+import { useProjectStore } from '@/store/project-store';
+import type { AvailableEditor } from '@/types/electron';
 
 interface HumanReviewModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: Task;
+}
+
+/** Build worktree path without Node path in client (projectPath/.code-auto/worktrees/taskId). */
+function buildWorktreePath(projectPath: string | null, taskId: string): string | null {
+  if (!projectPath) return null;
+  const parts = [projectPath.replace(/\/$/, ''), '.code-auto', 'worktrees', taskId];
+  return parts.join('/');
+}
+
+/** Filter to available editors and sort with Cursor first. */
+function availableEditorsSorted(editors: AvailableEditor[]): AvailableEditor[] {
+  const available = editors.filter((e) => e.available !== false);
+  return [...available].sort((a, b) => (a.id === 'cursor' ? -1 : b.id === 'cursor' ? 1 : 0));
 }
 
 export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalProps) {
@@ -49,7 +72,26 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     status: string;
     clean: boolean;
   } | null>(null);
+  const [availableEditors, setAvailableEditors] = useState<AvailableEditor[]>([]);
+  const [selectedEditorId, setSelectedEditorId] = useState<AvailableEditor['id'] | null>(null);
+  const [editorsLoading, setEditorsLoading] = useState(false);
+  const [openingFolder, setOpeningFolder] = useState(false);
   const { loadTasks } = useTaskStore();
+  const { projectPath } = useProjectStore();
+
+  const worktreePath = buildWorktreePath(projectPath, task.id);
+  const isElectron = typeof window !== 'undefined' && !!window.electron;
+  const canUseLocalActions = !!projectPath && isElectron;
+  const localActionsMessage = !projectPath
+    ? 'No project path set.'
+    : !isElectron
+      ? 'Use desktop app for Review Locally and Open in File Explorer.'
+      : null;
+
+  const selectedEditor = useMemo(
+    () => availableEditors.find((e) => e.id === selectedEditorId) ?? availableEditors[0] ?? null,
+    [availableEditors, selectedEditorId]
+  );
 
   // Separate dev and QA subtasks
   const devSubtasks = task.subtasks.filter((s) => s.type === 'dev');
@@ -67,6 +109,25 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
         .catch((err) => console.error('Failed to fetch git status:', err));
     }
   }, [open, task.id, task.branchName]);
+
+  // Fetch available editors when modal opens (Electron only)
+  useEffect(() => {
+    if (!open || !isElectron || !window.electron) return;
+    setEditorsLoading(true);
+    window.electron
+      .getAvailableEditors()
+      .then((raw) => {
+        const sorted = availableEditorsSorted(raw);
+        setAvailableEditors(sorted);
+        setSelectedEditorId(sorted[0]?.id ?? null);
+      })
+      .catch((err) => {
+        console.error('Failed to get available editors:', err);
+        setAvailableEditors([]);
+        setSelectedEditorId(null);
+      })
+      .finally(() => setEditorsLoading(false));
+  }, [open, isElectron]);
 
   const handleCreateMR = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -138,29 +199,32 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     }
   };
 
-  const handleReviewLocally = async (e: React.MouseEvent) => {
+  const handleOpenInEditor = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setIsLoading(true);
+    if (!worktreePath || !selectedEditorId || !window.electron) return;
     try {
-      // TODO: Implement local review (staging MR)
-      console.log('Staging MR for local review:', task.id);
-      // await fetch('/api/review/stage-mr', { ... });
-    } catch (error) {
-      console.error('Failed to stage MR:', error);
-    } finally {
-      setIsLoading(false);
+      const exists = await window.electron.pathExists(worktreePath);
+      if (!exists) {
+        toast.error(`Worktree not found at ${worktreePath}`);
+        return;
+      }
+    } catch {
+      toast.error(`Worktree not found at ${worktreePath}`);
+      return;
     }
-  };
-
-  const handleOpenVSCode = async (e: React.MouseEvent) => {
-    e.stopPropagation();
     setIsLoading(true);
     try {
-      // TODO: Implement VS Code opening
-      console.log('Opening VS Code for task:', task.id);
-      // await fetch('/api/review/open-vscode', { ... });
+      const result = await window.electron.openEditorAtPath(worktreePath, selectedEditorId);
+      if (result.success) {
+        toast.success(`Opened in ${selectedEditor?.label ?? selectedEditorId}`, {
+          description: worktreePath,
+        });
+      } else {
+        toast.error(result.error ?? 'Failed to open editor');
+      }
     } catch (error) {
-      console.error('Failed to open VS Code:', error);
+      console.error('Failed to open editor:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to open editor');
     } finally {
       setIsLoading(false);
     }
@@ -168,15 +232,33 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
 
   const handleOpenFolder = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setIsLoading(true);
+    if (!projectPath || !worktreePath || !window.electron) {
+      toast.error(!projectPath ? 'No project path set.' : 'Cannot open folder.');
+      return;
+    }
     try {
-      // TODO: Implement folder opening
-      console.log('Opening folder for task:', task.id);
-      // await fetch('/api/review/open-folder', { ... });
+      const exists = await window.electron.pathExists(worktreePath);
+      if (!exists) {
+        toast.error(`Worktree not found at ${worktreePath}`);
+        return;
+      }
+    } catch {
+      toast.error(`Worktree not found at ${worktreePath}`);
+      return;
+    }
+    setOpeningFolder(true);
+    try {
+      const result = await window.electron.openFolder(worktreePath);
+      if (result.success) {
+        toast.success('Opened in file explorer', { description: worktreePath });
+      } else {
+        toast.error(result.error ?? 'Failed to open folder');
+      }
     } catch (error) {
       console.error('Failed to open folder:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to open folder');
     } finally {
-      setIsLoading(false);
+      setOpeningFolder(false);
     }
   };
 
@@ -360,54 +442,6 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
                 </div>
               </Card>
 
-              <Card
-                className="p-4 cursor-pointer transition-colors"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-info)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                }}
-              >
-                <div className="space-y-3">
-                  <div>
-                    <h4
-                      className="text-sm font-medium flex items-center gap-2"
-                      style={{ color: 'var(--color-text-primary)' }}
-                    >
-                      <Code2 className="w-4 h-4" />
-                      Review Changes Locally
-                    </h4>
-                    <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-                      Stage the changes locally for manual review and testing
-                    </p>
-                  </div>
-                  <Button
-                    onClick={handleReviewLocally}
-                    disabled={isLoading}
-                    size="sm"
-                    variant="outline"
-                    className="w-full text-xs"
-                    style={{
-                      background: 'var(--color-surface-hover)',
-                      color: 'var(--color-text-primary)',
-                      borderColor: 'var(--color-border)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--color-background)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'var(--color-surface-hover)';
-                    }}
-                  >
-                    {isLoading ? 'Staging...' : 'Review Locally'}
-                  </Button>
-                </div>
-              </Card>
             </div>
           ) : (
             <div
@@ -431,106 +465,162 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
             </div>
           )}
 
-          {/* File Explorer Options */}
+          {/* Review Locally & Open Project */}
           <div className="space-y-3 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
             <h3 className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>
               <Folder className="w-4 h-4 inline mr-2" />
               Open Project
             </h3>
+            {localActionsMessage && (
+              <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
+                {localActionsMessage}
+              </p>
+            )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <Card
-                className="p-4 cursor-pointer transition-colors"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-info)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                }}
-              >
-                <div className="space-y-2">
+            {/* Review Locally: open worktree in Cursor or VS Code */}
+            <Card
+              className="p-4 transition-colors"
+              style={{
+                background: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-info)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-border)';
+              }}
+            >
+              <div className="space-y-3">
+                <div>
                   <h4
-                    className="text-xs font-medium"
+                    className="text-sm font-medium flex items-center gap-2"
                     style={{ color: 'var(--color-text-primary)' }}
                   >
-                    VS Code
+                    <Code2 className="w-4 h-4" />
+                    Review Locally
                   </h4>
-                  <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                    Open in editor
+                  <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
+                    Open the worktree in Cursor or VS Code to review changes
                   </p>
-                  <Button
-                    onClick={handleOpenVSCode}
-                    disabled={isLoading}
-                    size="sm"
-                    variant="outline"
-                    className="w-full text-xs mt-2"
-                    style={{
-                      background: 'var(--color-surface-hover)',
-                      color: 'var(--color-text-primary)',
-                      borderColor: 'var(--color-border)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--color-background)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'var(--color-surface-hover)';
-                    }}
-                  >
-                    {isLoading ? 'Opening...' : 'Open'}
-                  </Button>
                 </div>
-              </Card>
+                {editorsLoading ? (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Detecting editors…
+                  </div>
+                ) : availableEditors.length === 0 ? (
+                  <>
+                    <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                      No IDE found.
+                    </p>
+                    <Button
+                      disabled
+                      size="sm"
+                      className="flex-1 sm:flex-initial text-xs"
+                      style={{
+                        background: 'var(--color-surface-hover)',
+                        color: 'var(--color-text-secondary)',
+                        borderColor: 'var(--color-border)',
+                        cursor: 'not-allowed',
+                      }}
+                    >
+                      Review Locally
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    {availableEditors.length > 1 ? (
+                      <Select
+                        value={selectedEditorId ?? ''}
+                        onValueChange={(v) => setSelectedEditorId(v === 'cursor' || v === 'vscode' ? v : null)}
+                      >
+                        <SelectTrigger className="w-full sm:w-[180px] h-9 text-xs">
+                          <SelectValue placeholder="Choose editor" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableEditors.map((e) => (
+                            <SelectItem key={e.id} value={e.id} className="text-xs flex items-center gap-2">
+                              <Code2 className="w-3.5 h-3.5" />
+                              {e.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="flex items-center gap-2 px-2 py-1.5 rounded text-xs" style={{ background: 'var(--color-surface-hover)', color: 'var(--color-text-primary)' }}>
+                        <Code2 className="w-3.5 h-3.5" />
+                        {selectedEditor?.label ?? 'Editor'}
+                      </div>
+                    )}
+                    <Button
+                      onClick={handleOpenInEditor}
+                      disabled={isLoading || !canUseLocalActions || !selectedEditorId}
+                      size="sm"
+                      className="flex-1 sm:flex-initial text-xs"
+                      style={{
+                        background: 'var(--color-primary)',
+                        color: 'var(--color-primary-text)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'var(--color-primary-hover)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'var(--color-primary)';
+                      }}
+                    >
+                      {isLoading ? 'Opening…' : `Open in ${selectedEditor?.label ?? 'Editor'}`}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </Card>
 
-              <Card
-                className="p-4 cursor-pointer transition-colors"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-info)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                }}
-              >
-                <div className="space-y-2">
-                  <h4
-                    className="text-xs font-medium"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    File Explorer
-                  </h4>
-                  <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                    Browse files
-                  </p>
-                  <Button
-                    onClick={handleOpenFolder}
-                    disabled={isLoading}
-                    size="sm"
-                    variant="outline"
-                    className="w-full text-xs mt-2"
-                    style={{
-                      background: 'var(--color-surface-hover)',
-                      color: 'var(--color-text-primary)',
-                      borderColor: 'var(--color-border)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--color-background)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'var(--color-surface-hover)';
-                    }}
-                  >
-                    {isLoading ? 'Opening...' : 'Open'}
-                  </Button>
-                </div>
-              </Card>
-            </div>
+            <Card
+              className="p-4 cursor-pointer transition-colors"
+              style={{
+                background: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-info)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-border)';
+              }}
+            >
+              <div className="space-y-2">
+                <h4
+                  className="text-xs font-medium"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  File Explorer
+                </h4>
+                <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  Browse files
+                </p>
+                <Button
+                  onClick={handleOpenFolder}
+                  disabled={openingFolder || !canUseLocalActions}
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-xs mt-2"
+                  style={{
+                    background: 'var(--color-surface-hover)',
+                    color: 'var(--color-text-primary)',
+                    borderColor: 'var(--color-border)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--color-background)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--color-surface-hover)';
+                  }}
+                >
+                  {openingFolder ? 'Opening…' : 'Open'}
+                </Button>
+              </div>
+            </Card>
           </div>
 
           {/* Task Info */}
