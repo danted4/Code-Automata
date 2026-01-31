@@ -1,6 +1,9 @@
 # Code-Auto 🔁
 
-[![Code-Auto logo](./public/c_auto.png)](https://youtu.be/jNYMC-HXDNA 'Code-Auto')
+<a href="https://youtu.be/jNYMC-HXDNA" target="_blank" rel="noopener noreferrer">
+  <img src="./public/c_auto.png" alt="Code-Auto logo" />
+</a>
+
 
 A Next.js ( Electron Desktop ) application for orchestrating AI coding tasks through a structured 5-phase Kanban workflow, with isolated git worktrees per task.
 
