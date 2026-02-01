@@ -141,8 +141,8 @@ Pre-built packages are available in [GitHub Releases](https://github.com/danted4
 
 | Asset                           | Platform              | Description                 |
 | ------------------------------- | --------------------- | --------------------------- |
-| `Code-Auto-2.0.1-arm64.dmg`     | macOS (Apple Silicon) | Disk image for installation |
-| `Code-Auto-2.0.1-arm64-mac.zip` | macOS (Apple Silicon) | Zip archive                 |
+| `Code-Auto-2.2.0-arm64.dmg`     | macOS (Apple Silicon) | Disk image for installation |
+| `Code-Auto-2.2.0-arm64-mac.zip` | macOS (Apple Silicon) | Zip archive                 |
 
 ### Development
 
