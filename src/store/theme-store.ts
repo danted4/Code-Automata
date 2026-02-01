@@ -14,6 +14,12 @@ interface ThemeStore {
   setTheme: (theme: ThemeName) => void;
 }
 
+const validThemeNames: ThemeName[] = ['dark', 'light', 'retro', 'ocean', 'forest', 'sunset'];
+
+function safeThemeName(name: unknown): ThemeName {
+  return validThemeNames.includes(name as ThemeName) ? (name as ThemeName) : 'dark';
+}
+
 export const useThemeStore = create<ThemeStore>()(
   persist(
     (set) => ({
@@ -27,6 +33,15 @@ export const useThemeStore = create<ThemeStore>()(
     }),
     {
       name: 'code-auto-theme',
+      partialize: (state) => ({ currentTheme: state.currentTheme }),
+      merge: (persisted, current) => {
+        const name = safeThemeName((persisted as { currentTheme?: unknown })?.currentTheme);
+        return {
+          ...current,
+          currentTheme: name,
+          theme: getTheme(name),
+        };
+      },
     }
   )
 );

@@ -10,7 +10,7 @@
     "next:build": "next build",
     "icon:build": "node scripts/build-dock-icon.js",
     "start": "yarn icon:build && node scripts/dev.js",
-    "build": "rm -rf dist-electron && rm -rf dist-electron && yarn next:build && electron-builder",
+    "build": "rm -rf dist-electron && yarn next:build && cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/ && electron-builder",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
