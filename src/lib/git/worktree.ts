@@ -258,13 +258,13 @@ export class WorktreeManager {
           stdio: ['pipe', 'pipe', 'pipe'],
         }).trim();
 
-      return {
-        exists: true,
-        path: path.resolve(worktreePath),
-        branchName,
-        hasChanges,
-        isDirty: hasChanges,
-      };
+        return {
+          exists: true,
+          path: path.resolve(worktreePath),
+          branchName,
+          hasChanges,
+          isDirty: hasChanges,
+        };
       } catch {
         // Path exists but not a valid git repo
         return {
@@ -286,28 +286,40 @@ export class WorktreeManager {
    * - Optionally force delete if it has uncommitted changes
    * - Will not delete if MR/PR exists (manual cleanup required)
    * - When alsoDeleteBranch is true, runs `git branch -D code-auto/{taskId}` in the main repo after removal
+   * - When alsoDeleteFromRemote is true, runs `git push origin --delete code-auto/{taskId}` after local branch removal
    *
    * @param taskId - Task ID whose worktree to delete
    * @param force - Force delete even with uncommitted changes
-   * @param alsoDeleteBranch - If true, delete the branch code-auto/{taskId} in the main repo after removing the worktree
+   * @param alsoDeleteBranch - If true, delete the local branch code-auto/{taskId} after removing the worktree
+   * @param alsoDeleteFromRemote - If true, delete the branch from origin (remote) as well
+   * @param worktreePathOverride - When provided, use this path instead of getWorktreePath(taskId). Use the actual path from git worktree list to avoid projectDir mismatch.
    */
   async deleteWorktree(
     taskId: string,
     force: boolean = false,
-    alsoDeleteBranch?: boolean
+    alsoDeleteBranch?: boolean,
+    alsoDeleteFromRemote?: boolean,
+    worktreePathOverride?: string
   ): Promise<void> {
     try {
       const mainRepo = await this.getMainRepoPath();
-      const worktreePath = await this.getWorktreePath(taskId);
+      const worktreePath = worktreePathOverride ?? (await this.getWorktreePath(taskId));
 
-      const status = await this.getWorktreeStatus(taskId);
-      if (!status.exists) {
+      // When using override (actual path from git), skip getWorktreeStatus - it may use wrong path
+      const status = worktreePathOverride
+        ? { exists: fs.existsSync(worktreePath), isDirty: false }
+        : await this.getWorktreeStatus(taskId);
+
+      // For prunable worktrees (override + dir gone): git still has the reference.
+      // Don't return early - try git worktree remove anyway; it cleans up stale refs.
+      if (!status.exists && !worktreePathOverride) {
+        // No override and path doesn't exist - nothing to do
         console.log(`Worktree does not exist: ${worktreePath}`);
         return;
       }
 
-      // Check for uncommitted changes
-      if (status.isDirty && !force) {
+      // Check for uncommitted changes (only when we have full status and dir exists)
+      if (!worktreePathOverride && status.exists && status.isDirty && !force) {
         throw new Error(
           `Worktree has uncommitted changes. Use force=true to delete anyway, or commit changes first.`
         );
@@ -315,29 +327,63 @@ export class WorktreeManager {
 
       // Delete worktree
       const forceFlag = force ? '--force' : '';
-      execSync(`git worktree remove "${worktreePath}" ${forceFlag}`.trim(), {
-        cwd: mainRepo,
-        stdio: 'pipe',
-      });
+      try {
+        execSync(`git worktree remove "${worktreePath}" ${forceFlag}`.trim(), {
+          cwd: mainRepo,
+          stdio: 'pipe',
+        });
+      } catch (removeError) {
+        // Fallback for prunable/broken worktrees (e.g. "gitdir file points to non-existent")
+        // Remove directory manually and prune stale references
+        try {
+          if (fs.existsSync(worktreePath)) {
+            fs.rmSync(worktreePath, { recursive: true, force: true });
+          }
+          execSync('git worktree prune', { cwd: mainRepo, stdio: 'pipe' });
+          console.log(`✓ Worktree removed (fallback prune): ${worktreePath}`);
+        } catch (fallbackError) {
+          const origMsg = removeError instanceof Error ? removeError.message : String(removeError);
+          const fallbackMsg =
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          throw new Error(
+            `Failed to delete worktree for task ${taskId}: ${origMsg}. Fallback also failed: ${fallbackMsg}`
+          );
+        }
+      }
 
-      // Clean up directory if still exists
+      // Clean up directory if still exists (e.g. remove didn't delete it)
       if (fs.existsSync(worktreePath)) {
         fs.rmSync(worktreePath, { recursive: true, force: true });
       }
 
       console.log(`✓ Worktree deleted: ${worktreePath}`);
 
+      const branchName = `code-auto/${taskId}`;
       if (alsoDeleteBranch) {
-        const branchName = `code-auto/${taskId}`;
         try {
           execSync(`git branch -D "${branchName}"`, {
             cwd: mainRepo,
             stdio: 'pipe',
           });
-          console.log(`✓ Branch deleted: ${branchName}`);
+          console.log(`✓ Branch deleted (local): ${branchName}`);
         } catch (branchError) {
           // Branch may already be deleted or not exist; log but don't fail
-          console.warn(`Could not delete branch ${branchName}:`, branchError);
+          console.warn(`Could not delete local branch ${branchName}:`, branchError);
+        }
+      }
+      if (alsoDeleteFromRemote) {
+        try {
+          execSync(`git push origin --delete "${branchName}"`, {
+            cwd: mainRepo,
+            stdio: 'pipe',
+          });
+          console.log(`✓ Branch deleted (remote): ${branchName}`);
+        } catch (remoteError) {
+          const msg = remoteError instanceof Error ? remoteError.message : String(remoteError);
+          // "remote ref does not exist" is expected when branch was never pushed - silently ignore
+          if (!msg.includes('remote ref does not exist') && !msg.includes('unable to delete')) {
+            console.warn(`Could not delete remote branch ${branchName}:`, remoteError);
+          }
         }
       }
     } catch (error) {
@@ -365,11 +411,18 @@ export class WorktreeManager {
       for (const line of output.split('\n')) {
         if (!line.trim()) continue;
 
-        const parts = line.split(' ');
-        const rawPath = parts[0];
+        // Porcelain format: "worktree /path/to/worktree" (key space value)
+        const spaceIdx = line.indexOf(' ');
+        if (spaceIdx === -1) continue;
+        const key = line.slice(0, spaceIdx);
+        const value = line.slice(spaceIdx + 1).trim();
+        if (key !== 'worktree') continue;
+
+        const rawPath = value;
 
         // Extract task ID from path (expects .code-auto/worktrees/{task-id})
-        if (rawPath.includes('.code-auto/worktrees/')) {
+        const pathNorm = rawPath.replace(/\\/g, '/');
+        if (pathNorm.includes('.code-auto/worktrees/')) {
           const taskId = path.basename(path.normalize(rawPath));
           const branchName = `code-auto/${taskId}`;
           const absolutePath = path.isAbsolute(rawPath)
@@ -399,10 +452,7 @@ export class WorktreeManager {
    * Use this when you need status and size per worktree; listWorktrees() remains for callers that need WorktreeInfo (e.g. mainRepo, mainBranch).
    */
   async listWorktreesEnriched(): Promise<WorktreeListItem[]> {
-    const [worktrees, usage] = await Promise.all([
-      this.listWorktrees(),
-      this.getDiskUsage(),
-    ]);
+    const [worktrees, usage] = await Promise.all([this.listWorktrees(), this.getDiskUsage()]);
     return worktrees.map((wt) => ({
       taskId: wt.taskId,
       path: wt.path,

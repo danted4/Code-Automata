@@ -28,9 +28,10 @@ import { ThemeSwitcher } from '@/components/theme/theme-switcher';
 import { useProjectStore } from '@/store/project-store';
 import { apiFetch } from '@/lib/api-client';
 
-/** Fetches worktree count for the current project. Only runs when projectPath is set. */
+/** Fetches worktree count for the current project. Refetches when projectPath or worktreeRefreshKey changes. */
 function useWorktreeCount(): number {
   const projectPath = useProjectStore((s) => s.projectPath);
+  const worktreeRefreshKey = useProjectStore((s) => s.worktreeRefreshKey);
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -57,7 +58,7 @@ function useWorktreeCount(): number {
     return () => {
       cancelled = true;
     };
-  }, [projectPath]);
+  }, [projectPath, worktreeRefreshKey]);
 
   return count;
 }
@@ -183,8 +184,7 @@ export function Sidebar() {
               {toolLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
-                const showWorktreeBadge =
-                  link.href === '/worktrees' && worktreeCount > 0;
+                const showWorktreeBadge = link.href === '/worktrees' && worktreeCount > 0;
 
                 return (
                   <Link

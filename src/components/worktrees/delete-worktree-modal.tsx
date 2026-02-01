@@ -42,17 +42,18 @@ export function DeleteWorktreeModal({
 }: DeleteWorktreeModalProps) {
   const [forceDelete, setForceDelete] = useState(false);
   const [alsoDeleteBranch, setAlsoDeleteBranch] = useState(false);
+  const [alsoDeleteFromRemote, setAlsoDeleteFromRemote] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isDirty = worktree?.isDirty ?? false;
-  const isOrphan = worktree?.isOrphan ?? false;
 
   const canConfirm = !isDirty || forceDelete;
 
   const resetState = useCallback(() => {
     setForceDelete(false);
     setAlsoDeleteBranch(false);
+    setAlsoDeleteFromRemote(false);
     setError(null);
   }, []);
 
@@ -76,7 +77,8 @@ export function DeleteWorktreeModal({
           action: 'delete',
           taskId: worktree.taskId,
           force: forceDelete,
-          alsoDeleteBranch: isOrphan ? alsoDeleteBranch : undefined,
+          alsoDeleteBranch,
+          alsoDeleteFromRemote: alsoDeleteBranch ? alsoDeleteFromRemote : false,
         }),
       });
       if (!res.ok) {
@@ -95,8 +97,8 @@ export function DeleteWorktreeModal({
     worktree,
     canConfirm,
     forceDelete,
-    isOrphan,
     alsoDeleteBranch,
+    alsoDeleteFromRemote,
     onOpenChange,
     onDeleted,
     resetState,
@@ -113,8 +115,8 @@ export function DeleteWorktreeModal({
             Delete Worktree
           </DialogTitle>
           <DialogDescription>
-            This will remove the worktree from the repository. Uncommitted changes may be lost if
-            you force delete.
+            This will remove the worktree and the corresponding task from the Kanban. Uncommitted
+            changes may be lost if you force delete.
           </DialogDescription>
         </DialogHeader>
 
@@ -171,7 +173,10 @@ export function DeleteWorktreeModal({
                   style={{ color: 'var(--color-destructive)' }}
                 />
                 <div className="space-y-1">
-                  <div className="text-sm font-medium" style={{ color: 'var(--color-destructive)' }}>
+                  <div
+                    className="text-sm font-medium"
+                    style={{ color: 'var(--color-destructive)' }}
+                  >
                     Uncommitted changes
                   </div>
                   <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
@@ -196,22 +201,41 @@ export function DeleteWorktreeModal({
             </div>
           )}
 
-          {isOrphan && (
+          <div className="space-y-2">
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="also-delete-branch"
                 checked={alsoDeleteBranch}
-                onCheckedChange={(checked) => setAlsoDeleteBranch(checked === true)}
+                onCheckedChange={(checked) => {
+                  setAlsoDeleteBranch(checked === true);
+                  if (checked !== true) setAlsoDeleteFromRemote(false);
+                }}
               />
               <Label
                 htmlFor="also-delete-branch"
                 className="text-sm cursor-pointer"
                 style={{ color: 'var(--color-text-primary)' }}
               >
-                Also delete branch
+                Also delete branch (local)
               </Label>
             </div>
-          )}
+            {alsoDeleteBranch && (
+              <div className="flex items-center space-x-2 pl-6">
+                <Checkbox
+                  id="also-delete-from-remote"
+                  checked={alsoDeleteFromRemote}
+                  onCheckedChange={(checked) => setAlsoDeleteFromRemote(checked === true)}
+                />
+                <Label
+                  htmlFor="also-delete-from-remote"
+                  className="text-sm cursor-pointer"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Also delete from remote (origin)
+                </Label>
+              </div>
+            )}
+          </div>
 
           {error && (
             <div

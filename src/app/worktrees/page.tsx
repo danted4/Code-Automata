@@ -5,14 +5,16 @@
  *
  * Lists git worktrees for the current project: disk usage summary,
  * "Cleanup all" action, and WorktreeCard list. Delete opens DeleteWorktreeModal;
- * cleanup-all opens CleanupAllModal. Uses apiFetch with X-Project-Path.
+ * Cleanup opens CleanupModal with toggles. Uses apiFetch with X-Project-Path.
+ * Gates on projectPath so we always query the correct project (not process.cwd()).
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { useProjectStore } from '@/store/project-store';
 import { apiFetch } from '@/lib/api-client';
 import { WorktreeCard, type WorktreeItem } from '@/components/worktrees/worktree-card';
 import { DeleteWorktreeModal } from '@/components/worktrees/delete-worktree-modal';
-import { CleanupAllModal } from '@/components/worktrees/cleanup-all-modal';
+import { CleanupModal } from '@/components/worktrees/cleanup-modal';
 import { Button } from '@/components/ui/button';
 import { Loader2, AlertCircle, HardDrive, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -32,6 +34,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function WorktreesPage() {
+  const projectPath = useProjectStore((s) => s.projectPath);
   const [data, setData] = useState<WorktreesListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +44,12 @@ export default function WorktreesPage() {
   const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
 
   const fetchWorktrees = useCallback(async () => {
+    if (!projectPath) {
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -67,7 +76,7 @@ export default function WorktreesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectPath]);
 
   useEffect(() => {
     fetchWorktrees();
@@ -78,21 +87,59 @@ export default function WorktreesPage() {
     fetchWorktrees();
   }, [fetchWorktrees]);
 
-  const handleDeleteClick = useCallback((taskId: string) => {
-    const worktree = data?.worktrees.find((w) => w.taskId === taskId) ?? null;
-    setWorktreeToDelete(worktree);
-    setDeleteModalOpen(true);
-  }, [data?.worktrees]);
+  const handleDeleteClick = useCallback(
+    (taskId: string) => {
+      const worktree = data?.worktrees.find((w) => w.taskId === taskId) ?? null;
+      setWorktreeToDelete(worktree);
+      setDeleteModalOpen(true);
+    },
+    [data?.worktrees]
+  );
 
   const handleDeleted = useCallback(() => {
     toast.success('Worktree deleted');
+    useProjectStore.getState().incrementWorktreeRefresh();
     fetchWorktrees();
   }, [fetchWorktrees]);
 
-  const handleCleanedUp = useCallback(() => {
-    toast.success('All worktrees removed');
-    fetchWorktrees();
-  }, [fetchWorktrees]);
+  const handleCleanedUp = useCallback(
+    (removedCount: number) => {
+      toast.success(
+        removedCount > 0
+          ? `Removed ${removedCount} worktree${removedCount === 1 ? '' : 's'}`
+          : 'No worktrees to remove'
+      );
+      useProjectStore.getState().incrementWorktreeRefresh();
+      fetchWorktrees();
+    },
+    [fetchWorktrees]
+  );
+
+  if (!projectPath) {
+    return (
+      <div
+        data-testid="worktrees-no-project"
+        className="min-h-screen flex flex-col items-center justify-center gap-6 p-6"
+        style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
+      >
+        <div
+          className="rounded-lg border p-8 max-w-md w-full text-center space-y-4"
+          style={{
+            background: 'var(--color-surface)',
+            borderColor: 'var(--color-border)',
+          }}
+        >
+          <HardDrive className="w-12 h-12 mx-auto" style={{ color: 'var(--color-text-muted)' }} />
+          <h2 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+            Select a project
+          </h2>
+          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+            Open a project from the sidebar to view its git worktrees.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -162,10 +209,7 @@ export default function WorktreesPage() {
             borderColor: 'var(--color-border)',
           }}
         >
-          <HardDrive
-            className="w-12 h-12 mx-auto"
-            style={{ color: 'var(--color-text-muted)' }}
-          />
+          <HardDrive className="w-12 h-12 mx-auto" style={{ color: 'var(--color-text-muted)' }} />
           <h2 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
             No worktrees
           </h2>
@@ -208,13 +252,14 @@ export default function WorktreesPage() {
               size="sm"
               className="gap-2"
               style={{
+                backgroundColor: 'var(--color-surface)',
                 borderColor: 'var(--color-destructive)',
                 color: 'var(--color-destructive)',
               }}
               onClick={() => setCleanupModalOpen(true)}
             >
               <Trash2 className="w-4 h-4" />
-              Cleanup all
+              Cleanup
             </Button>
           </div>
         </header>
@@ -238,10 +283,10 @@ export default function WorktreesPage() {
         onDeleted={handleDeleted}
       />
 
-      <CleanupAllModal
+      <CleanupModal
         open={cleanupModalOpen}
         onOpenChange={setCleanupModalOpen}
-        count={count}
+        worktrees={worktrees}
         onCleanedUp={handleCleanedUp}
       />
     </div>

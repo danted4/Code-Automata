@@ -96,9 +96,10 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
       toast.error('No editor available');
       return;
     }
-    const editorId = (selectedEditorId && editors.some((ed) => ed.id === selectedEditorId))
-      ? selectedEditorId
-      : editors[0]!.id;
+    const editorId =
+      selectedEditorId && editors.some((ed) => ed.id === selectedEditorId)
+        ? selectedEditorId
+        : editors[0]!.id;
     try {
       const exists = await window.electron.pathExists(worktree.path);
       if (!exists) {
@@ -173,7 +174,6 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
     onDelete(worktree.taskId);
   };
 
-
   const statusLabel = worktree.isDirty ? 'Dirty' : 'Clean';
 
   return (
@@ -187,10 +187,7 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
     >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
-          <CardTitle
-            className="text-sm font-medium"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
+          <CardTitle className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
             Task {worktree.taskId}
           </CardTitle>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -225,7 +222,10 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 mt-1">
-          <GitBranch className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--color-text-muted)' }} />
+          <GitBranch
+            className="w-3.5 h-3.5 shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+          />
           <span
             className="text-xs font-mono truncate"
             style={{ color: 'var(--color-text-secondary)' }}
@@ -281,6 +281,7 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
           size="sm"
           className="gap-1.5 text-xs"
           style={{
+            backgroundColor: 'var(--color-surface)',
             borderColor: 'var(--color-border)',
             color: 'var(--color-text-primary)',
           }}
@@ -299,6 +300,7 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
           size="sm"
           className="gap-1.5 text-xs"
           style={{
+            backgroundColor: 'var(--color-surface)',
             borderColor: 'var(--color-border)',
             color: 'var(--color-text-primary)',
           }}
@@ -316,7 +318,10 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
           variant="ghost"
           size="sm"
           className="gap-1.5 text-xs"
-          style={{ color: 'var(--color-text-secondary)' }}
+          style={{
+            backgroundColor: 'transparent',
+            color: 'var(--color-text-secondary)',
+          }}
           onClick={handleCopyPath}
         >
           <Copy className="w-3.5 h-3.5" />
@@ -328,6 +333,7 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
             size="sm"
             className="gap-1.5 text-xs"
             style={{
+              backgroundColor: 'var(--color-surface)',
               borderColor: 'var(--color-destructive)',
               color: 'var(--color-destructive)',
             }}

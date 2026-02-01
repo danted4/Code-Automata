@@ -90,7 +90,7 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
   useEffect(() => {
     async function fetchAdapters() {
       try {
-        const response = await fetch('/api/cli/adapters');
+        const response = await apiFetch('/api/cli/adapters');
         const adapters = await response.json();
         setAvailableAdapters(adapters);
 
@@ -134,14 +134,14 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
     const timer = setTimeout(async () => {
       if (cancelled) return;
       try {
-        const res = await fetch('/api/amp/preflight');
+        const res = await apiFetch('/api/amp/preflight');
         const data = await res.json();
         if (cancelled) return;
         if (res.ok) {
           if (!data.canRunAmp && data.ampCliPath === null) {
             await new Promise((r) => setTimeout(r, 500));
             if (cancelled) return;
-            const retry = await fetch('/api/amp/preflight');
+            const retry = await apiFetch('/api/amp/preflight');
             const retryData = await retry.json();
             if (retry.ok) setAmpPreflight(retryData);
             else setAmpPreflight(data);
@@ -189,14 +189,14 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
     const timer = setTimeout(async () => {
       if (cancelled) return;
       try {
-        const res = await fetch('/api/cursor/preflight');
+        const res = await apiFetch('/api/cursor/preflight');
         const data = await res.json();
         if (cancelled) return;
         if (res.ok) {
           if (!data.canRunCursor && data.agentCliPath === null) {
             await new Promise((r) => setTimeout(r, 500));
             if (cancelled) return;
-            const retry = await fetch('/api/cursor/preflight');
+            const retry = await apiFetch('/api/cursor/preflight');
             const retryData = await retry.json();
             if (retry.ok) setCursorPreflight(retryData);
             else setCursorPreflight(data);
