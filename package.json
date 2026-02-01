@@ -10,7 +10,7 @@
     "next:build": "next build",
     "icon:build": "node scripts/build-dock-icon.js",
     "start": "yarn icon:build && node scripts/dev.js",
-    "build": "rm -rf dist-electron && yarn next:build && electron-builder",
+    "build": "rm -rf dist-electron && rm -rf dist-electron && yarn next:build && electron-builder",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
@@ -84,14 +84,19 @@
     "productName": "Code-Auto",
     "icon": "public/code-auto-dark.png",
     "asar": true,
+    "asarUnpack": [
+      ".next/standalone/**/*"
+    ],
+    "afterPack": "./scripts/after-pack.js",
     "directories": {
       "output": "dist-electron"
     },
     "files": [
       "electron/**/*",
-      ".next/**/*",
-      "public/**/*",
-      "node_modules/**/*"
+      ".next/standalone/**/*",
+      "!**/*.map",
+      "!.next/standalone/**/0*.png",
+      "!.next/standalone/**/1*.png"
     ],
     "extraResources": []
   }

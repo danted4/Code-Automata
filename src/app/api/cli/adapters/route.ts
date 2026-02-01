@@ -12,8 +12,8 @@ export async function GET() {
   try {
     let adapters = CLIFactory.getAvailableAdapters();
 
-    // Hide Mock CLI in packaged/production app (Electron in-process)
-    if (process.versions?.electron) {
+    // Hide Mock CLI in packaged app (standalone runs in Node subprocess, not Electron)
+    if (process.versions?.electron || process.env.CODE_AUTO_PACKAGED === '1') {
       adapters = adapters.filter((a) => a.name !== 'mock');
     }
 

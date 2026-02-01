@@ -27,6 +27,7 @@ const PORT_RANGE = 10; // try 3000..3009 if default is busy
 
 let mainWindow = null;
 let nextServer = null;
+let nextServerProcess = null;
 let serverPort = DEFAULT_PORT;
 let appUrl = null; // Reuse same URL when reopening window (keeps localStorage)
 
@@ -207,11 +208,51 @@ function waitForServer(url, timeoutMs = 30000) {
 }
 
 /**
- * Start Next.js server in-process (no subprocess, no extra Dock icon).
- * Uses first available port in range [DEFAULT_PORT, DEFAULT_PORT + PORT_RANGE) if 3000 is busy.
+ * Resolve node binary - when launched from Finder, PATH is minimal.
+ */
+function resolveNodeBinary() {
+  const home = os.homedir();
+  const candidates = [
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    path.join(home, '.volta', 'bin', 'node'),
+    path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
+  ];
+  try {
+    const nvmDir = path.join(home, '.nvm', 'versions', 'node');
+    if (fs.existsSync(nvmDir)) {
+      const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
+      versions.sort((a, b) => b.localeCompare(a));
+      for (const v of versions) {
+        candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+      }
+    }
+  } catch {}
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  try {
+    const out = execSync('which node', { encoding: 'utf8', env: process.env }).trim();
+    if (out && fs.existsSync(out)) return out;
+  } catch {}
+  return 'node';
+}
+
+/**
+ * Start Next.js standalone server as subprocess.
+ * Uses first available port in range [DEFAULT_PORT, DEFAULT_PORT + PORT_RANGE).
  */
 async function startNextServerInBackground() {
   const appPath = app.getAppPath();
+  const resourcesDir = appPath.endsWith('app.asar') ? path.dirname(appPath) : appPath;
+  const standaloneDir = path.join(resourcesDir, 'app.asar.unpacked', '.next', 'standalone');
+  const serverPath = path.join(standaloneDir, 'server.js');
+
+  if (!fs.existsSync(serverPath)) {
+    showLoadingError('Standalone server not found. Rebuild the app.');
+    return;
+  }
+
   const port = await findAvailablePort(DEFAULT_PORT, PORT_RANGE);
   if (port === null) {
     showLoadingError(
@@ -223,21 +264,27 @@ async function startNextServerInBackground() {
   const url = `http://localhost:${port}`;
   appUrl = url;
   process.env.NEXT_PUBLIC_APP_URL = url;
+
+  const nodeBin = resolveNodeBinary();
   try {
-    const next = require('next');
-    const nextApp = next({ dev: false, dir: appPath });
-    const handle = nextApp.getRequestHandler();
-    await nextApp.prepare();
-    nextServer = http.createServer((req, res) => handle(req, res));
-    nextServer.listen(port, '127.0.0.1', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(url);
-      }
+    nextServerProcess = spawn(nodeBin, ['server.js'], {
+      cwd: standaloneDir,
+      env: { ...process.env, PORT: String(port), HOSTNAME: '127.0.0.1', CODE_AUTO_PACKAGED: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    nextServer.on('error', (err) => {
-      console.error('Next.js server error:', err);
+    nextServerProcess.on('error', (err) => {
+      console.error('Next.js server spawn error:', err);
       showLoadingError('Failed to start server.');
     });
+    nextServerProcess.stdout?.on('data', (d) => process.stdout.write(d));
+    nextServerProcess.stderr?.on('data', (d) => process.stderr.write(d));
+
+    const ready = await waitForServer(url, 30000);
+    if (ready && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(url);
+    } else if (!ready) {
+      showLoadingError('Server failed to start in time.');
+    }
   } catch (err) {
     console.error('Next.js init error:', err);
     showLoadingError(err?.message || 'Failed to start server.');
@@ -534,6 +581,10 @@ app.on('before-quit', () => {
   if (nextServer) {
     nextServer.close();
     nextServer = null;
+  }
+  if (nextServerProcess) {
+    nextServerProcess.kill();
+    nextServerProcess = null;
   }
 });
 
