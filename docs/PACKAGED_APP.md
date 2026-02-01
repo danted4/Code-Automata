@@ -2,6 +2,18 @@
 
 This document describes differences between running Code-Auto via `yarn start` (development) vs. the packaged DMG/app (production), and how we handle them.
 
+## Architecture: Next.js Standalone + Electron
+
+The packaged app uses **Next.js standalone output**:
+
+1. **Build**: `next build` produces `.next/standalone/` with a minimal traced server and `node_modules`
+2. **Copy**: `public` and `.next/static` are copied into the standalone folder (required for static assets)
+3. **Package**: electron-builder packs `.next/standalone/**/*` into the app
+4. **Runtime**: Electron spawns `node server.js` as a subprocess from `app.asar.unpacked/.next/standalone/`
+5. **afterPack**: electron-builder excludes nested `node_modules`; `scripts/after-pack.js` copies it into the packaged app
+
+**Node.js requirement**: The packaged app requires Node.js to be installed (Homebrew, nvm, Volta, or fnm). The main process resolves the Node binary from common paths before spawning the server.
+
 ## Why Packaged Apps Behave Differently
 
 When launched from the DMG (or as a GUI app), macOS gives the app a **minimal environment**:
@@ -22,11 +34,24 @@ Runs at startup when `app.isPackaged` is true:
 
 This ensures `which agent`, `which amp`, `which gh`, etc. work, and API keys are available.
 
-### 2. Base URL (`NEXT_PUBLIC_APP_URL`)
+### 2. Node Binary Resolution (`resolveNodeBinary`)
+
+When spawning the Next.js server, the main process resolves the Node binary from:
+
+- `/opt/homebrew/bin/node`, `/usr/local/bin/node`
+- `~/.nvm/versions/node/*/bin/node` (newest first)
+- `~/.volta/bin/node`, `~/.fnm/.../bin/node`
+- Fallback: `which node`
+
+### 3. Base URL (`NEXT_PUBLIC_APP_URL`)
 
 The server may run on port 3001, 3002, etc. if 3000 is busy. API routes that call back to the app (e.g. `start-planning` → `start-development`) use `NEXT_PUBLIC_APP_URL`. We set `process.env.NEXT_PUBLIC_APP_URL = url` before starting the Next.js server so callbacks hit the correct port.
 
-### 3. Project Path
+### 4. Packaged Detection (`CODE_AUTO_PACKAGED`)
+
+The spawn env includes `CODE_AUTO_PACKAGED=1`. API routes (e.g. `/api/cli/adapters`) use this to hide the Mock CLI in the packaged app, since the Next.js server runs in a Node subprocess (not Electron) and `process.versions.electron` is undefined.
+
+### 5. Project Path
 
 Project path comes from the user via the Open Project modal and is sent as `X-Project-Path`. API routes use this; they do **not** rely on `process.cwd()` for the project root. The `process.cwd()` fallback in `getProjectDir` is only used when no path is provided — in that case, behavior may differ in packaged vs. dev.
 
@@ -61,12 +86,26 @@ When adding features that might run in the packaged app, consider:
 - `NEXT_PUBLIC_APP_URL` — Internal API callbacks
 - `HOME` / `USERPROFILE` — Path validation in `getProjectDir`
 
+## Build Process
+
+```
+yarn build
+  → rm -rf dist-electron
+  → yarn next:build          # Produces .next/standalone, .next/static
+  → cp -r public .next/standalone/
+  → cp -r .next/static .next/standalone/.next/
+  → electron-builder         # Packs .next/standalone, runs afterPack
+```
+
+**afterPack** (`scripts/after-pack.js`): Copies `.next/standalone/node_modules` into the packaged app because electron-builder excludes nested node_modules.
+
 ## Testing Packaged Build
 
-1. Build: `yarn build`
-2. Run the DMG from `dist-electron/`
-3. Open a project and verify:
-   - Cursor/Amp readiness shows correctly
+1. Ensure Node.js is installed (Homebrew, nvm, Volta, or fnm)
+2. Build: `yarn build`
+3. Run the DMG from `dist-electron/`
+4. Open a project and verify:
+   - Cursor/Amp readiness shows correctly (Mock is hidden in packaged app)
    - Creating a task and starting development works
    - Review Locally (open in Cursor/VS Code, open folder) works
    - Create MR works (if `gh` is installed)

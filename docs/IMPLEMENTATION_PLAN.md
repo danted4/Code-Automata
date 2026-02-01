@@ -18,7 +18,7 @@ Code-Auto is a Next.js app that turns a "task" into a Code-Auto style workflow:
 
 ### Working
 
-- **Electron desktop app**: Native macOS/Windows/Linux app with custom dock icon, app name ("Code-Auto"), and theme-aware icons (light/dark). Runs via `yarn start` (`electron/main.js`, `scripts/build-dock-icon.js`).
+- **Electron desktop app**: Native macOS/Windows/Linux app with custom dock icon, app name ("Code-Auto"), and theme-aware icons (light/dark). Runs via `yarn start` (`electron/main.js`, `scripts/build-dock-icon.js`). Packaged app uses Next.js standalone output; spawns server as subprocess; requires Node.js (Homebrew/nvm/Volta/fnm). Build: `yarn build` produces DMG + ZIP; `scripts/after-pack.js` copies node_modules into packaged app.
 - **Open Project / folder selection**: Select project directory on startup; path persisted in localStorage. All API routes accept `X-Project-Path` header; tasks, worktrees, and agent logs are scoped to the selected project (`src/store/project-store.ts`, `src/lib/project-dir.ts`, `src/components/project/open-project-modal.tsx`, `src/components/project/open-project-gate.tsx`).
 - **Kanban UI + workflow plumbing**: task cards, phase transitions, modals (`src/components/**`)
 - **Task persistence**: file-based JSON in `.code-auto/tasks/` (`src/lib/tasks/persistence.ts`)

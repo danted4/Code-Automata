@@ -118,6 +118,8 @@ import { execute as ampExecute } from '@sourcegraph/amp-sdk';
 
 ### Mock Adapter ([src/lib/cli/mock.ts](../src/lib/cli/mock.ts))
 
+> **Packaged app:** Mock is hidden in the DMG/ZIP build. The `/api/cli/adapters` route filters it when `CODE_AUTO_PACKAGED=1` or `process.versions.electron` is set. Only Amp and Cursor are available in the packaged app.
+
 Testing adapter that simulates CLI responses without API calls:
 
 **Features:**

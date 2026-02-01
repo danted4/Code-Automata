@@ -1,6 +1,6 @@
 # Code-Auto Architecture
 
-A Next.js web application that wraps the amp CLI to provide autonomous AI agent capabilities with a Kanban-style interface for task management.
+A Next.js + Electron desktop application that orchestrates AI coding tasks through a Kanban-style interface. The packaged app uses Next.js standalone output and spawns the server as a subprocess. See [PACKAGED_APP.md](./PACKAGED_APP.md) for packaging details.
 
 ## Project Purpose
 
@@ -62,8 +62,9 @@ flowchart TB
 
 Abstraction layer for AI agent execution. Supports multiple backends:
 
-- **MockAdapter** - Simulated responses for testing ([src/lib/cli/mock.ts](../src/lib/cli/mock.ts))
-- **AmpAdapter** - Real amp SDK integration ([src/lib/cli/amp.ts](../src/lib/cli/amp.ts))
+- **MockAdapter** - Simulated responses for testing ([src/lib/cli/mock.ts](../src/lib/cli/mock.ts)) — hidden in packaged app
+- **AmpAdapter** - Sourcegraph Amp SDK integration ([src/lib/cli/amp.ts](../src/lib/cli/amp.ts))
+- **CursorAdapter** - Cursor Agent CLI integration ([src/lib/cli/cursor.ts](../src/lib/cli/cursor.ts))
 
 See [CLI_ADAPTERS.md](./CLI_ADAPTERS.md) for detailed documentation.
 

@@ -103,16 +103,18 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed documentation.
 
 ### Prerequisites
 
-- **Node.js 18+** — [Download](https://nodejs.org/)
+- **Node.js 18+** — [Download](https://nodejs.org/) (required for development and for the packaged app)
 - **Git 2.20+** — Required for worktree functionality
-- **yarn** **npm** or **pnpm** — Package manager
+- **yarn**, **npm**, or **pnpm** — Package manager
 
 Verify your environment:
 
 ```bash
 node --version  # Should be v18.0.0 or higher
-git --version   # Should be 2.20.0 or higher
+git --version  # Should be 2.20.0 or higher
 ```
+
+> **Note for packaged app users:** The DMG/ZIP app requires Node.js to be installed (Homebrew, nvm, Volta, or fnm). The app spawns the Next.js server as a subprocess.
 
 ### Installation
 
@@ -134,6 +136,19 @@ git --version   # Should be 2.20.0 or higher
    ```bash
    yarn build
    ```
+
+   The build produces Next.js standalone output, copies `public` and `.next/static` into the standalone folder, then runs electron-builder to create DMG and ZIP packages.
+
+### Building for Distribution
+
+The `yarn build` script:
+
+1. Runs `next build` with `output: 'standalone'` (minimal traced dependencies)
+2. Copies `public` and `.next/static` into `.next/standalone/` (required for static assets)
+3. Runs electron-builder to create DMG and ZIP in `dist-electron/`
+4. Uses an `afterPack` hook to copy `node_modules` into the app (electron-builder excludes nested node_modules)
+
+The packaged app spawns the Next.js standalone server as a subprocess; Node.js must be installed (Homebrew, nvm, Volta, or fnm).
 
 ### Release Assets
 
@@ -164,20 +179,21 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ### Available Scripts
 
-| Command                | Description                                            |
-| ---------------------- | ------------------------------------------------------ |
-| `yarn start`           | Start Electron desktop app (Next.js dev + Electron)    |
-| `yarn build`           | Build packaged Electron app for distribution           |
-| `yarn next:dev`        | Next.js dev server only (web-only mode)                |
-| `yarn next:build`      | Next.js production build only                          |
-| `yarn lint`            | Run ESLint                                             |
-| `yarn lint:fix`        | Run ESLint with auto-fix                               |
-| `yarn format`          | Format code with Prettier                              |
-| `yarn format:check`    | Check code formatting                                  |
-| `yarn lint-staged`     | Run lint + format on staged files (used by pre-commit) |
-| `yarn test:e2e`        | Run Playwright end-to-end tests                        |
-| `yarn test:e2e:ui`     | Run tests with Playwright UI                           |
-| `yarn test:e2e:headed` | Run tests in headed browser mode                       |
+| Command                | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| `yarn start`           | Start Electron desktop app (Next.js dev + Electron) |
+| `yarn build`           | Build packaged Electron app (DMG + ZIP)             |
+| `yarn next:dev`        | Next.js dev server only (web-only mode)             |
+| `yarn next:build`      | Next.js production build only                       |
+| `yarn lint`            | Run ESLint                                          |
+| `yarn lint:fix`        | Run ESLint with auto-fix                            |
+| `yarn format`          | Format code with Prettier                           |
+| `yarn format:check`    | Check code formatting                               |
+| `yarn typecheck`       | Run TypeScript type check                           |
+| `yarn test`            | Run Vitest unit tests                               |
+| `yarn test:e2e`        | Run Playwright end-to-end tests                     |
+| `yarn test:e2e:ui`     | Run tests with Playwright UI                        |
+| `yarn test:e2e:headed` | Run tests in headed browser mode                    |
 
 ### Git Hooks (Husky)
 
@@ -222,7 +238,7 @@ yarn start
 
 #### Option 3: Mock Adapter (Testing)
 
-Without Amp or Cursor configured, the system uses the `MockCLIAdapter` for simulated responses (no API costs).
+Without Amp or Cursor configured, the system uses the `MockCLIAdapter` for simulated responses (no API costs). **Note:** Mock is hidden in the packaged app (DMG/ZIP); only Amp and Cursor are available.
 
 ## API Overview
 
@@ -265,16 +281,24 @@ See [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) for a step-by-step breakd
 ## Project Structure
 
 ```
-src/
-├── app/
-│   ├── api/              # API routes
-│   └── page.tsx          # Main UI
-├── components/           # React components
-└── lib/
-    ├── agents/           # Agent manager
-    ├── cli/              # CLI adapters (Mock, Amp)
-    ├── git/              # Worktree management
-    └── tasks/            # Task persistence
+├── electron/             # Electron main process
+│   ├── main.js           # App window, Next.js server spawn, IPC
+│   └── preload.js        # Preload script for native APIs
+├── scripts/              # Build and tooling scripts
+│   ├── after-pack.js     # Copies node_modules into packaged app
+│   ├── build-dock-icon.js
+│   └── dev.js            # Dev server launcher
+├── src/
+│   ├── app/              # Next.js App Router
+│   │   ├── api/          # API routes
+│   │   └── page.tsx      # Main UI
+│   ├── components/       # React components
+│   └── lib/
+│       ├── agents/       # Agent manager
+│       ├── cli/          # CLI adapters (Mock, Amp, Cursor)
+│       ├── git/          # Worktree management
+│       └── tasks/        # Task persistence
+└── public/               # Static assets
 ```
 
 ## Documentation
