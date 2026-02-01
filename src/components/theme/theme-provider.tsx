@@ -8,13 +8,14 @@
 
 import { useEffect } from 'react';
 import { useThemeStore } from '@/store/theme-store';
+import { getTheme } from '@/lib/themes/theme-config';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { theme } = useThemeStore();
+  const colors = theme?.colors ?? getTheme('dark').colors;
 
   useEffect(() => {
     const root = document.documentElement;
-    const colors = theme.colors;
 
     // Apply CSS variables
     root.style.setProperty('--color-background', colors.background);
@@ -53,7 +54,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.style.setProperty('--color-terminal-background', colors.terminalBackground);
     root.style.setProperty('--color-terminal-text', colors.terminalText);
     root.style.setProperty('--color-sidebar-shadow', colors.sidebarShadow);
-  }, [theme]);
+  }, [colors]);
 
   return <>{children}</>;
 }
