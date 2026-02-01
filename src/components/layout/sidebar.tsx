@@ -6,7 +6,7 @@
  * Left sidebar with project navigation and tools (matching Code-Auto)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -21,10 +21,46 @@ import {
   FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { NewTaskModal } from '@/components/tasks/new-task-modal';
 import { OpenProjectModal } from '@/components/project/open-project-modal';
 import { ThemeSwitcher } from '@/components/theme/theme-switcher';
 import { useProjectStore } from '@/store/project-store';
+import { apiFetch } from '@/lib/api-client';
+
+/** Fetches worktree count for the current project. Only runs when projectPath is set. */
+function useWorktreeCount(): number {
+  const projectPath = useProjectStore((s) => s.projectPath);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!projectPath) {
+      setCount(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    apiFetch('/api/git/worktree?action=list')
+      .then((res) => {
+        if (cancelled || !res.ok) return;
+        return res.json();
+      })
+      .then((data: { count?: number } | undefined) => {
+        if (cancelled || data == null) return;
+        setCount(typeof data.count === 'number' ? data.count : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setCount(0);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath]);
+
+  return count;
+}
 
 const projectLinks = [
   { href: '/', label: 'Kanban Board', icon: LayoutDashboard },
@@ -44,6 +80,7 @@ export function Sidebar() {
   const [isNewTaskModalOpen, setIsNewTaskModalOpen] = useState(false);
   const [isOpenProjectModalOpen, setIsOpenProjectModalOpen] = useState(false);
   const projectPath = useProjectStore((s) => s.projectPath);
+  const worktreeCount = useWorktreeCount();
 
   return (
     <>
@@ -146,6 +183,8 @@ export function Sidebar() {
               {toolLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
+                const showWorktreeBadge =
+                  link.href === '/worktrees' && worktreeCount > 0;
 
                 return (
                   <Link
@@ -170,8 +209,23 @@ export function Sidebar() {
                       }
                     }}
                   >
-                    <Icon className="w-4 h-4" />
-                    <span>{link.label}</span>
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="min-w-0 flex-1">{link.label}</span>
+                    {showWorktreeBadge && (
+                      <Badge
+                        data-testid="sidebar-worktree-count"
+                        variant="secondary"
+                        className="shrink-0 min-w-[1.25rem] justify-center px-1.5 py-0 text-xs"
+                        style={{
+                          background: 'var(--color-primary)',
+                          color: 'var(--color-primary-text)',
+                          border: 'none',
+                        }}
+                        aria-label={`${worktreeCount} worktrees`}
+                      >
+                        {worktreeCount}
+                      </Badge>
+                    )}
                   </Link>
                 );
               })}

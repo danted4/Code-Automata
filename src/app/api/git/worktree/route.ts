@@ -11,15 +11,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWorktreeManager } from '@/lib/git/worktree';
 import { getProjectDir } from '@/lib/project-dir';
+import { getTaskPersistence } from '@/lib/tasks/persistence';
 
 export async function POST(req: NextRequest) {
   try {
     const projectDir = await getProjectDir(req);
     const manager = getWorktreeManager(projectDir);
 
-    const { action, taskId, force } = await req.json();
+    const { action, taskId, force, alsoDeleteBranch } = await req.json();
 
-    if (!taskId) {
+    if (action !== 'cleanup-all' && !taskId) {
       return NextResponse.json({ error: 'taskId is required' }, { status: 400 });
     }
 
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'delete') {
-      await manager.deleteWorktree(taskId, force || false);
+      await manager.deleteWorktree(taskId, force || false, alsoDeleteBranch);
       return NextResponse.json({
         success: true,
         message: `Worktree deleted for task ${taskId}`,
@@ -93,10 +94,27 @@ export async function GET(req: NextRequest) {
     }
 
     if (action === 'list') {
-      const worktrees = await manager.listWorktrees();
+      const enriched = await manager.listWorktreesEnriched();
+      const taskPersistence = getTaskPersistence(projectDir);
+      const tasks = await taskPersistence.listTasks();
+      const taskIds = new Set(tasks.map((t) => t.id));
+
+      const worktrees = enriched.map((wt) => ({
+        taskId: wt.taskId,
+        path: wt.path,
+        branchName: wt.branchName,
+        isDirty: wt.isDirty,
+        linkedTaskId: wt.taskId,
+        isOrphan: !taskIds.has(wt.taskId),
+        diskUsageBytes: wt.diskUsageBytes,
+      }));
+
+      const totalDiskUsageBytes = worktrees.reduce((sum, wt) => sum + wt.diskUsageBytes, 0);
+
       return NextResponse.json({
         worktrees,
         count: worktrees.length,
+        totalDiskUsageBytes,
       });
     }
 
