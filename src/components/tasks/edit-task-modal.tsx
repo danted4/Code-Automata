@@ -127,7 +127,7 @@ export function EditTaskModal({ open, onOpenChange, task }: EditTaskModalProps) 
     if (open) {
       fetchAdapters();
     }
-  }, [open]);
+  }, [open, task?.cliTool]);
 
   // Amp readiness (delay + retry for packaged app env race)
   useEffect(() => {

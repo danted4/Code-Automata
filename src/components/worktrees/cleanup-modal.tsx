@@ -126,9 +126,6 @@ export function CleanupModal({ open, onOpenChange, worktrees, onCleanedUp }: Cle
   }, [
     count,
     toRemove,
-    includeOrphans,
-    includeClean,
-    includeDirty,
     alsoDeleteBranch,
     alsoDeleteFromRemote,
     onOpenChange,
