@@ -35,6 +35,8 @@ jobs:
       - name: Build macOS (Intel)
         run: yarn build:mac:x64
         env:
+          # Disable keychain auto-discovery when secrets aren't set (avoids "not a file" / empty password errors)
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -65,6 +67,8 @@ jobs:
       - name: Build macOS (Apple Silicon)
         run: yarn build:mac:arm64
         env:
+          # Disable keychain auto-discovery when secrets aren't set (avoids "not a file" / empty password errors)
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}

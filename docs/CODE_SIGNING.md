@@ -56,13 +56,15 @@ With credentials set, electron-builder will:
 
 Add these as **repository secrets** for automated releases:
 
-| Secret                        | Description                              |
-| ----------------------------- | ---------------------------------------- | ------- |
-| `CSC_LINK`                    | Base64-encoded .p12: `base64 -i cert.p12 | pbcopy` |
-| `CSC_KEY_PASSWORD`            | P12 password                             |
-| `APPLE_ID`                    | Apple ID email                           |
-| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password                    |
-| `APPLE_TEAM_ID`               | Team ID                                  |
+| Secret                        | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| `CSC_LINK`                    | Base64-encoded .p12: `base64 -i cert.p12 \| pbcopy` |
+| `CSC_KEY_PASSWORD`            | P12 password                                        |
+| `APPLE_ID`                    | Apple ID email                                      |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password                               |
+| `APPLE_TEAM_ID`               | Team ID                                             |
+
+**Note:** The release workflow sets `CSC_IDENTITY_AUTO_DISCOVERY: false` so builds succeed without signing. When you add the secrets above, signing should work. If signing is skipped despite having secrets, you may need to remove or override `CSC_IDENTITY_AUTO_DISCOVERY` in the workflow.
 
 Then update `.github/workflows/release.yml` to pass them:
 
