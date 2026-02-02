@@ -2,7 +2,7 @@
 
 ## Overview
 
-Code-Auto is a Next.js application that orchestrates AI coding tasks through a structured 5-phase Kanban workflow. It automates AI-driven development by managing tasks through planning, implementation, review, and completion phases—each running in an isolated git worktree with its own branch.
+Code-Auto is a Next.js (Electron desktop) application that orchestrates AI coding tasks through a structured 5-phase Kanban workflow. It runs on macOS, Windows, and Linux. It automates AI-driven development by managing tasks through planning, implementation, review, and completion phases—each running in an isolated git worktree with its own branch.
 
 The system acts as a bridge between developers and AI coding agents (like Amp), providing:
 

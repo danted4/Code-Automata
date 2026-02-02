@@ -56,13 +56,15 @@ With credentials set, electron-builder will:
 
 Add these as **repository secrets** for automated releases:
 
-| Secret                        | Description                              |
-| ----------------------------- | ---------------------------------------- | ------- |
-| `CSC_LINK`                    | Base64-encoded .p12: `base64 -i cert.p12 | pbcopy` |
-| `CSC_KEY_PASSWORD`            | P12 password                             |
-| `APPLE_ID`                    | Apple ID email                           |
-| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password                    |
-| `APPLE_TEAM_ID`               | Team ID                                  |
+| Secret                        | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| `CSC_LINK`                    | Base64-encoded .p12: `base64 -i cert.p12 \| pbcopy` |
+| `CSC_KEY_PASSWORD`            | P12 password                                        |
+| `APPLE_ID`                    | Apple ID email                                      |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password                               |
+| `APPLE_TEAM_ID`               | Team ID                                             |
+
+**Note:** The release workflow unsets empty signing env vars and sets `CSC_IDENTITY_AUTO_DISCOVERY: false` so macOS builds succeed without Apple Developer secrets. When you add the secrets above, signing should work. If signing is skipped despite having secrets, you may need to adjust the workflow's build step.
 
 Then update `.github/workflows/release.yml` to pass them:
 
@@ -77,10 +79,12 @@ env:
 
 ## Without code signing
 
-If you don't have an Apple Developer account, builds will use ad-hoc signing. Users must run:
+**macOS:** Builds use ad-hoc signing. Users must run:
 
 ```bash
 xattr -cr /Applications/Code-Auto.app
 ```
 
-Document this in your release notes.
+**Windows:** SmartScreen may block unsigned `.exe` files. Users must click **More info** → **Run anyway** when opening the installer or portable exe.
+
+Document these workarounds in your release notes.

@@ -1,4 +1,6 @@
 # Build and publish release assets when a version tag is pushed.
+# Uses platform-specific runners (no cross-compilation) to avoid Apple Silicon
+# mksquashfs/Wine "bad CPU type" errors. Based on Auto-Claude's approach.
 # Usage: git tag v2.2.0 && git push origin v2.2.0
 name: Release
 
@@ -6,10 +8,18 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Test build without creating release'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
-  release:
-    runs-on: macos-latest
+  # Intel macOS build on Intel runner (native x64, no Rosetta)
+  build-macos-intel:
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -22,22 +32,214 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Build
-        run: yarn build
+      - name: Build macOS (Intel)
+        run: |
+          # Unset empty signing vars so electron-builder skips signing (avoids "not a file" error)
+          for var in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -z "${!var}" ] && unset $var
+          done
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          yarn build:mac:x64
         env:
-          # Code signing & notarization (optional - add secrets to avoid xattr workaround)
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Upload release assets
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-assets
+          path: dist-electron/
+
+  # Apple Silicon macOS build on ARM64 runner (native arm64)
+  build-macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build macOS (Apple Silicon)
+        run: |
+          # Unset empty signing vars so electron-builder skips signing (avoids "not a file" error)
+          for var in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -z "${!var}" ] && unset $var
+          done
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          yarn build:mac:arm64
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-assets
+          path: dist-electron/
+
+  # Linux build on x64 runner (native AppImage/deb/flatpak)
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Setup Flatpak
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --user flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+          flatpak install -y --user flathub org.electronjs.Electron2.BaseApp//25.08
+
+      - name: Build Linux
+        run: yarn build:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: dist-electron/
+
+  # Windows build on Windows runner (native, no Wine cross-compilation)
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build Windows
+        run: yarn build:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: dist-electron/
+
+  release:
+    needs: [build-macos-intel, build-macos-arm64, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Flatten artifacts for release
+        run: |
+          mkdir -p flattened
+          find release-assets -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.flatpak" -o -name "*.exe" \) -exec cp {} flattened/ \;
+          echo "Release assets:"
+          ls -la flattened/
+
+      - name: Generate checksums
+        run: |
+          cd flattened
+          sha256sum ./* > checksums.sha256
+          cat checksums.sha256
+
+      - name: Extract changelog from CHANGELOG.md
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CHANGELOG_FILE="CHANGELOG.md"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="dev"
+          fi
+
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "body=Release v$VERSION" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGELOG_CONTENT=$(awk -v ver="$VERSION" '
+          BEGIN { found=0; content="" }
+          /^## / {
+            if (found) exit
+            if ($2 == ver || $2 ~ "^"ver"[[:space:]]*-") {
+              found=1
+              next
+            }
+          }
+          /^---$/ { if (found) exit }
+          found { content = content $0 "\n" }
+          END {
+            if (!found) {
+              print "NOT_FOUND"
+              exit 0
+            }
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", content)
+            print content
+          }
+          ' "$CHANGELOG_FILE")
+
+          if [ "$CHANGELOG_CONTENT" = "NOT_FOUND" ] || [ -z "$CHANGELOG_CONTENT" ]; then
+            REPO="${{ github.repository }}"
+            CHANGELOG_CONTENT="Release v$VERSION"$'\n\n'"See [CHANGELOG.md](https://github.com/${REPO}/blob/main/CHANGELOG.md) for details."
+          fi
+
+          echo "$CHANGELOG_CONTENT" > changelog-body.md
+          DELIM="CHANGELOG_BODY_END"
+          echo "body<<$DELIM" >> $GITHUB_OUTPUT
+          cat changelog-body.md >> $GITHUB_OUTPUT
+          echo "$DELIM" >> $GITHUB_OUTPUT
+
+      - name: Dry run summary
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "## Dry Run Complete" >> $GITHUB_STEP_SUMMARY
+          echo "Build artifacts created successfully:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -la flattened/ >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "### Checksums" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat flattened/checksums.sha256 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Create Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist-electron/*.dmg
-            dist-electron/*.zip
-          fail_on_unmatched_files: true
+          files: flattened/*
+          body: ${{ steps.changelog.outputs.body }}
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -104,8 +104,7 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
         <DialogHeader>
           <DialogTitle>Open Project</DialogTitle>
           <DialogDescription>
-            Enter the absolute path to your project directory. The project must be a git repository
-            within your home directory.
+            Enter the absolute path to your project directory. The project must be a git repository.
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-4 py-4">
@@ -139,7 +138,7 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
                   >
                     <FolderOpen className="w-3.5 h-3.5 mr-1.5 shrink-0" />
                     <span className="truncate" title={path}>
-                      {path.split('/').pop() || path}
+                      {path.split(/[/\\]/).pop() || path}
                     </span>
                   </Button>
                 ))}
@@ -151,7 +150,12 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
             <div className="flex gap-2">
               <Input
                 id="project-path"
-                placeholder="/Users/you/projects/my-app"
+                placeholder={
+                  typeof navigator !== 'undefined' &&
+                  navigator.platform?.toLowerCase().includes('win')
+                    ? 'C:\\Users\\you\\projects\\my-app'
+                    : '/Users/you/projects/my-app'
+                }
                 value={pathInput}
                 onChange={(e) => {
                   setPathInput(e.target.value);

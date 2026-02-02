@@ -30,10 +30,10 @@ export class CLIFactory {
   }
 
   /**
-   * Get available providers
+   * Get available providers (order: Cursor first, Amp second, Mock last)
    */
   static getAvailableProviders(): CLIProvider[] {
-    return ['amp', 'mock', 'cursor'];
+    return ['cursor', 'amp', 'mock'];
   }
 
   /**

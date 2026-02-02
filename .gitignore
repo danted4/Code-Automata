@@ -17,6 +17,7 @@
 
 # production
 /build
+!/build/entitlements.mac.plist
 /dist-electron
 
 # misc

@@ -18,7 +18,11 @@ export interface ElectronAPI {
   openFolderDialog: () => Promise<string | null>;
   getAvailableEditors: () => Promise<AvailableEditor[]>;
   pathExists: (path: string) => Promise<boolean>;
-  openEditorAtPath: (worktreePath: string, editorId: EditorId) => Promise<OpenEditorResult>;
+  openEditorAtPath: (
+    worktreePath: string,
+    editorId: EditorId,
+    projectPath?: string | null
+  ) => Promise<OpenEditorResult>;
   openFolder: (worktreePath: string) => Promise<OpenEditorResult>;
 }
 

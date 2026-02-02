@@ -12,7 +12,7 @@ The packaged app uses **Next.js standalone output**:
 4. **Runtime**: Electron spawns `node server.js` as a subprocess from `app.asar.unpacked/.next/standalone/`
 5. **afterPack**: electron-builder excludes nested `node_modules`; `scripts/after-pack.js` copies it into the packaged app
 
-**Node.js requirement**: The packaged app requires Node.js to be installed (Homebrew, nvm, Volta, or fnm). The main process resolves the Node binary from common paths before spawning the server.
+**Node.js requirement**: The packaged app requires Node.js to be installed (Homebrew, nvm, Volta, or fnm on macOS/Linux; official installer or nvm-windows on Windows). The main process resolves the Node binary from common paths before spawning the server.
 
 ## Why Packaged Apps Behave Differently
 
@@ -28,20 +28,20 @@ When launched from the DMG (or as a GUI app), macOS gives the app a **minimal en
 
 Runs at startup when `app.isPackaged` is true:
 
-- **PATH** — Runs the user's login shell (`$SHELL -l -c 'echo $PATH'`) and merges it into `process.env.PATH`. Fallback: adds `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin` if they exist.
-- **CURSOR_API_KEY** — Loaded from the user's shell if not set.
-- **AMP_API_KEY** — Same as above.
+- **macOS/Linux** — Runs the user's login shell (`$SHELL -l -c 'echo $PATH'`) and merges it into `process.env.PATH`. Fallback: adds `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` if they exist.
+- **Windows** — Merges common paths (`%APPDATA%\\npm`, `%LOCALAPPDATA%\\Programs`, `%ProgramFiles%\\nodejs`) into `process.env.PATH`.
+- **CURSOR_API_KEY** / **AMP_API_KEY** — On macOS/Linux, loaded from the user's shell if not set.
 
 This ensures `which agent`, `which amp`, `which gh`, etc. work, and API keys are available.
 
 ### 2. Node Binary Resolution (`resolveNodeBinary`)
 
-When spawning the Next.js server, the main process resolves the Node binary from:
+When spawning the Next.js server, the main process resolves the Node binary from platform-specific paths:
 
-- `/opt/homebrew/bin/node`, `/usr/local/bin/node`
-- `~/.nvm/versions/node/*/bin/node` (newest first)
-- `~/.volta/bin/node`, `~/.fnm/.../bin/node`
-- Fallback: `which node`
+- **macOS** — `/opt/homebrew/bin/node`, `/usr/local/bin/node`, `~/.nvm`, `~/.volta`, `~/.fnm`
+- **Linux** — `/usr/bin/node`, `/usr/local/bin/node`, `~/.nvm`, `~/.volta`, `~/.fnm`
+- **Windows** — `%ProgramFiles%\\nodejs\\node.exe`, `%LOCALAPPDATA%\\Programs\\node\\node.exe`, `~/.volta`, `~/.fnm`, `%APPDATA%\\nvm`
+- Fallback: `which node` (or `where node` on Windows)
 
 ### 3. Base URL (`NEXT_PUBLIC_APP_URL`)
 
@@ -53,7 +53,7 @@ The spawn env includes `CODE_AUTO_PACKAGED=1`. API routes (e.g. `/api/cli/adapte
 
 ### 5. Project Path
 
-Project path comes from the user via the Open Project modal and is sent as `X-Project-Path`. API routes use this; they do **not** rely on `process.cwd()` for the project root. The `process.cwd()` fallback in `getProjectDir` is only used when no path is provided — in that case, behavior may differ in packaged vs. dev.
+Project path comes from the user via the Open Project modal and is sent as `X-Project-Path`. API routes use this; they do **not** rely on `process.cwd()` for the project root. Any absolute path is accepted (e.g. `D:\repos\project` on Windows, `/mnt/projects` on Linux). The `process.cwd()` fallback in `getProjectDir` is only used when no path is provided — in that case, behavior may differ in packaged vs. dev.
 
 ## Checklist for New Features
 
@@ -84,27 +84,30 @@ When adding features that might run in the packaged app, consider:
 - `CURSOR_API_KEY` — Cursor auth
 - `AMP_API_KEY` — Amp auth
 - `NEXT_PUBLIC_APP_URL` — Internal API callbacks
-- `HOME` / `USERPROFILE` — Path validation in `getProjectDir`
+
+## Apple Silicon (M1/M2/M3) cross-compilation
+
+On Apple Silicon, `yarn build:all` fails with "bad CPU type in executable" because electron-builder's Linux (AppImage) and Windows tools (mksquashfs, Wine) are x86_64-only. Use `yarn build:mac` for local macOS builds, `yarn build:all:rosetta` to attempt full build under Rosetta 2, or GitHub Actions for releases.
 
 ## Build Process
 
 ```
 yarn build
-  → rm -rf dist-electron
-  → yarn next:build          # Produces .next/standalone, .next/static
-  → cp -r public .next/standalone/
-  → cp -r .next/static .next/standalone/.next/
-  → electron-builder         # Packs .next/standalone, runs afterPack
+  → node scripts/build-icons.js   # Generates Windows .ico, Linux icons
+  → node scripts/prepare-build.js # rm dist-electron, next build, copy public/static
+  → electron-builder --publish never  # Packs .next/standalone, runs afterPack
 ```
+
+Uses `--publish never` so builds succeed without GH_TOKEN (release job handles publishing).
 
 **afterPack** (`scripts/after-pack.js`): Copies `.next/standalone/node_modules` into the packaged app because electron-builder excludes nested node_modules.
 
 ## Testing Packaged Build
 
-1. Ensure Node.js is installed (Homebrew, nvm, Volta, or fnm)
-2. Build: `yarn build`
-3. Run the DMG from `dist-electron/`
-4. Open a project and verify:
+1. Ensure Node.js is installed (Homebrew, nvm, Volta, or fnm on macOS/Linux; official installer or nvm-windows on Windows)
+2. Build: `yarn build` (or `yarn build:mac`, `yarn build:win`, `yarn build:linux` for a single platform)
+3. Run the app: macOS `dist-electron/*.dmg` or `*.app`; Windows `dist-electron\win-unpacked\Code-Auto.exe` or `*.exe` installer; Linux `dist-electron/*.AppImage` or `*.deb`
+4. Open a project (any absolute path, e.g. `D:\repos\project` on Windows) and verify:
    - Cursor/Amp readiness shows correctly (Mock is hidden in packaged app)
    - Creating a task and starting development works
    - Review Locally (open in Cursor/VS Code, open folder) works

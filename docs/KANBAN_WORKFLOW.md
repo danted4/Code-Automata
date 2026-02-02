@@ -6,7 +6,7 @@ This document walks through the Code-Auto Kanban workflow using screenshots. Tas
 
 ## 1. Select Project
 
-On startup, select a project folder to work with. The project must be a git repository within your home directory. Recent projects are listed for quick re-selection.
+On startup, select a project folder to work with. The project must be a git repository. Recent projects are listed for quick re-selection.
 
 ![Select Project](../public/00-select-project.png)
 

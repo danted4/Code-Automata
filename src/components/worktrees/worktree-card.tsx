@@ -39,6 +39,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useProjectStore } from '@/store/project-store';
 import type { AvailableEditor, EditorId } from '@/types/electron';
 
 export interface WorktreeItem {
@@ -63,6 +64,7 @@ function availableEditorsSorted(editors: AvailableEditor[]): AvailableEditor[] {
 }
 
 export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
+  const projectPath = useProjectStore((s) => s.projectPath);
   const [openingEditor, setOpeningEditor] = useState(false);
   const [openingFolder, setOpeningFolder] = useState(false);
   const [availableEditors, setAvailableEditors] = useState<AvailableEditor[]>([]);
@@ -112,7 +114,11 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
     }
     setOpeningEditor(true);
     try {
-      const result = await window.electron.openEditorAtPath(worktree.path, editorId);
+      const result = await window.electron.openEditorAtPath(
+        worktree.path,
+        editorId,
+        projectPath ?? undefined
+      );
       if (result.success) {
         const label = editors.find((ed) => ed.id === editorId)?.label ?? editorId;
         toast.success(`Opened in ${label}`, { description: worktree.path });

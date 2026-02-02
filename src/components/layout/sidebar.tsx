@@ -99,7 +99,10 @@ export function Sidebar() {
           className="p-4 border-b"
           style={{ borderColor: 'var(--color-border)' }}
         >
-          <h1 className="text-lg font-bold flex items-baseline gap-1.5 flex-wrap" style={{ color: 'var(--color-text-primary)' }}>
+          <h1
+            className="text-lg font-bold flex items-baseline gap-1.5 flex-wrap"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
             Code-Auto
             <span
               data-testid="sidebar-version"
@@ -140,7 +143,7 @@ export function Sidebar() {
                 style={{ color: 'var(--color-text-muted)' }}
                 title={projectPath}
               >
-                {projectPath.split('/').pop() || projectPath}
+                {projectPath.split(/[/\\]/).pop() || projectPath}
               </p>
             )}
             <div className="space-y-1">

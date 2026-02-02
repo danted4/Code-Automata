@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('electron', {
   openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
   getAvailableEditors: () => ipcRenderer.invoke('review-locally:get-editors'),
   pathExists: (path) => ipcRenderer.invoke('review-locally:path-exists', { path }),
-  openEditorAtPath: (worktreePath, editorId) =>
-    ipcRenderer.invoke('review-locally:open-editor', { worktreePath, editorId }),
+  openEditorAtPath: (worktreePath, editorId, projectPath) =>
+    ipcRenderer.invoke('review-locally:open-editor', { worktreePath, editorId, projectPath }),
   openFolder: (worktreePath) => ipcRenderer.invoke('review-locally:open-folder', { worktreePath }),
 });

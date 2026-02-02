@@ -43,12 +43,6 @@ export async function getProjectDir(request?: NextRequest): Promise<string> {
       return process.cwd();
     }
 
-    // Optional: restrict to user home for security (plan mentions this)
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    if (home && !resolved.startsWith(path.resolve(home))) {
-      return process.cwd();
-    }
-
     const stat = await fs.promises.stat(resolved);
     if (!stat.isDirectory()) {
       return process.cwd();

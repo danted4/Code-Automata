@@ -33,14 +33,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ valid: false, error: 'Path must be absolute' }, { status: 400 });
     }
 
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    if (home && !resolved.startsWith(path.resolve(home))) {
-      return NextResponse.json(
-        { valid: false, error: 'Path must be within your home directory' },
-        { status: 400 }
-      );
-    }
-
     const stat = fs.statSync(resolved);
     if (!stat.isDirectory()) {
       return NextResponse.json({ valid: false, error: 'Path is not a directory' }, { status: 400 });

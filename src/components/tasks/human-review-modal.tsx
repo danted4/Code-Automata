@@ -217,7 +217,11 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
     }
     setIsOpeningEditor(true);
     try {
-      const result = await window.electron.openEditorAtPath(worktreePath, selectedEditorId);
+      const result = await window.electron.openEditorAtPath(
+        worktreePath,
+        selectedEditorId,
+        projectPath ?? undefined
+      );
       if (result.success) {
         toast.success(`Opened in ${selectedEditor?.label ?? selectedEditorId}`, {
           description: worktreePath,
