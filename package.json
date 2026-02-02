@@ -11,6 +11,7 @@
     "icon:build": "node scripts/build-dock-icon.js",
     "start": "yarn icon:build && node scripts/dev.js",
     "build": "rm -rf dist-electron && yarn next:build && cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/ && electron-builder",
+    "upload": "gh release upload",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
@@ -84,6 +85,12 @@
     "productName": "Code-Auto",
     "icon": "public/code-auto-dark.png",
     "asar": true,
+    "mac": {
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
     "asarUnpack": [
       ".next/standalone/**/*"
     ],

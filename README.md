@@ -21,6 +21,8 @@ A Next.js ( Electron Desktop ) application for orchestrating AI coding tasks thr
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
   - [Release Assets](#release-assets)
+  - [macOS: "Damaged" App Fix](#macos-damaged-app-fix)
+- [Releases](#releases)
 - [API Overview](#api-overview)
 - [CLI Adapters](#cli-adapters)
 - [Workflow](#workflow)
@@ -146,9 +148,13 @@ The `yarn build` script:
 1. Runs `next build` with `output: 'standalone'` (minimal traced dependencies)
 2. Copies `public` and `.next/static` into `.next/standalone/` (required for static assets)
 3. Runs electron-builder to create DMG and ZIP in `dist-electron/`
-4. Uses an `afterPack` hook to copy `node_modules` into the app (electron-builder excludes nested node_modules)
+4. Uses an `afterPack` hook to:
+   - Copy `.next/standalone/node_modules` into the app (electron-builder excludes nested node_modules)
+   - Remove broken symlinks (e.g. amp-sdk's `.bin/amp` → missing `@sourcegraph/amp`) that cause xattr/codesign to fail
 
 The packaged app spawns the Next.js standalone server as a subprocess; Node.js must be installed (Homebrew, nvm, Volta, or fnm).
+
+**Optional code signing:** Set `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` before building to sign and notarize the app. See [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 ### Release Assets
 
@@ -158,6 +164,33 @@ Pre-built packages are available in [GitHub Releases](https://github.com/danted4
 | ------------------------------- | --------------------- | --------------------------- |
 | `Code-Auto-2.2.0-arm64.dmg`     | macOS (Apple Silicon) | Disk image for installation |
 | `Code-Auto-2.2.0-arm64-mac.zip` | macOS (Apple Silicon) | Zip archive                 |
+
+**Installation:** Download the DMG or ZIP, open it, and drag Code-Auto to Applications. The app requires **Node.js** (Homebrew, nvm, Volta, or fnm) to be installed — it spawns the Next.js server as a subprocess.
+
+### macOS: "Damaged" App Fix
+
+If macOS shows **"Code-Auto is damaged and can't be opened"** after downloading (common with unsigned apps from the internet), run in Terminal:
+
+```bash
+xattr -cr /Applications/Code-Auto.app
+```
+
+Then open the app again. This removes the quarantine flag that browsers add to downloaded files.
+
+**To avoid this workaround:** The app can be code-signed and notarized with an Apple Developer account. See [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) for setup.
+
+## Releases
+
+Releases are published via [GitHub Actions](.github/workflows/release.yml). To create a release:
+
+```bash
+git tag v2.2.0
+git push origin v2.2.0
+```
+
+The workflow builds the app on macOS and uploads DMG and ZIP to the release. Add Apple Developer secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) to enable code signing and notarization — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
+**Manual upload:** Avoid `gh release upload` for large binaries — it uses multipart encoding that can corrupt DMG/ZIP files. See [docs/RELEASE.md](docs/RELEASE.md) for alternatives.
 
 ### Development
 
@@ -281,12 +314,15 @@ See [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) for a step-by-step breakd
 ## Project Structure
 
 ```
+├── build/                # Build-time assets
+│   └── entitlements.mac.plist   # macOS code signing entitlements
 ├── electron/             # Electron main process
 │   ├── main.js           # App window, Next.js server spawn, IPC
 │   └── preload.js        # Preload script for native APIs
-├── scripts/              # Build and tooling scripts
-│   ├── after-pack.js     # Copies node_modules into packaged app
+├── scripts/               # Build and tooling scripts
+│   ├── after-pack.js     # Copies node_modules, removes broken symlinks
 │   ├── build-dock-icon.js
+│   ├── clean-dist.js     # Robust dist-electron cleanup
 │   └── dev.js            # Dev server launcher
 ├── src/
 │   ├── app/              # Next.js App Router
@@ -315,6 +351,8 @@ See [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) for a step-by-step breakd
 - [docs/TYPE_REFERENCE.md](docs/TYPE_REFERENCE.md) — TypeScript interfaces and type definitions
 - [docs/WORKTREE.md](docs/WORKTREE.md) — Git worktree isolation strategy and WorktreeManager API
 - [docs/PACKAGED_APP.md](docs/PACKAGED_APP.md) — Packaged app (DMG) considerations, env handling, and checklist
+- [docs/RELEASE.md](docs/RELEASE.md) — Release process, GitHub Actions, manual upload (avoiding gh corruption)
+- [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) — macOS code signing and notarization (eliminates xattr workaround)
 
 ## License
 
