@@ -12,13 +12,28 @@ The most reliable way to publish releases is via GitHub Actions:
    ```
 
 2. The [.github/workflows/release.yml](../.github/workflows/release.yml) workflow will:
-   - Build the app on macOS
-   - Create the release
-   - Upload DMG and ZIP assets
+   - Build on platform-specific runners (no cross-compilation): Intel macOS (`macos-15-intel`), Apple Silicon macOS (`macos-15`), Linux (`ubuntu-latest`), Windows (`windows-latest`)
+   - Create the release with all assets (DMG for Intel + ARM64, ZIP, AppImage, deb, Flatpak, exe)
+   - Generate SHA256 checksums for all assets
+   - Extract release notes from `CHANGELOG.md` when present (looks for `## X.Y.Z` section)
 
 Assets are built and uploaded from GitHub's infrastructure, avoiding local upload issues.
 
+**Manual trigger:** Go to Actions → Release → Run workflow to test the build pipeline without creating a release (dry run).
+
+**Release notes:** Add a `CHANGELOG.md` with sections like `## 2.2.0` or `## 2.2.0 - Title`; the workflow extracts that section as the release body.
+
 **Code signing (optional):** To avoid the `xattr -cr` workaround for users, add Apple Developer secrets and see [docs/CODE_SIGNING.md](CODE_SIGNING.md).
+
+## Apple Silicon (M1/M2/M3) local builds
+
+On Apple Silicon, `yarn build:all` fails with "bad CPU type in executable" because electron-builder's Linux (AppImage) and Windows tools (mksquashfs, Wine) are x86_64-only and don't run natively on arm64.
+
+**Options:**
+
+1. **GitHub Actions (recommended)** — Push a tag; each platform builds natively on its runner (macOS, Ubuntu, Windows).
+2. **`yarn build:all:rosetta`** — Runs the full build under Rosetta 2 (x86_64 emulation). Requires Rosetta installed (`softwareupdate --install-rosetta`).
+3. **`yarn build:mac`** — Build macOS only locally; use CI for Linux and Windows.
 
 ## Manual upload (gh release upload)
 

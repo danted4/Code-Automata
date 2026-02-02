@@ -63,17 +63,35 @@ async function findAvailablePort(start, count) {
 }
 
 /**
- * Common CLI paths on macOS (agent, amp, gh, cursor, code).
+ * Common CLI paths (agent, amp, gh, cursor, code).
  * Always add these for packaged apps since shell PATH may be empty/unreliable.
  */
 function getCommonCliPaths() {
   const home = os.homedir();
+  const platform = process.platform;
+
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    return [
+      path.join(appData, 'npm'),
+      path.join(localAppData, 'Programs'),
+      path.join(programFiles, 'nodejs'),
+      path.join(programFilesX86, 'nodejs'),
+      path.join(home, '.volta', 'bin'),
+      path.join(home, '.fnm'),
+    ].filter((p) => fs.existsSync(p));
+  }
+
   return [
     path.join(home, '.local', 'bin'),
     path.join(home, '.cursor', 'bin'),
     path.join(home, 'bin'),
     '/opt/homebrew/bin',
     '/usr/local/bin',
+    '/usr/bin',
     path.join(home, '.npm-global', 'bin'),
     path.join(home, '.yarn', 'bin'),
   ].filter((p) => fs.existsSync(p));
@@ -86,8 +104,16 @@ function getCommonCliPaths() {
 function enhanceEnvForPackagedApp() {
   if (isDev) return;
   const home = os.homedir();
-  const shellEnv = { ...process.env, HOME: home, USER: process.env.USER || os.userInfo().username };
   const commonPaths = getCommonCliPaths();
+
+  if (process.platform === 'win32') {
+    const pathSep = ';';
+    const merged = [commonPaths.join(pathSep), process.env.PATH].filter(Boolean).join(pathSep);
+    if (merged) process.env.PATH = merged;
+    return;
+  }
+
+  const shellEnv = { ...process.env, HOME: home, USER: process.env.USER || os.userInfo().username };
   const commonPathStr = commonPaths.join(':');
 
   let shellPath = '';
@@ -208,34 +234,75 @@ function waitForServer(url, timeoutMs = 30000) {
 }
 
 /**
- * Resolve node binary - when launched from Finder, PATH is minimal.
+ * Resolve node binary - when launched from GUI, PATH is minimal.
  */
 function resolveNodeBinary() {
   const home = os.homedir();
-  const candidates = [
-    '/opt/homebrew/bin/node',
-    '/usr/local/bin/node',
-    path.join(home, '.volta', 'bin', 'node'),
-    path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
-  ];
-  try {
-    const nvmDir = path.join(home, '.nvm', 'versions', 'node');
-    if (fs.existsSync(nvmDir)) {
-      const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
-      versions.sort((a, b) => b.localeCompare(a));
-      for (const v of versions) {
-        candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+  const platform = process.platform;
+  let candidates = [];
+
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    candidates = [
+      path.join(programFiles, 'nodejs', 'node.exe'),
+      path.join(localAppData, 'Programs', 'node', 'node.exe'),
+      path.join(home, '.volta', 'bin', 'node.exe'),
+      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'node.exe'),
+    ];
+    try {
+      const nvmDir = path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'nvm');
+      if (fs.existsSync(nvmDir)) {
+        const nvmExe = path.join(nvmDir, 'node.exe');
+        if (fs.existsSync(nvmExe)) candidates.push(nvmExe);
       }
-    }
-  } catch {}
+    } catch {}
+  } else if (platform === 'linux') {
+    candidates = [
+      '/usr/bin/node',
+      '/usr/local/bin/node',
+      path.join(home, '.volta', 'bin', 'node'),
+      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
+      path.join(home, '.local', 'share', 'nvm', 'current', 'bin', 'node'),
+    ];
+    try {
+      const nvmDir = path.join(home, '.nvm', 'versions', 'node');
+      if (fs.existsSync(nvmDir)) {
+        const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
+        versions.sort((a, b) => b.localeCompare(a));
+        for (const v of versions) {
+          candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+        }
+      }
+    } catch {}
+  } else {
+    candidates = [
+      '/opt/homebrew/bin/node',
+      '/usr/local/bin/node',
+      path.join(home, '.volta', 'bin', 'node'),
+      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
+    ];
+    try {
+      const nvmDir = path.join(home, '.nvm', 'versions', 'node');
+      if (fs.existsSync(nvmDir)) {
+        const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
+        versions.sort((a, b) => b.localeCompare(a));
+        for (const v of versions) {
+          candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+        }
+      }
+    } catch {}
+  }
+
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
   try {
-    const out = execSync('which node', { encoding: 'utf8', env: process.env }).trim();
+    const cmd = platform === 'win32' ? 'where node' : 'which node';
+    const out = execSync(cmd, { encoding: 'utf8', env: process.env }).trim().split('\n')[0]?.trim();
     if (out && fs.existsSync(out)) return out;
   } catch {}
-  return 'node';
+  return platform === 'win32' ? 'node.exe' : 'node';
 }
 
 /**
@@ -350,8 +417,8 @@ function createWindow() {
   });
 }
 
-const CURSOR_APP_PATH = '/Applications/Cursor.app';
-const VSCODE_APP_PATH = '/Applications/Visual Studio Code.app';
+const CURSOR_APP_PATH_DARWIN = '/Applications/Cursor.app';
+const VSCODE_APP_PATH_DARWIN = '/Applications/Visual Studio Code.app';
 
 /**
  * Check if a CLI command is available (e.g. `cursor`, `code`).
@@ -360,11 +427,38 @@ const VSCODE_APP_PATH = '/Applications/Visual Studio Code.app';
  */
 function isCliAvailable(cmd) {
   try {
-    execSync(`which ${cmd}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const checkCmd = process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`;
+    execSync(checkCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
     return true;
   } catch {
     return false;
   }
+}
+
+function getCursorAppPaths() {
+  const platform = process.platform;
+  const home = os.homedir();
+  if (platform === 'darwin') return [CURSOR_APP_PATH_DARWIN];
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return [path.join(localAppData, 'Programs', 'Cursor', 'Cursor.exe')];
+  }
+  return [
+    path.join(home, '.local', 'share', 'cursor', 'Cursor'),
+    '/opt/Cursor/cursor',
+    '/opt/cursor/cursor',
+  ];
+}
+
+function getVscodeAppPaths() {
+  const platform = process.platform;
+  const home = os.homedir();
+  if (platform === 'darwin') return [VSCODE_APP_PATH_DARWIN];
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return [path.join(localAppData, 'Programs', 'Microsoft VS Code', 'Code.exe')];
+  }
+  return ['/usr/share/code/code', '/usr/bin/code'];
 }
 
 /**
@@ -372,14 +466,12 @@ function isCliAvailable(cmd) {
  * @returns {{ id: 'cursor'|'vscode', label: string, available: boolean }[]}
  */
 function getDetectedEditors() {
-  const isDarwin = process.platform === 'darwin';
-
   const cursorCli = isCliAvailable('cursor');
-  const cursorApp = isDarwin && fs.existsSync(CURSOR_APP_PATH);
+  const cursorApp = getCursorAppPaths().some((p) => fs.existsSync(p));
   const cursorAvailable = cursorCli || cursorApp;
 
   const vscodeCli = isCliAvailable('code');
-  const vscodeApp = isDarwin && fs.existsSync(VSCODE_APP_PATH);
+  const vscodeApp = getVscodeAppPaths().some((p) => fs.existsSync(p));
   const vscodeAvailable = vscodeCli || vscodeApp;
 
   return [

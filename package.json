@@ -10,7 +10,14 @@
     "next:build": "next build",
     "icon:build": "node scripts/build-dock-icon.js",
     "start": "yarn icon:build && node scripts/dev.js",
-    "build": "rm -rf dist-electron && yarn next:build && cp -r public .next/standalone/ && cp -r .next/static .next/standalone/.next/ && electron-builder",
+    "build": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder",
+    "build:mac": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder --mac",
+    "build:mac:x64": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder --mac --x64",
+    "build:mac:arm64": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder --mac --arm64",
+    "build:linux": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder --linux",
+    "build:win": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder --win",
+    "build:all": "node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder -mwl",
+    "build:all:rosetta": "arch -x86_64 zsh -c 'node scripts/build-icons.js && node scripts/prepare-build.js && electron-builder -mwl'",
     "upload": "gh release upload",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -63,6 +70,7 @@
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
+    "png-to-ico": "^3.0.1",
     "postcss": "^8.4.49",
     "prettier": "^3.8.1",
     "sharp": "^0.34.5",
@@ -83,13 +91,48 @@
   "build": {
     "appId": "com.code-auto.app",
     "productName": "Code-Auto",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "icon": "public/code-auto-dark.png",
     "asar": true,
+    "npmRebuild": false,
     "mac": {
+      "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "flatpak"
+      ],
+      "category": "Development",
+      "icon": "build/icons"
+    },
+    "flatpak": {
+      "runtime": "org.freedesktop.Platform",
+      "runtimeVersion": "25.08",
+      "sdk": "org.freedesktop.Sdk",
+      "base": "org.electronjs.Electron2.BaseApp",
+      "baseVersion": "25.08",
+      "finishArgs": [
+        "--socket=wayland",
+        "--socket=x11",
+        "--share=ipc",
+        "--share=network",
+        "--device=dri",
+        "--filesystem=home",
+        "--talk-name=org.freedesktop.Notifications"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
     },
     "asarUnpack": [
       ".next/standalone/**/*"

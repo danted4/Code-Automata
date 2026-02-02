@@ -28,20 +28,20 @@ When launched from the DMG (or as a GUI app), macOS gives the app a **minimal en
 
 Runs at startup when `app.isPackaged` is true:
 
-- **PATH** — Runs the user's login shell (`$SHELL -l -c 'echo $PATH'`) and merges it into `process.env.PATH`. Fallback: adds `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin` if they exist.
-- **CURSOR_API_KEY** — Loaded from the user's shell if not set.
-- **AMP_API_KEY** — Same as above.
+- **macOS/Linux** — Runs the user's login shell (`$SHELL -l -c 'echo $PATH'`) and merges it into `process.env.PATH`. Fallback: adds `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` if they exist.
+- **Windows** — Merges common paths (`%APPDATA%\\npm`, `%LOCALAPPDATA%\\Programs`, `%ProgramFiles%\\nodejs`) into `process.env.PATH`.
+- **CURSOR_API_KEY** / **AMP_API_KEY** — On macOS/Linux, loaded from the user's shell if not set.
 
 This ensures `which agent`, `which amp`, `which gh`, etc. work, and API keys are available.
 
 ### 2. Node Binary Resolution (`resolveNodeBinary`)
 
-When spawning the Next.js server, the main process resolves the Node binary from:
+When spawning the Next.js server, the main process resolves the Node binary from platform-specific paths:
 
-- `/opt/homebrew/bin/node`, `/usr/local/bin/node`
-- `~/.nvm/versions/node/*/bin/node` (newest first)
-- `~/.volta/bin/node`, `~/.fnm/.../bin/node`
-- Fallback: `which node`
+- **macOS** — `/opt/homebrew/bin/node`, `/usr/local/bin/node`, `~/.nvm`, `~/.volta`, `~/.fnm`
+- **Linux** — `/usr/bin/node`, `/usr/local/bin/node`, `~/.nvm`, `~/.volta`, `~/.fnm`
+- **Windows** — `%ProgramFiles%\\nodejs\\node.exe`, `%LOCALAPPDATA%\\Programs\\node\\node.exe`, `~/.volta`, `~/.fnm`, `%APPDATA%\\nvm`
+- Fallback: `which node` (or `where node` on Windows)
 
 ### 3. Base URL (`NEXT_PUBLIC_APP_URL`)
 
@@ -85,6 +85,10 @@ When adding features that might run in the packaged app, consider:
 - `AMP_API_KEY` — Amp auth
 - `NEXT_PUBLIC_APP_URL` — Internal API callbacks
 - `HOME` / `USERPROFILE` — Path validation in `getProjectDir`
+
+## Apple Silicon (M1/M2/M3) cross-compilation
+
+On Apple Silicon, `yarn build:all` fails with "bad CPU type in executable" because electron-builder's Linux (AppImage) and Windows tools (mksquashfs, Wine) are x86_64-only. Use `yarn build:mac` for local macOS builds, `yarn build:all:rosetta` to attempt full build under Rosetta 2, or GitHub Actions for releases.
 
 ## Build Process
 

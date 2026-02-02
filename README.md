@@ -139,33 +139,44 @@ git --version  # Should be 2.20.0 or higher
    yarn build
    ```
 
-   The build produces Next.js standalone output, copies `public` and `.next/static` into the standalone folder, then runs electron-builder to create DMG and ZIP packages.
+   The build produces Next.js standalone output, copies `public` and `.next/static` into the standalone folder, then runs electron-builder. On macOS it creates DMG and ZIP; on Linux it creates AppImage and deb; on Windows it creates NSIS installer and portable exe.
 
 ### Building for Distribution
 
 The `yarn build` script:
 
-1. Runs `next build` with `output: 'standalone'` (minimal traced dependencies)
-2. Copies `public` and `.next/static` into `.next/standalone/` (required for static assets)
-3. Runs electron-builder to create DMG and ZIP in `dist-electron/`
-4. Uses an `afterPack` hook to:
+1. Builds platform icons (Windows .ico, Linux PNGs)
+2. Runs `next build` with `output: 'standalone'` (minimal traced dependencies)
+3. Copies `public` and `.next/static` into `.next/standalone/` (required for static assets)
+4. Runs electron-builder for the current platform (macOS: DMG/ZIP; Linux: AppImage/deb; Windows: NSIS/portable)
+5. Uses an `afterPack` hook to:
    - Copy `.next/standalone/node_modules` into the app (electron-builder excludes nested node_modules)
    - Remove broken symlinks (e.g. amp-sdk's `.bin/amp` → missing `@sourcegraph/amp`) that cause xattr/codesign to fail
 
-The packaged app spawns the Next.js standalone server as a subprocess; Node.js must be installed (Homebrew, nvm, Volta, or fnm).
+The packaged app spawns the Next.js standalone server as a subprocess; Node.js must be installed on all platforms.
 
 **Optional code signing:** Set `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` before building to sign and notarize the app. See [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
+**Platform-specific builds:** Use `yarn build:mac`, `yarn build:linux`, or `yarn build:win` to target a single platform. Use `yarn build:all` to build for all platforms from one machine (Windows builds from macOS/Linux require Wine).
+
+**Apple Silicon (M1/M2/M3):** `yarn build:all` fails on arm64 because electron-builder's Linux (AppImage) and Windows tools (mksquashfs, Wine) are x86_64-only. Use `yarn build:mac` for local macOS builds, or `yarn build:all:rosetta` to run the full build under Rosetta 2 (requires Rosetta installed). For releases, prefer GitHub Actions — each platform builds natively.
 
 ### Release Assets
 
 Pre-built packages are available in [GitHub Releases](https://github.com/danted4/Code-Auto/releases):
 
-| Asset                           | Platform              | Description                 |
-| ------------------------------- | --------------------- | --------------------------- |
-| `Code-Auto-2.2.0-arm64.dmg`     | macOS (Apple Silicon) | Disk image for installation |
-| `Code-Auto-2.2.0-arm64-mac.zip` | macOS (Apple Silicon) | Zip archive                 |
+| Asset                               | Platform              | Description                       |
+| ----------------------------------- | --------------------- | --------------------------------- |
+| `Code-Auto-*-darwin-x64.dmg`        | macOS (Intel)         | Disk image for installation       |
+| `Code-Auto-*-darwin-arm64.dmg`      | macOS (Apple Silicon) | Disk image for installation       |
+| `Code-Auto-*-darwin-*.zip`          | macOS                 | Zip archive                       |
+| `Code-Auto-*-linux-x86_64.AppImage` | Linux (x64)           | AppImage (portable)               |
+| `Code-Auto-*_amd64.deb`             | Linux (Debian/Ubuntu) | Debian package                    |
+| `Code-Auto-*-linux-x86_64.flatpak`  | Linux (Flatpak)       | Flatpak (sandboxed)               |
+| `Code-Auto-*-win32-x64.exe`         | Windows (x64)         | NSIS installer / portable         |
+| `checksums.sha256`                  | All                   | SHA256 checksums for verification |
 
-**Installation:** Download the DMG or ZIP, open it, and drag Code-Auto to Applications. The app requires **Node.js** (Homebrew, nvm, Volta, or fnm) to be installed — it spawns the Next.js server as a subprocess.
+**Installation:** Download the package for your platform. The app requires **Node.js** to be installed — it spawns the Next.js server as a subprocess. On macOS use Homebrew, nvm, Volta, or fnm; on Linux use your distro's package manager or nvm; on Windows use the official installer or nvm-windows.
 
 ### macOS: "Damaged" App Fix
 
@@ -188,7 +199,9 @@ git tag v2.2.0
 git push origin v2.2.0
 ```
 
-The workflow builds the app on macOS and uploads DMG and ZIP to the release. Add Apple Developer secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) to enable code signing and notarization — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+The workflow builds on platform-specific runners (no cross-compilation): Intel macOS (`macos-15-intel`), Apple Silicon macOS (`macos-15`), Linux (`ubuntu-latest`), and Windows (`windows-latest`). Each platform builds natively, avoiding Apple Silicon mksquashfs/Wine "bad CPU type" errors. Releases include SHA256 checksums and extract release notes from `CHANGELOG.md` when present. Add Apple Developer secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) to enable code signing and notarization for macOS — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
+**Manual trigger:** Go to Actions → Release → Run workflow to test the build pipeline without pushing a tag (dry run).
 
 **Manual upload:** Avoid `gh release upload` for large binaries — it uses multipart encoding that can corrupt DMG/ZIP files. See [docs/RELEASE.md](docs/RELEASE.md) for alternatives.
 
@@ -212,21 +225,28 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ### Available Scripts
 
-| Command                | Description                                         |
-| ---------------------- | --------------------------------------------------- |
-| `yarn start`           | Start Electron desktop app (Next.js dev + Electron) |
-| `yarn build`           | Build packaged Electron app (DMG + ZIP)             |
-| `yarn next:dev`        | Next.js dev server only (web-only mode)             |
-| `yarn next:build`      | Next.js production build only                       |
-| `yarn lint`            | Run ESLint                                          |
-| `yarn lint:fix`        | Run ESLint with auto-fix                            |
-| `yarn format`          | Format code with Prettier                           |
-| `yarn format:check`    | Check code formatting                               |
-| `yarn typecheck`       | Run TypeScript type check                           |
-| `yarn test`            | Run Vitest unit tests                               |
-| `yarn test:e2e`        | Run Playwright end-to-end tests                     |
-| `yarn test:e2e:ui`     | Run tests with Playwright UI                        |
-| `yarn test:e2e:headed` | Run tests in headed browser mode                    |
+| Command                  | Description                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `yarn start`             | Start Electron desktop app (Next.js dev + Electron)                                                            |
+| `yarn build`             | Build packaged Electron app for current platform (macOS: DMG/ZIP; Linux: AppImage/deb; Windows: NSIS/portable) |
+| `yarn build:mac`         | Build macOS only (DMG + ZIP)                                                                                   |
+| `yarn build:mac:x64`     | Build macOS Intel only                                                                                         |
+| `yarn build:mac:arm64`   | Build macOS Apple Silicon only                                                                                 |
+| `yarn build:linux`       | Build Linux only (AppImage + deb + Flatpak)                                                                    |
+| `yarn build:win`         | Build Windows only (NSIS + portable exe)                                                                       |
+| `yarn build:all`         | Build all platforms (macOS, Linux, Windows) — cross-compile from macOS                                         |
+| `yarn build:all:rosetta` | Build all platforms under Rosetta 2 (Apple Silicon workaround for mksquashfs/Wine)                             |
+| `yarn next:dev`          | Next.js dev server only (web-only mode)                                                                        |
+| `yarn next:build`        | Next.js production build only                                                                                  |
+| `yarn lint`              | Run ESLint                                                                                                     |
+| `yarn lint:fix`          | Run ESLint with auto-fix                                                                                       |
+| `yarn format`            | Format code with Prettier                                                                                      |
+| `yarn format:check`      | Check code formatting                                                                                          |
+| `yarn typecheck`         | Run TypeScript type check                                                                                      |
+| `yarn test`              | Run Vitest unit tests                                                                                          |
+| `yarn test:e2e`          | Run Playwright end-to-end tests                                                                                |
+| `yarn test:e2e:ui`       | Run tests with Playwright UI                                                                                   |
+| `yarn test:e2e:headed`   | Run tests in headed browser mode                                                                               |
 
 ### Git Hooks (Husky)
 
@@ -315,15 +335,19 @@ See [docs/KANBAN_WORKFLOW.md](docs/KANBAN_WORKFLOW.md) for a step-by-step breakd
 
 ```
 ├── build/                # Build-time assets
-│   └── entitlements.mac.plist   # macOS code signing entitlements
+│   ├── entitlements.mac.plist   # macOS code signing entitlements
+│   ├── icon.ico         # Windows icon (generated)
+│   └── icons/           # Linux icons (generated)
 ├── electron/             # Electron main process
 │   ├── main.js           # App window, Next.js server spawn, IPC
 │   └── preload.js        # Preload script for native APIs
 ├── scripts/               # Build and tooling scripts
-│   ├── after-pack.js     # Copies node_modules, removes broken symlinks
+│   ├── after-pack.js     # Copies node_modules, removes broken symlinks (all platforms)
 │   ├── build-dock-icon.js
+│   ├── build-icons.js    # Generates Windows .ico and Linux icons
 │   ├── clean-dist.js     # Robust dist-electron cleanup
-│   └── dev.js            # Dev server launcher
+│   ├── dev.js            # Dev server launcher
+│   └── prepare-build.js  # Cross-platform build prep (next build, copy)
 ├── src/
 │   ├── app/              # Next.js App Router
 │   │   ├── api/          # API routes
