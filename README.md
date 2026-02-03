@@ -1,7 +1,12 @@
-# code-automata™
+<div align="center">
+  <h2 style="display: inline-flex; align-items: center; gap: 10px; margin: 0;">
+    <img src="./public/rm.png" alt="code-automata™ logo" height="40" style="display: block;"/>
+    code-automata™
+  </h2>
+</div>
 
 <a href="https://youtu.be/jNYMC-HXDNA" target="_blank" rel="noopener noreferrer">
-  <img src="./public/code-automata-dark.png" alt="code-automata™ logo" width="160" />
+  <img src="./public/c_auto.png" alt="Code-Auto logo" />
 </a>
 
 _"Ever since the first MVP was shipped, code-automata™ has started modifying its **own code**..."_ — It felt weird at first, but it is fun to watch it ship its own features one by one to production. That's the power of a clean workflow design!
