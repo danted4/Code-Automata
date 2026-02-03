@@ -2,6 +2,7 @@
 # Uses platform-specific runners (no cross-compilation) to avoid Apple Silicon
 # mksquashfs/Wine "bad CPU type" errors. Based on Auto-Claude's approach.
 # Usage: git tag v2.2.0 && git push origin v2.2.0
+# If tag push does not trigger (e.g. workflow only on default branch): Actions → Release → Run workflow → enter tag (e.g. v2.2.4).
 name: Release
 
 on:
@@ -10,6 +11,10 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Tag to release (e.g. v2.2.4). Leave empty for dry run on default branch.'
+        required: false
+        type: string
       dry_run:
         description: 'Test build without creating release'
         required: false
@@ -22,6 +27,8 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -58,6 +65,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -94,6 +103,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -126,6 +137,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -153,6 +166,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
           fetch-depth: 0
 
       - name: Download all artifacts
@@ -181,7 +195,12 @@ jobs:
           CHANGELOG_FILE="CHANGELOG.md"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="dev"
+            if [ -n "${{ github.event.inputs.tag }}" ]; then
+              VERSION="${{ github.event.inputs.tag }}"
+              VERSION="${VERSION#v}"
+            else
+              VERSION="dev"
+            fi
           fi
 
           if [ ! -f "$CHANGELOG_FILE" ]; then
@@ -222,7 +241,7 @@ jobs:
           echo "$DELIM" >> $GITHUB_OUTPUT
 
       - name: Dry run summary
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag == ''
         run: |
           echo "## Dry Run Complete" >> $GITHUB_STEP_SUMMARY
           echo "Build artifacts created successfully:" >> $GITHUB_STEP_SUMMARY
@@ -235,9 +254,10 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Create Release
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: flattened/*
           body: ${{ steps.changelog.outputs.body }}
           fail_on_unmatched_files: false

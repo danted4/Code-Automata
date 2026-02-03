@@ -1,22 +1,23 @@
 <div align="center">
   <h2 style="display: inline-flex; align-items: center; gap: 10px; margin: 0;">
     <img src="./public/rm.png" alt="code-automata™ logo" height="40" style="display: block;"/>
-    code-automata™
+    <p>&nbsp;&nbsp;&nbsp;&nbsp;Code-Automata ™ </p>
+    <p></p>
   </h2>
 </div>
 
 <a href="https://youtu.be/jNYMC-HXDNA" target="_blank" rel="noopener noreferrer">
-  <img src="./public/ca.png" alt="Code-Auto logo" />
+  <img src="./public/ca.png" alt="Code-Automata logo" />
 </a>
 
-_"Ever since the first MVP was shipped, code-automata™ has started modifying its **own code**..."_ — It felt weird at first, but it is fun to watch it ship its own features one by one to production. That's the power of a clean workflow design!
+_"Ever since the first MVP was shipped, Code-Automata™ has started modifying its **own code**..."_ — It felt weird at first, but it is fun to watch it ship its own features one by one to production. That's the power of a clean workflow design!
 
 ---
 
 ## Table of Contents
 
 - [1. Introduction](#1-introduction)
-  - [What is code-automata™](#what-is-code-automata)
+  - [What is Code-Automata™](#what-is-Code-Automata)
   - [Features](#features)
   - [Architecture](#architecture)
   - [Workflow](#workflow)
@@ -45,7 +46,7 @@ _"Ever since the first MVP was shipped, code-automata™ has started modifying i
 
 ## 1. Introduction
 
-### What is code-automata™
+### What is Code-Automata™
 
 Code-Automata is a **desktop app** (Electron) for orchestrating AI coding tasks through a structured 5-phase Kanban workflow. Each task runs in an isolated git worktree with its own branch, ensuring clean separation between concurrent tasks.
 
