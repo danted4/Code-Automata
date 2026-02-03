@@ -14,10 +14,6 @@ All notable changes to Code-Automata are documented here.
 
 - Documentation and doc references updated across the repo for consistency.
 
----
-
-## 2.2.2
-
 ### New Features
 
 - **Multi-platform builds** — Native builds for macOS (Intel & Apple Silicon), Linux (AppImage, deb, Flatpak), and Windows (NSIS, portable exe). Each platform builds on its own CI runner (no cross-compilation).
