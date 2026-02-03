@@ -1,7 +1,7 @@
 <div align="center">
   <h2 style="display: inline-flex; align-items: center; gap: 10px; margin: 0;">
     <img src="./public/rm.png" alt="code-automata™ logo" height="40" style="display: block;"/>
-    <p>&nbsp;&nbsp;&nbsp;&nbsp;code-automata ™ </p>
+    <p>&nbsp;&nbsp;&nbsp;&nbsp;Code-Automata ™ </p>
     <p></p>
   </h2>
 </div>
