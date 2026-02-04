@@ -191,7 +191,7 @@ function getIconPath() {
   const base = path.join(app.getAppPath(), 'public');
   const useDark = nativeTheme.shouldUseDarkColors;
   const dockIcon = useDark ? 'code-automata-dock.png' : 'code-automata-dock-light.png';
-  const fallbackIcon = 'code-automata-dark.png';
+  const fallbackIcon = 'code-automata-dock.png';
   const dockPath = path.join(base, dockIcon);
   const fallbackPath = path.join(base, fallbackIcon);
   if (fs.existsSync(dockPath)) return dockPath;

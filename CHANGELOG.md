@@ -4,6 +4,22 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 2.2.4
+
+### Improvements
+
+- **Curved icon everywhere (squircle)** — The app now uses the same curved-radius icon on all platforms. `build-dock-icon.js` generates `code-automata-dock.png` and `code-automata-dock-light.png` from the main icon (~22% rounded corners and zoom). This icon is used for the macOS app bundle (Finder, dock), dock/menu bar at runtime, Windows `.ico`, Linux PNGs, and fallback; the square icon is only an intermediate build step.
+- **Next.js standalone build** — `prepare-build.js` flattens nested `.next/standalone` when Next.js outputs a duplicated structure, so the packaged app always finds `server.js` in the expected location.
+- **Node.js 18+ for packaged app** — Main process prefers Node 18+ (required for Next.js 15), with nvm-aware ordering (newest first) and fallback to any installed version. Resolves correct binary when multiple Node versions exist.
+- **Server startup** — Startup timeout increased to 45 seconds. On failure (node not found, wrong version, or timeout), the loading screen shows clear instructions to install Node 18+, add it to PATH, and restart the app.
+- **Release workflow** — Manual "Run workflow" can accept a tag (e.g. `v2.2.4`) to build and publish that release when tag push does not trigger. Note added that runs may appear 5–15 minutes after tag push.
+
+### Build & Release
+
+- **Icon pipeline** — Single source `public/code-automata.png`; `build-mac-icons.js` produces `code-automata-dark.png` (1024×1024); `build-dock-icon.js` produces the curved `code-automata-dock.png` used for the app icon, Windows/Linux, and dock. All builds run the dock-icon step so the curved asset exists before `build-icons.js`. `public/**/*` included in packaged app.
+
+---
+
 ## 2.2.3
 
 ### New logo
