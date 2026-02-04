@@ -22,15 +22,40 @@ if (fs.existsSync(distDir)) {
 // 2. Run next build
 execSync('yarn next:build', { stdio: 'inherit', cwd });
 
-// 3. Copy public into standalone
+// 3. Validate and normalize .next/standalone
 if (!fs.existsSync(standaloneDir)) {
   console.error(
     'Error: .next/standalone not found. Ensure next.config.js has output: "standalone".'
   );
   process.exit(1);
 }
+
+// Next.js standalone can occasionally end up nested like:
+// .next/standalone/.next/standalone/server.js
+// Flatten that structure so Electron sees server.js at .next/standalone/server.js.
+const serverJsPath = path.join(standaloneDir, 'server.js');
+if (!fs.existsSync(serverJsPath)) {
+  const nestedStandalone = path.join(standaloneDir, '.next', 'standalone');
+  const nestedServerJs = path.join(nestedStandalone, 'server.js');
+  if (fs.existsSync(nestedServerJs)) {
+    console.log('Flattening nested .next/standalone structure...');
+    const entries = fs.readdirSync(nestedStandalone);
+    for (const entry of entries) {
+      const src = path.join(nestedStandalone, entry);
+      const dest = path.join(standaloneDir, entry);
+      fs.cpSync(src, dest, { recursive: true });
+    }
+    // Remove the extra nested .next directory to avoid confusion
+    const nestedNextDir = path.join(standaloneDir, '.next');
+    if (fs.existsSync(nestedNextDir)) {
+      fs.rmSync(nestedNextDir, { recursive: true, force: true });
+    }
+  }
+}
+
+// 4. Copy public into standalone
 fs.cpSync(publicDir, path.join(standaloneDir, 'public'), { recursive: true });
 
-// 4. Copy .next/static into standalone/.next/
+// 5. Copy .next/static into standalone/.next/
 fs.mkdirSync(path.dirname(standaloneStaticDir), { recursive: true });
 fs.cpSync(staticDir, standaloneStaticDir, { recursive: true });

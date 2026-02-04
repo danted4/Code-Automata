@@ -205,7 +205,7 @@ function getIconPath() {
  * @param {number} timeoutMs
  * @returns {Promise<boolean>}
  */
-function waitForServer(url, timeoutMs = 30000) {
+function waitForServer(url, timeoutMs = 45000) {
   const start = Date.now();
   return new Promise((resolve) => {
     function tryConnect() {
@@ -234,75 +234,123 @@ function waitForServer(url, timeoutMs = 30000) {
 }
 
 /**
- * Resolve node binary - when launched from GUI, PATH is minimal.
+ * Parse `node -v` output.
+ * @param {string} bin
+ * @returns {{ raw: string, major: number } | null}
+ */
+function getNodeVersion(bin) {
+  try {
+    const out = execSync(`"${bin}" -v`, {
+      encoding: 'utf8',
+      timeout: 2000,
+      env: process.env,
+    })
+      .trim()
+      .split('\n')[0]
+      .trim();
+    const match = out.match(/^v(\d+)\./);
+    if (!match) return null;
+    return { raw: out, major: parseInt(match[1], 10) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve node binary and prefer Node 18+ (required for Next.js 15).
+ * Falls back to the first available version when 18+ is not found.
+ * @returns {{ path: string, version: { raw: string, major: number } | null }}
  */
 function resolveNodeBinary() {
   const home = os.homedir();
   const platform = process.platform;
-  let candidates = [];
+  const candidates = [];
+
+  const addCandidate = (p) => {
+    if (p && !candidates.includes(p)) {
+      candidates.push(p);
+    }
+  };
 
   if (platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
     const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-    candidates = [
-      path.join(programFiles, 'nodejs', 'node.exe'),
-      path.join(localAppData, 'Programs', 'node', 'node.exe'),
-      path.join(home, '.volta', 'bin', 'node.exe'),
-      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'node.exe'),
-    ];
+    addCandidate(path.join(programFiles, 'nodejs', 'node.exe'));
+    addCandidate(path.join(localAppData, 'Programs', 'node', 'node.exe'));
+    addCandidate(path.join(home, '.volta', 'bin', 'node.exe'));
+    addCandidate(path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'node.exe'));
     try {
       const nvmDir = path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'nvm');
       if (fs.existsSync(nvmDir)) {
         const nvmExe = path.join(nvmDir, 'node.exe');
-        if (fs.existsSync(nvmExe)) candidates.push(nvmExe);
+        if (fs.existsSync(nvmExe)) addCandidate(nvmExe);
       }
     } catch {}
   } else if (platform === 'linux') {
-    candidates = [
-      '/usr/bin/node',
-      '/usr/local/bin/node',
-      path.join(home, '.volta', 'bin', 'node'),
-      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
-      path.join(home, '.local', 'share', 'nvm', 'current', 'bin', 'node'),
-    ];
+    addCandidate('/usr/bin/node');
+    addCandidate('/usr/local/bin/node');
+    addCandidate(path.join(home, '.volta', 'bin', 'node'));
+    addCandidate(
+      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node')
+    );
+    addCandidate(path.join(home, '.local', 'share', 'nvm', 'current', 'bin', 'node'));
     try {
       const nvmDir = path.join(home, '.nvm', 'versions', 'node');
       if (fs.existsSync(nvmDir)) {
         const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
         versions.sort((a, b) => b.localeCompare(a));
         for (const v of versions) {
-          candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+          addCandidate(path.join(nvmDir, v, 'bin', 'node'));
         }
       }
     } catch {}
   } else {
-    candidates = [
-      '/opt/homebrew/bin/node',
-      '/usr/local/bin/node',
-      path.join(home, '.volta', 'bin', 'node'),
-      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node'),
-    ];
+    addCandidate('/opt/homebrew/bin/node');
+    addCandidate('/usr/local/bin/node');
+    addCandidate(path.join(home, '.volta', 'bin', 'node'));
+    addCandidate(
+      path.join(home, '.fnm', 'node-versions', 'current', 'installation', 'bin', 'node')
+    );
     try {
       const nvmDir = path.join(home, '.nvm', 'versions', 'node');
       if (fs.existsSync(nvmDir)) {
         const versions = fs.readdirSync(nvmDir).filter((v) => v.startsWith('v'));
         versions.sort((a, b) => b.localeCompare(a));
         for (const v of versions) {
-          candidates.push(path.join(nvmDir, v, 'bin', 'node'));
+          addCandidate(path.join(nvmDir, v, 'bin', 'node'));
         }
       }
     } catch {}
   }
 
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
+  // Finally, whatever node the PATH resolves to.
   try {
     const cmd = platform === 'win32' ? 'where node' : 'which node';
     const out = execSync(cmd, { encoding: 'utf8', env: process.env }).trim().split('\n')[0]?.trim();
-    if (out && fs.existsSync(out)) return out;
+    if (out) addCandidate(out);
   } catch {}
-  return platform === 'win32' ? 'node.exe' : 'node';
+
+  /** @type {{ path: string, version: { raw: string, major: number } | null }[]} */
+  const withVersion = [];
+  for (const c of candidates) {
+    if (!fs.existsSync(c)) continue;
+    const version = getNodeVersion(c);
+    withVersion.push({ path: c, version });
+  }
+
+  const preferred = withVersion
+    .filter((v) => v.version && v.version.major >= 18)
+    .sort((a, b) => (b.version.major || 0) - (a.version.major || 0));
+  const fallback = withVersion
+    .filter((v) => !v.version || v.version.major < 18)
+    .sort((a, b) => (b.version?.major || 0) - (a.version?.major || 0));
+
+  if (preferred.length > 0) return preferred[0];
+  if (fallback.length > 0) return fallback[0];
+
+  // Last resort: hope PATH/node works even if we couldn't resolve or parse version.
+  const fallbackName = platform === 'win32' ? 'node.exe' : 'node';
+  return { path: fallbackName, version: null };
 }
 
 /**
@@ -332,7 +380,9 @@ async function startNextServerInBackground() {
   appUrl = url;
   process.env.NEXT_PUBLIC_APP_URL = url;
 
-  const nodeBin = resolveNodeBinary();
+  const nodeRuntime = resolveNodeBinary();
+  const nodeBin = nodeRuntime.path;
+  const nodeVersion = nodeRuntime.version;
   try {
     nextServerProcess = spawn(nodeBin, ['server.js'], {
       cwd: standaloneDir,
@@ -346,20 +396,69 @@ async function startNextServerInBackground() {
     });
     nextServerProcess.on('error', (err) => {
       console.error('Next.js server spawn error:', err);
-      showLoadingError('Failed to start server.');
+      const reason =
+        err && err.code === 'ENOENT'
+          ? 'Node.js could not be found on this system.'
+          : 'Failed to start the embedded Next.js server.';
+      const msgLines = [
+        reason,
+        '',
+        'Code-Automata requires Node.js 18 or newer to run the bundled Next.js 15 server.',
+      ];
+      if (nodeVersion?.raw) {
+        msgLines.push(`Detected Node.js version: ${nodeVersion.raw}`);
+      } else {
+        msgLines.push('Could not detect an installed Node.js version.');
+      }
+      msgLines.push(
+        '',
+        'Please install Node.js 18+ (e.g. via nvm, Volta, or the official installer),',
+        'ensure the `node` binary is on your PATH or installed in a standard location,',
+        'then restart Code-Automata.'
+      );
+      showLoadingError(msgLines.join('\n'));
     });
     nextServerProcess.stdout?.on('data', (d) => process.stdout.write(d));
     nextServerProcess.stderr?.on('data', (d) => process.stderr.write(d));
 
-    const ready = await waitForServer(url, 30000);
+    const ready = await waitForServer(url, 45000);
     if (ready && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(url);
     } else if (!ready) {
-      showLoadingError('Server failed to start in time.');
+      const msgLines = [
+        'Server failed to start within 45 seconds.',
+        '',
+        'Code-Automata requires Node.js 18 or newer to run the bundled Next.js 15 server.',
+      ];
+      if (nodeVersion?.raw) {
+        msgLines.push(`Detected Node.js version: ${nodeVersion.raw}`);
+      } else {
+        msgLines.push('Could not detect an installed Node.js version.');
+      }
+      msgLines.push(
+        '',
+        'Please install Node.js 18+ and ensure the `node` binary is available on your PATH,',
+        'then quit and restart Code-Automata.'
+      );
+      showLoadingError(msgLines.join('\n'));
     }
   } catch (err) {
     console.error('Next.js init error:', err);
-    showLoadingError(err?.message || 'Failed to start server.');
+    const msgLines = [
+      'Failed to start the embedded Next.js server.',
+      '',
+      'Code-Automata requires Node.js 18 or newer to run the bundled Next.js 15 server.',
+    ];
+    if (nodeVersion?.raw) {
+      msgLines.push(`Detected Node.js version: ${nodeVersion.raw}`);
+    }
+    msgLines.push(
+      '',
+      err?.message || 'An unexpected error occurred while starting the server.',
+      '',
+      'Please install Node.js 18+ and ensure it is on your PATH, then restart Code-Automata.'
+    );
+    showLoadingError(msgLines.join('\n'));
   }
 }
 
