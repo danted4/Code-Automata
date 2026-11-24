@@ -6,9 +6,9 @@ Guidance for coding agents working in this repository.
 
 Code-Automata runs AI coding agents through a five-phase Kanban workflow, one git worktree per task, inside a project (a git repository) the user opens. Persistence is files on disk under that project's `.code-automata/`, never this repo's working directory.
 
-This branch (`v3-tauri`) is **3.0**, a rewrite in progress: a Rust core plus a React UI in a Tauri 2 desktop app. 2.2.4 (Electron + Next.js) is on `main`. 3.0 owes it nothing: no migration, no compatibility, and its design decisions are not binding.
+This is **3.0**: a Rust core plus a React UI in a Tauri 2 desktop app. 2.2.4 (Electron + Next.js) is on the `main-backup` branch. 3.0 owes it nothing: no migration, no compatibility, and its design decisions are not binding.
 
-License: **AGPL-3.0-or-later**. Repo: [danted4/Code-Automata](https://github.com/danted4/Code-Automata).
+License: **MIT**. Repo: [danted4/Code-Automata](https://github.com/danted4/Code-Automata).
 
 ## Layout
 

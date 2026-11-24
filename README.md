@@ -15,11 +15,11 @@ _"Ever since the first MVP was shipped, Code-Automata™ has started modifying i
 ---
 
 > [!IMPORTANT]
-> This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. The desktop app builds from source; installers are not released yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
+> **Code-Automata 3.0** is a rewrite: a Rust core and a Tauri desktop app replace the Electron app of 2.x. It does not read 2.x task data. The last 2.x version, 2.2.4, stays on the [releases page](https://github.com/danted4/Code-Automata/releases) and its code on the [`main-backup`](https://github.com/danted4/Code-Automata/tree/main-backup) branch.
 
 ## Install
 
-3.0 is not released yet; until then build it from source (below). Installers will be on the [releases page](https://github.com/danted4/Code-Automata/releases):
+Download the installer for your platform from the [latest release](https://github.com/danted4/Code-Automata/releases/latest):
 
 | Platform | File |
 | --- | --- |
@@ -96,4 +96,4 @@ cargo build && cd ui && yarn build && yarn e2e
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

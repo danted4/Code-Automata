@@ -4,6 +4,29 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 3.0.0
+
+A rewrite. The Electron + Next.js app is replaced by a Rust core and a Tauri desktop app, and runs that stop halfway now continue where they left off.
+
+### What changes for you
+
+- **Small, native installers.** One macOS DMG for Apple Silicon and Intel (about 14 MB, was 210 MB per architecture), a Windows installer of about 5 MB that needs no admin rights, and an AppImage and a deb for Linux. Node.js is no longer needed. Idle memory is about 230 MB, was about 560 MB.
+- **Runs survive closing the app, a crash or Pause.** Every task's position is on disk. Resume continues the same subtask with the agent's own session and its partial work; finished subtasks never run again.
+- **A deterministic workflow.** Planning (questions, plan, approval), one agent run per subtask with a checkpoint commit and a handoff note for the next, automated checks, then read-only QA reviewers. A failing check or QA verdict starts a rework round, shown as "Reworking (n/2)", up to two rounds.
+- **Pull requests.** Checkpoints are squashed into one commit and pushed. After a rework, Human Review offers "Update pull request" and says when the PR is up to date.
+- **Worktrees.** One git worktree per task, as before. A done task's worktree can be removed to free space; reopening the task brings it back.
+- **Updates.** The app checks for a new stable release once at launch and asks before installing it.
+- **Agents.** Claude Code, Cursor's agent CLI and Amp. Your own hooks and connectors in Claude Code do not reach task agents.
+- **License:** MIT (was AGPL-3.0-or-later).
+
+### Things to know
+
+- 3.0 does not read task data from 2.x.
+- The installers are not code-signed: macOS asks you to allow the app once in System Settings → Privacy & Security, Windows SmartScreen asks once ("More info" → "Run anyway").
+- Git hooks in your repository run as git normally runs them, including on the agents' checkpoint commits and the pull request push, with your login shell's PATH.
+
+---
+
 ## 2.2.4
 
 ### Improvements

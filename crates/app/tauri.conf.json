@@ -29,7 +29,8 @@
     "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "shortDescription": "AI coding agents on a Kanban board, one git worktree per task",
-    "copyright": "AGPL-3.0-or-later",
+    "copyright": "Copyright (c) 2026 Kanav Sharma",
+    "license": "MIT",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
