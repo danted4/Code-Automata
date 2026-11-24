@@ -78,8 +78,7 @@ export function KanbanBoard() {
 
     if (!task || task.phase === newPhase) return;
 
-    await updateTaskPhase(taskId, newPhase);
-    const error = useTaskStore.getState().error;
+    const error = await updateTaskPhase(taskId, newPhase);
     if (error) toast.error(`Cannot move the task: ${error}`);
   };
 
