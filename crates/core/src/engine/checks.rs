@@ -170,7 +170,11 @@ async fn run_one(
     };
     drop(_group); // stop anything left in the group, so the pipes close
     for reader in readers.into_iter().flatten() {
-        let _ = tokio::time::timeout(DRAIN, reader).await;
+        let abort = reader.abort_handle();
+        if tokio::time::timeout(DRAIN, reader).await.is_err() {
+            // Something outside the group (a setsid daemon) still holds the pipe; stop reading.
+            abort.abort();
+        }
     }
     let mut text = {
         let buf = output.lock().unwrap_or_else(|p| p.into_inner());

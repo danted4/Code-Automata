@@ -545,6 +545,15 @@ impl Task {
                     s.id
                 )));
             }
+            if s.kind == SubtaskKind::Dev
+                && s.status == SubtaskStatus::Done
+                && s.checkpoint.is_none()
+            {
+                return Err(Invalid(format!(
+                    "finished dev subtask {:?} has no checkpoint",
+                    s.id
+                )));
+            }
             if s.skipped_reason.is_some() && s.status != SubtaskStatus::Skipped {
                 return Err(Invalid(format!(
                     "subtask {:?} has a skip reason but is not skipped",

@@ -15,6 +15,11 @@ name = "ca_core"
 name = "mock-agent"
 path = "src/bin/mock_agent.rs"
 
+# Runs the engine on a project from the command line (manual runs, and the crash test).
+[[bin]]
+name = "ca-engine"
+path = "src/bin/ca_engine.rs"
+
 [lints]
 workspace = true
 
@@ -22,7 +27,7 @@ workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.30", default-features = false, features = ["fs", "signal", "process"] }

@@ -79,7 +79,9 @@ fn run() -> i32 {
             .append(true)
             .open(record)
         {
-            let _ = writeln!(f, "{line}");
+            // One write of the whole line: being killed mid-line (a pause right after start)
+            // must not leave half a record for the next invocation to run into.
+            let _ = f.write_all(format!("{line}\n").as_bytes());
         }
     }
 

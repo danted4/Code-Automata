@@ -40,7 +40,7 @@ async fn settings_default_round_trip_and_strictness() {
         name: "test".into(),
         command: "cargo test".into(),
     }]);
-    custom.timeouts.idle_minutes = 5;
+    custom.timeouts.idle_minutes = 0.5;
     custom.save(&project).await.unwrap();
     assert_eq!(Settings::load(&project).await.unwrap(), custom);
     assert!(
@@ -195,6 +195,6 @@ async fn one_timeout_can_be_set_alone() {
     )
     .unwrap();
     let s = Settings::load(&project).await.unwrap();
-    assert_eq!(s.timeouts.check_minutes, 30);
-    assert_eq!(s.timeouts.idle_minutes, 10);
+    assert!((s.timeouts.check_minutes - 30.0).abs() < f64::EPSILON);
+    assert!((s.timeouts.idle_minutes - 10.0).abs() < f64::EPSILON);
 }

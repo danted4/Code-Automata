@@ -45,7 +45,15 @@ cargo test --test git worktree_lifecycle      # one integration test
 - Prompts go on stdin, never in arguments. Claude runs with project settings only and no MCP servers, so the user's own hooks and connectors never reach task agents.
 - Live tests make real model calls: `cargo test --test live_agents -- --ignored --test-threads=1`. Amp spends credit; keep it to `--mode low`.
 
-## How a task actually runs
+`crates/core/src/engine/` is the run engine (`Engine`):
+
+- `step::next_step(task, settings)` is a pure function that decides the next step from the task file alone. Change behaviour there and in its table tests, not in the driver.
+- `driver.rs` executes one step at a time. Each step's result, and clearing its run, go in one `TaskStore::update`. A run record exists only while a step is in progress or halted (`paused` / `interrupted` / `failed`).
+- `Engine::open` takes `.code-automata/engine.lock` (one window per project) and reconciles: runs left by another process become `interrupted`, and their orphaned agents are killed if pid and start time match. Nothing restarts on its own; the user resumes.
+- Review (QA) and read-only (planning) runs have their changes, and any commits made during the run, discarded afterwards whatever the provider. Checks run against the last dev checkpoint and fail clearly if HEAD is elsewhere.
+- Acceptance tests run the whole engine on the mock agent (`tests/engine.rs`); the crash test drives the `ca-engine` binary in a child process and SIGKILLs it. One live run through Claude: `cargo test --test live_engine -- --ignored --nocapture`.
+
+## How a task actually runs (2.2.x, `main`)
 
 The orchestration is not in `src/lib`. It lives inside the route handlers under `src/app/api/agents/`, as closures that keep running after the HTTP response is sent:
 

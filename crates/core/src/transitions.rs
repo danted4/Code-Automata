@@ -58,6 +58,12 @@ pub fn check_move(task: &Task, to: Phase, mover: Mover) -> Result<()> {
     if mover == Mover::User && task.has_active_run() {
         return deny("an agent is working on it; pause it first");
     }
+    if mover == Mover::User
+        && to == Phase::InProgress
+        && matches!(from, Phase::AiReview | Phase::HumanReview)
+    {
+        return deny("say what to fix: request a rework with feedback instead");
+    }
 
     match (from, to) {
         (Phase::Planning, Phase::InProgress) => {
@@ -94,18 +100,8 @@ pub fn check_move(task: &Task, to: Phase, mover: Mover) -> Result<()> {
 pub fn apply_move(task: &mut Task, to: Phase, mover: Mover) -> Result<()> {
     check_move(task, to, mover)?;
     let from = task.phase;
-    if mover == Mover::User && from != to {
-        match to {
-            Phase::Planning => replan(task),
-            Phase::InProgress if from != Phase::Planning => {
-                return Err(CoreError::Transition {
-                    from,
-                    to,
-                    reason: "say what to fix: request a rework with feedback instead".into(),
-                });
-            }
-            _ => {}
-        }
+    if mover == Mover::User && from != to && to == Phase::Planning {
+        replan(task);
     }
     task.phase = to;
     if task.run.as_ref().is_some_and(|r| r.kind.phase() != to) {

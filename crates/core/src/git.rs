@@ -659,6 +659,56 @@ pub async fn discard_changes(worktree: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Like [`discard_changes`], and also drop any commits made after `commit` (an agent that ran
+/// `git commit` during a run that may not change anything).
+pub async fn discard_to(worktree: &Path, commit: &str) -> Result<()> {
+    run_git(worktree, &["reset", "--hard", "-q", commit]).await?;
+    run_git(worktree, &["clean", "-fdq"]).await?;
+    Ok(())
+}
+
+/// Subject of the temporary commit that parks partial work (see [`park_changes`]).
+pub const PARKED_SUBJECT: &str = "code-automata: parked partial work";
+
+/// Commit everything in the worktree as a temporary "parked" commit, so a read-only look at it
+/// (which discards changes afterwards) cannot lose it. Returns false when there was nothing to park.
+pub async fn park_changes(worktree: &Path) -> Result<bool> {
+    run_git(worktree, &["add", "-A"]).await?;
+    if git_succeeds(worktree, &["diff", "--cached", "--quiet"]).await? {
+        return Ok(false);
+    }
+    run_with_identity(
+        worktree,
+        &[
+            "commit",
+            "--no-verify",
+            "--no-gpg-sign",
+            "-q",
+            "-m",
+            PARKED_SUBJECT,
+        ],
+    )
+    .await?;
+    Ok(true)
+}
+
+/// Undo [`park_changes`]: the parked work becomes uncommitted again, exactly as it was (new files
+/// become untracked again). Does nothing unless HEAD is a parked commit, so it is safe to call
+/// after a crash at any point.
+pub async fn unpark_changes(worktree: &Path) -> Result<()> {
+    let subject = run_git(worktree, &["log", "-1", "--format=%s"]).await?;
+    if subject == PARKED_SUBJECT {
+        run_git(worktree, &["reset", "-q", "--mixed", "HEAD~1"]).await?;
+    }
+    Ok(())
+}
+
+/// Run git with a time limit (for network commands such as push).
+pub(crate) async fn run_git_timeout(cwd: &Path, args: &[&str], limit: Duration) -> Result<String> {
+    let out = check(args, git_output(cwd, args, Some(limit)).await?)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
 /// Where `branch` left the main checkout's history: used to recover a task's base commit when its
 /// worktree exists but the commit was never recorded (a crash right after creating it).
 pub async fn fork_point(repo: &Path, branch: &str) -> Result<String> {

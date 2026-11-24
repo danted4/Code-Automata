@@ -21,26 +21,27 @@ pub struct CheckCommand {
 }
 
 /// Each field falls back to its default on its own, so setting one timeout leaves the rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Minutes may be fractional (`0.5` is 30 seconds).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct Timeouts {
     /// No output for this long ends a run.
-    pub idle_minutes: u32,
+    pub idle_minutes: f64,
     /// A tool call open with no output for this long ends a run.
-    pub tool_minutes: u32,
+    pub tool_minutes: f64,
     /// Any single agent run longer than this is ended.
-    pub total_minutes: u32,
+    pub total_minutes: f64,
     /// Any single check command longer than this fails.
-    pub check_minutes: u32,
+    pub check_minutes: f64,
 }
 
 impl Default for Timeouts {
     fn default() -> Self {
         Timeouts {
-            idle_minutes: 10,
-            tool_minutes: 30,
-            total_minutes: 120,
-            check_minutes: 10,
+            idle_minutes: 10.0,
+            tool_minutes: 30.0,
+            total_minutes: 120.0,
+            check_minutes: 10.0,
         }
     }
 }
@@ -60,8 +61,8 @@ impl Timeouts {
     }
 }
 
-fn minutes(m: u32) -> Duration {
-    Duration::from_secs(u64::from(m) * 60)
+fn minutes(m: f64) -> Duration {
+    Duration::from_secs_f64(m * 60.0)
 }
 
 /// Replacements for the editable part of two prompts. The engine always appends its own output
@@ -75,7 +76,7 @@ pub struct PromptOverrides {
     pub subtasks: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
     pub schema: u32,
@@ -159,12 +160,17 @@ impl Settings {
             return bad("maxConcurrentAgents must be at least 1");
         }
         let t = self.timeouts;
-        if t.idle_minutes == 0
-            || t.tool_minutes == 0
-            || t.total_minutes == 0
-            || t.check_minutes == 0
+        let ok = |m: f64| m.is_finite() && m > 0.0 && m <= 24.0 * 60.0;
+        if ![
+            t.idle_minutes,
+            t.tool_minutes,
+            t.total_minutes,
+            t.check_minutes,
+        ]
+        .into_iter()
+        .all(ok)
         {
-            return bad("timeouts must be at least 1 minute");
+            return bad("timeouts must be more than 0 and at most 24 hours");
         }
         if let Some(checks) = &self.checks
             && checks

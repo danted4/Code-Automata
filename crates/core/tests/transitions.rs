@@ -81,9 +81,11 @@ fn guards() {
     t.subtasks.push(sub("q1", Qa, Finished));
     assert!(check_move(&t, HumanReview, Mover::Engine).is_ok());
 
-    // rework is allowed when nothing is running; same phase is a no-op
+    // a bare rework drag needs feedback (the engine's request_rework); the engine may move it
     let t = task(HumanReview, vec![sub("d1", Dev, Finished)]);
-    assert!(check_move(&t, InProgress, Mover::User).is_ok());
+    assert!(check_move(&t, InProgress, Mover::User).is_err());
+    assert!(check_move(&t, InProgress, Mover::Engine).is_ok());
+    // same phase is a no-op
     assert!(check_move(&t, HumanReview, Mover::User).is_ok());
 }
 
