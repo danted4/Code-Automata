@@ -31,7 +31,8 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
 impl TempRepo {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let path = std::fs::canonicalize(dir.path()).unwrap();
+        // The same plain form (no `\\?\` on Windows) the project code uses.
+        let path = ca_core::util::plain_path(std::fs::canonicalize(dir.path()).unwrap());
         git(&path, &["init", "-q", "-b", "main"]);
         git(&path, &["config", "user.name", "Test"]);
         git(&path, &["config", "user.email", "test@example.com"]);
