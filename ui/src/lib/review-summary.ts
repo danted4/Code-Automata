@@ -89,6 +89,42 @@ export function reviewSummary(task: Task): ReviewSummary {
   return { built, skipped, checks, checksStale, qa, unresolved, attention };
 }
 
+/** The pull request section's one action: open a PR, or bring the open one up to date. */
+export type PullRequestAction = {
+  kind: 'create' | 'update';
+  label: string;
+  busyLabel: string;
+  help: string;
+  progress: string;
+  done: string;
+};
+
+/**
+ * Work done after the PR was opened (a rework round) is committed in the worktree but not in the
+ * PR until it is pushed again, so an open PR always offers the update: it squashes everything
+ * into the PR's one commit, pushes the branch and refreshes the description.
+ */
+export function pullRequestAction(prUrl: string | null, branch: string): PullRequestAction {
+  if (!prUrl) {
+    return {
+      kind: 'create',
+      label: 'Create pull request',
+      busyLabel: 'Creating pull request…',
+      help: `Squash the checkpoints into one commit, push ${branch} and open a pull request with the GitHub CLI.`,
+      progress: 'Squashing, pushing and opening the pull request. This can take a minute.',
+      done: 'Pull request opened',
+    };
+  }
+  return {
+    kind: 'update',
+    label: 'Update pull request',
+    busyLabel: 'Updating pull request…',
+    help: `Work done since the pull request was opened, such as a rework round, is not in it until you update it: this squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
+    progress: 'Squashing and pushing to the pull request. This can take a minute.',
+    done: 'Pull request updated',
+  };
+}
+
 /** The task's branch. */
 export function taskBranch(taskId: string): string {
   return `code-automata/${taskId}`;

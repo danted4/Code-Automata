@@ -3,6 +3,7 @@ import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 import {
   lastDevCheckpoint,
+  pullRequestAction,
   reviewSummary,
   taskBranch,
   unresolvedHeading,
@@ -120,5 +121,22 @@ describe('helpers', () => {
     expect(worktreePath('/repo/', 'task-1')).toBe('/repo/.code-automata/worktrees/task-1');
     expect(worktreePath('C:\\repo', 'task-1')).toBe('C:\\repo\\.code-automata\\worktrees\\task-1');
     expect(worktreePath(null, 'task-1')).toBeNull();
+  });
+});
+
+describe('pullRequestAction', () => {
+  it('creates a pull request when there is none', () => {
+    const a = pullRequestAction(null, 'code-automata/t1');
+    expect(a.kind).toBe('create');
+    expect(a.label).toBe('Create pull request');
+    expect(a.help).toContain('code-automata/t1');
+  });
+
+  it('offers to push new work to an open pull request', () => {
+    const a = pullRequestAction('https://github.com/o/r/pull/1', 'code-automata/t1');
+    expect(a.kind).toBe('update');
+    expect(a.label).toBe('Update pull request');
+    expect(a.help).toMatch(/rework/);
+    expect(a.done).toBe('Pull request updated');
   });
 });

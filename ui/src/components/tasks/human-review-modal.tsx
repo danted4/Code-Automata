@@ -40,7 +40,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
-import { reviewSummary, taskBranch, worktreePath } from '@/lib/review-summary';
+import { pullRequestAction, reviewSummary, taskBranch, worktreePath } from '@/lib/review-summary';
 import { PHASE_LABELS } from '@/lib/task-view';
 import { useProjectStore } from '@/store/project-store';
 import { act, useTask, useTaskStore } from '@/store/task-store';
@@ -63,6 +63,7 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   const branch = taskBranch(task.id);
   const inReview = task.phase === 'human_review';
   const prUrl = task.pullRequest?.url ?? createdUrl;
+  const prAction = pullRequestAction(prUrl, branch);
 
   const setOpen = (next: boolean) => {
     if (!next) setFeedback('');
@@ -83,7 +84,7 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
     try {
       const { url } = await api.tasks.pullRequest(task.id);
       setCreatedUrl(url);
-      toast.success('Pull request opened', { description: url });
+      toast.success(prAction.done, { description: url });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));
       } catch {
@@ -361,7 +362,7 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
                   className="p-4 space-y-3"
                   style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
                 >
-                  {prUrl ? (
+                  {prUrl && (
                     <a
                       href={prUrl}
                       target="_blank"
@@ -373,42 +374,42 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
                       <ExternalLink className="w-4 h-4" />
                       Open pull request
                     </a>
-                  ) : (
-                    <>
-                      <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                        Squash the checkpoints into one commit, push {branch} and open a pull
-                        request with the GitHub CLI.
-                      </p>
-                      <Button
-                        onClick={createPullRequest}
-                        disabled={busy !== null}
-                        size="sm"
-                        className="w-full text-xs"
-                        style={{
-                          background: 'var(--color-primary)',
-                          color: 'var(--color-primary-text)',
-                        }}
-                        data-testid="review-create-pr"
-                      >
-                        {busy === 'pr' ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Creating pull request…
-                          </>
-                        ) : (
-                          'Create pull request'
-                        )}
-                      </Button>
-                      {busy === 'pr' && (
-                        <p
-                          className="text-xs"
-                          style={{ color: 'var(--color-text-muted)' }}
-                          data-testid="review-pr-progress"
-                        >
-                          Squashing, pushing and opening the pull request. This can take a minute.
-                        </p>
-                      )}
-                    </>
+                  )}
+                  <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    {prAction.help}
+                  </p>
+                  <Button
+                    onClick={createPullRequest}
+                    disabled={busy !== null}
+                    size="sm"
+                    variant={prAction.kind === 'update' ? 'outline' : 'default'}
+                    className="w-full text-xs"
+                    style={
+                      prAction.kind === 'create'
+                        ? { background: 'var(--color-primary)', color: 'var(--color-primary-text)' }
+                        : undefined
+                    }
+                    data-testid={
+                      prAction.kind === 'create' ? 'review-create-pr' : 'review-update-pr'
+                    }
+                  >
+                    {busy === 'pr' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {prAction.busyLabel}
+                      </>
+                    ) : (
+                      prAction.label
+                    )}
+                  </Button>
+                  {busy === 'pr' && (
+                    <p
+                      className="text-xs"
+                      style={{ color: 'var(--color-text-muted)' }}
+                      data-testid="review-pr-progress"
+                    >
+                      {prAction.progress}
+                    </p>
                   )}
                 </Card>
               </section>
