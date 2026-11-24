@@ -67,7 +67,7 @@ export const api = {
   worktrees: {
     list: () => request<WorktreeEntry[]>('GET', '/api/worktrees'),
     usage: () => request<DiskUsage>('GET', '/api/worktrees/usage'),
-    removeOrphan: (taskId: string) =>
+    remove: (taskId: string) =>
       request<DeleteReport>('DELETE', `/api/worktrees/${encodeURIComponent(taskId)}`),
   },
 

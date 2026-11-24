@@ -1,7 +1,7 @@
 /**
- * Worktrees Page: the open project's task worktrees with their disk use. Only orphans (their task
- * file is gone) can be deleted here, one at a time or all at once; a task's own worktree goes with
- * the task.
+ * Worktrees Page: the open project's task worktrees with their disk use. Orphans (their task file
+ * is gone) can be deleted here, one at a time or all at once; a done task's worktree can be removed
+ * (the task and its branch stay); any other task's worktree goes with the task.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -104,14 +104,16 @@ export default function WorktreesPage() {
   }, [load]);
 
   const deleteOne = async (taskId: string) => {
+    const done = worktrees?.find((w) => w.taskId === taskId)?.taskDone ?? false;
+    const what = done ? 'Worktree removed' : 'Orphan worktree deleted';
     try {
-      const report = await api.worktrees.removeOrphan(taskId);
+      const report = await api.worktrees.remove(taskId);
       if (report.warnings.length > 0) {
-        toast.warning('Orphan worktree deleted with warnings', {
+        toast.warning(`${what} with warnings`, {
           description: lines(report.warnings),
         });
       } else {
-        toast.success('Orphan worktree deleted');
+        toast.success(what);
       }
     } catch (e) {
       toast.error(errorMessage(e));
@@ -125,7 +127,7 @@ export default function WorktreesPage() {
     const problems: string[] = [];
     for (const w of targets) {
       try {
-        const report = await api.worktrees.removeOrphan(w.taskId);
+        const report = await api.worktrees.remove(w.taskId);
         removed += 1;
         problems.push(...report.warnings.map((m) => `${w.taskId}: ${m}`));
       } catch (e) {

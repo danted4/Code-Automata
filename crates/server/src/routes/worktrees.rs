@@ -14,10 +14,11 @@ pub async fn usage(Project(engine): Project) -> Result<Json<DiskUsage>, ApiError
     Ok(Json(engine.worktree_usage().await?))
 }
 
-/// Remove an orphaned worktree. A task's own worktree goes only with the task.
+/// Remove an orphaned worktree (with its branch) or a done task's (the task and branch stay). Any
+/// other task's worktree goes only with the task.
 pub async fn delete(
     Project(engine): Project,
     Path(id): Path<String>,
 ) -> Result<Json<DeleteReport>, ApiError> {
-    Ok(Json(engine.delete_orphan_worktree(&id).await?))
+    Ok(Json(engine.delete_worktree(&id).await?))
 }

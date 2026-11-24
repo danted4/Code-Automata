@@ -1,6 +1,7 @@
 /**
- * WorktreeCard: one worktree with its task, branch, path, state and size. Only an orphan (its task
- * file is gone) has a Delete button; a task's own worktree goes with the task. Editor and file
+ * WorktreeCard: one worktree with its task, branch, path, state and size. An orphan (its task file
+ * is gone) has Delete; a done task's worktree has Remove worktree (the task and branch stay); any
+ * other task's worktree goes with the task. Editor and file
  * manager actions need the desktop app (`lib/native`) and are hidden without it.
  */
 
@@ -30,7 +31,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
 import { native, type NativeApi } from '@/lib/native';
-import { canDeleteWorktree, dirtyLabel, formatBytes, worktreeTitle } from '@/lib/worktree-view';
+import {
+  canDeleteWorktree,
+  dirtyLabel,
+  formatBytes,
+  worktreeAction,
+  worktreeTitle,
+} from '@/lib/worktree-view';
 import { useProjectStore } from '@/store/project-store';
 
 export interface WorktreeCardProps {
@@ -59,6 +66,7 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
   const [openingEditor, setOpeningEditor] = useState(false);
   const [openingFolder, setOpeningFolder] = useState(false);
   const deletable = canDeleteWorktree(worktree);
+  const action = worktreeAction(worktree);
   const title = worktreeTitle(worktree);
 
   const openInEditor = async () => {
@@ -202,9 +210,9 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
           <HardDrive className="w-3.5 h-3.5" style={{ color: 'var(--color-text-muted)' }} />
           {sizeBytes === undefined ? 'Size unknown' : formatBytes(sizeBytes)}
         </div>
-        {!deletable && (
+        {action.note && (
           <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
-            This is a task&rsquo;s worktree. Delete the task to remove it.
+            {action.note}
           </p>
         )}
       </CardContent>
@@ -259,7 +267,7 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
             data-testid={`worktree-delete-${worktree.taskId}`}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            Delete
+            {action.button}
           </Button>
         )}
       </CardFooter>

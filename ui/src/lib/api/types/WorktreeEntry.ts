@@ -11,7 +11,11 @@ taskTitle: string | null,
 /**
  * No task file at all: the worktree can be deleted on its own.
  */
-orphan: boolean, taskId: string, path: string, 
+orphan: boolean, 
+/**
+ * The task is done: its worktree can be removed on its own (the task and branch stay).
+ */
+taskDone: boolean, taskId: string, path: string, 
 /**
  * `None` for a worktree on a detached HEAD.
  */

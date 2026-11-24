@@ -276,29 +276,35 @@ impl Engine {
         Ok(list
             .into_iter()
             .map(|worktree| {
-                let task_title = tasks
-                    .tasks
-                    .iter()
-                    .find(|t| t.id == worktree.task_id)
-                    .map(|t| t.title.clone());
+                let task = tasks.tasks.iter().find(|t| t.id == worktree.task_id);
+                let task_title = task.map(|t| t.title.clone());
+                let task_done = task.is_some_and(|t| t.phase == Phase::Done);
                 let orphan = task_title.is_none() && !unreadable.contains(&worktree.task_id);
                 WorktreeEntry {
                     worktree,
                     task_title,
                     orphan,
+                    task_done,
                 }
             })
             .collect())
     }
 
-    /// Remove an orphaned worktree (its task is gone) and its local branch. A task's own worktree,
-    /// readable or not, goes only with the task, through [`Engine::delete_task`].
-    pub async fn delete_orphan_worktree(&self, task_id: &str) -> Result<crate::git::DeleteReport> {
-        match self.inner.store.load(task_id).await {
-            Ok(None) => {}
+    /// Remove a worktree on its own:
+    ///
+    /// * an orphan (its task is gone): the folder and its local branch;
+    /// * a done task's: the folder only, to free its space. The task and its branch (which holds
+    ///   the work and the PR's commit) stay; reopening the task brings the worktree back.
+    ///
+    /// Any other task's worktree, readable or not, goes only with the task, through
+    /// [`Engine::delete_task`].
+    pub async fn delete_worktree(&self, task_id: &str) -> Result<crate::git::DeleteReport> {
+        let done_task = match self.inner.store.load(task_id).await {
+            Ok(None) => false,
+            Ok(Some(t)) if t.phase == Phase::Done => true,
             Ok(Some(_)) => {
                 return Err(CoreError::Invalid(format!(
-                    "task {task_id} uses this worktree; delete the task instead"
+                    "task {task_id} is not done; its worktree goes with the task, or once it is done"
                 )));
             }
             Err(CoreError::InvalidTaskId(id)) => return Err(CoreError::InvalidTaskId(id)),
@@ -307,21 +313,41 @@ impl Engine {
                     "task {task_id} uses this worktree but cannot be read ({e}); delete the task instead"
                 )));
             }
-        }
+        };
+        // Not while a pull request is being pushed from it (allowed from Done).
+        let lock = self.pr_lock(task_id);
+        let _guard = lock.lock().await;
         if !self.inner.worktrees.status(task_id).await?.exists {
             return Err(CoreError::NotFound(format!("worktree {task_id}")));
         }
-        self.inner
+        let report = self
+            .inner
             .worktrees
             .delete(
                 task_id,
                 DeleteOptions {
                     force: true,
-                    delete_branch: true,
+                    delete_branch: !done_task,
                     ..DeleteOptions::default()
                 },
             )
-            .await
+            .await?;
+        if done_task {
+            self.inner.emit(EngineEvent::TaskChanged {
+                task_id: task_id.to_string(),
+            });
+        }
+        Ok(report)
+    }
+
+    fn pr_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner
+            .pr_locks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(id.to_string())
+            .or_default()
+            .clone()
     }
 
     pub async fn worktree_usage(&self) -> Result<crate::git::DiskUsage> {
@@ -691,6 +717,12 @@ impl Engine {
         if to == Phase::Planning && task.phase != Phase::Planning {
             self.discard_dropped_dev_work(&task).await?;
         }
+        if task.phase == Phase::Done {
+            // Reopening a done task whose worktree was removed brings it back from the branch.
+            let lock = self.pr_lock(id);
+            let _guard = lock.lock().await;
+            self.inner.worktrees.restore(id).await?;
+        }
         let task = self.inner.store.move_phase(id, to, Mover::User).await?;
         self.inner.emit(EngineEvent::TaskChanged {
             task_id: id.to_string(),
@@ -700,14 +732,7 @@ impl Engine {
 
     /// Open the task's pull request, or push new work to the one already open.
     pub async fn create_pull_request(&self, id: &str) -> Result<String> {
-        let lock = self
-            .inner
-            .pr_locks
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(id.to_string())
-            .or_default()
-            .clone();
+        let lock = self.pr_lock(id);
         let _guard = lock.lock().await;
         self.settle(id, "opening a pull request").await?;
         pr::create(&self.inner, id).await
@@ -769,6 +794,8 @@ pub struct WorktreeEntry {
     pub task_title: Option<String>,
     /// No task file at all: the worktree can be deleted on its own.
     pub orphan: bool,
+    /// The task is done: its worktree can be removed on its own (the task and branch stay).
+    pub task_done: bool,
 }
 
 /// How long a command waits for a driver that is between steps or on its way out.

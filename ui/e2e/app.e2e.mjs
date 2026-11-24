@@ -223,7 +223,7 @@ test('6. failing checks start a rework round, then pass', async () => {
   closeDialog();
 });
 
-test('7. worktrees page lists task worktrees and deletes only orphans', async () => {
+test('7. worktrees: orphans deleted, a task worktree only once the task is done', async () => {
   const repo = makeRepo();
   repo.git(
     'worktree',
@@ -249,6 +249,22 @@ test('7. worktrees page lists task worktrees and deletes only orphans', async ()
   click('worktree-delete-confirm');
   await until('the orphan gone', () => !exists('worktree-card-orphan-1'));
   assert.equal(existsSync(path.join(repo.path, '.code-automata', 'worktrees', 'orphan-1')), false);
+
+  // Once the task is done, its worktree can be removed; the task stays.
+  ab('open', `${BASE}/`);
+  await untilCard('Has a worktree', 'in review', inReview);
+  cardAction('Has a worktree', 'human_review');
+  await until('the review dialog', () => exists('human-review-modal'));
+  click('review-mark-done');
+  await untilCard('Has a worktree', 'done', (c) => c.phase === 'done');
+  ab('open', `${BASE}/worktrees`);
+  await until('the remove button', () => exists(`worktree-delete-${id}`));
+  click(`worktree-delete-${id}`);
+  click('worktree-delete-confirm');
+  await until('the worktree gone', () => !exists(`worktree-card-${id}`));
+  assert.equal(existsSync(path.join(repo.path, '.code-automata', 'worktrees', id)), false);
+  ab('open', `${BASE}/`);
+  await untilCard('Has a worktree', 'still done', (c) => c.phase === 'done');
 });
 
 test('8. settings: custom checks and a prompt template are saved', async () => {

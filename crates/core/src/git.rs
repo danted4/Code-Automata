@@ -444,6 +444,31 @@ impl Worktrees {
         })
     }
 
+    /// Bring back the worktree of a task whose worktree was removed (a done task's), on its
+    /// existing branch `code-automata/<id>`, which holds the work. Nothing to do if it exists.
+    pub async fn restore(&self, task_id: &str) -> Result<()> {
+        let path = self.path_for(task_id)?;
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Ok(());
+        }
+        let repo = self.project.root();
+        let branch = Self::branch_for(task_id);
+        if !branch_exists(repo, &branch).await? {
+            return Err(CoreError::Invalid(format!(
+                "the task's branch {branch} is gone, so its worktree cannot be brought back"
+            )));
+        }
+        // Drop git's record of the removed folder, if any, before adding it again.
+        run_git(repo, &["worktree", "prune"]).await?;
+        let base = self.base_path();
+        tokio::fs::create_dir_all(&base)
+            .await
+            .map_err(io_at(&base))?;
+        let path_str = path.to_string_lossy().to_string();
+        run_git(repo, &["worktree", "add", &path_str, &branch]).await?;
+        Ok(())
+    }
+
     pub async fn status(&self, task_id: &str) -> Result<WorktreeStatus> {
         let path = self.path_for(task_id)?;
         Ok(status_at(&path).await)

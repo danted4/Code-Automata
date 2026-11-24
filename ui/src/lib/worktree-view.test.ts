@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   canDeleteWorktree,
+  deleteDialogText,
   cleanupSummary,
   dirtyLabel,
   formatBytes,
   orphans,
+  worktreeAction,
   worktreeTitle,
 } from './worktree-view';
 
@@ -37,10 +39,43 @@ describe('worktreeTitle', () => {
 });
 
 describe('deleting', () => {
-  it('allows only orphans', () => {
-    expect(canDeleteWorktree({ orphan: true })).toBe(true);
-    expect(canDeleteWorktree({ orphan: false })).toBe(false);
-    expect(orphans([{ orphan: true }, { orphan: false }, { orphan: true }])).toHaveLength(2);
+  it('allows orphans and done tasks, and cleans up only orphans', () => {
+    expect(canDeleteWorktree({ orphan: true, taskDone: false })).toBe(true);
+    expect(canDeleteWorktree({ orphan: false, taskDone: true })).toBe(true);
+    expect(canDeleteWorktree({ orphan: false, taskDone: false })).toBe(false);
+    expect(
+      orphans([
+        { orphan: true, taskDone: false },
+        { orphan: false, taskDone: true },
+        { orphan: true, taskDone: false },
+      ])
+    ).toHaveLength(2);
+  });
+
+  it('labels each kind of worktree', () => {
+    expect(worktreeAction({ orphan: true, taskDone: false })).toEqual({
+      note: null,
+      button: 'Delete',
+    });
+    expect(worktreeAction({ orphan: false, taskDone: true }).button).toBe('Remove worktree');
+    const live = worktreeAction({ orphan: false, taskDone: false });
+    expect(live.button).toBeNull();
+    expect(live.note).toMatch(/once the task is done/);
+  });
+
+  it('words the dialog for a done task apart from orphans', () => {
+    const done = deleteDialogText([{ orphan: false, taskDone: true }]);
+    expect(done.title).toBe('Remove worktree');
+    expect(done.description).toMatch(/branch stay/);
+    expect(deleteDialogText([{ orphan: true, taskDone: false }]).title).toBe(
+      'Delete orphan worktree'
+    );
+    expect(
+      deleteDialogText([
+        { orphan: true, taskDone: false },
+        { orphan: true, taskDone: false },
+      ]).title
+    ).toBe('Delete 2 orphan worktrees');
   });
 
   it('summarises a cleanup', () => {

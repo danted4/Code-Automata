@@ -1,6 +1,7 @@
 /**
- * Confirms deleting one or more orphan worktrees (their task files are gone). The server removes
- * each worktree, uncommitted changes and all, and its local branch.
+ * Confirms removing worktrees: one or more orphans (their task files are gone; the server removes
+ * each folder, uncommitted changes and all, and its local branch), or one done task's (the folder
+ * only; the task and its branch stay).
  */
 
 import { useState } from 'react';
@@ -16,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
+import { deleteDialogText } from '@/lib/worktree-view';
 
 interface DeleteOrphansModalProps {
   open: boolean;
@@ -47,6 +49,7 @@ export function DeleteOrphansModal({
   };
 
   const dirty = worktrees.some((w) => w.isDirty);
+  const text = deleteDialogText(worktrees);
 
   return (
     <Dialog open={open} onOpenChange={deleting ? undefined : onOpenChange}>
@@ -54,12 +57,9 @@ export function DeleteOrphansModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="w-5 h-5" style={{ color: 'var(--color-destructive)' }} />
-            {single ? 'Delete orphan worktree' : `Delete ${count} orphan worktrees`}
+            {text.title}
           </DialogTitle>
-          <DialogDescription>
-            {single ? 'Its task no longer exists.' : 'Their tasks no longer exist.'} This removes
-            the worktree folder and its local branch. It cannot be undone.
-          </DialogDescription>
+          <DialogDescription>{text.description}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <ul className="space-y-1 max-h-48 overflow-y-auto">
@@ -98,7 +98,7 @@ export function DeleteOrphansModal({
               color: 'var(--color-destructive-text)',
             }}
           >
-            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete'}
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : text.confirm}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -39,6 +39,11 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
     // Located before anything changes, so a missing gh fails cleanly.
     let gh = inner.bins.locate_tool("gh")?;
     let wt = inner.worktrees.path_for(id)?;
+    if !inner.worktrees.status(id).await?.exists {
+        return Err(CoreError::Invalid(
+            "the task's worktree was removed; reopen the task to bring it back".into(),
+        ));
+    }
     let branch = Worktrees::branch_for(id);
 
     let mut message = task.title.clone();

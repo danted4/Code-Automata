@@ -69,6 +69,7 @@ cd ui && yarn vitest run -t "name of the test"                            # by t
 - `lib/task-view.ts` maps a task to its status, badge and single primary action. A card shows that action; anything else is in the details view.
 - Task dialogs are opened through `store/task-view-store.ts` and rendered once by the board (`kanban/task-dialogs.tsx`), not inside the card: a card is recreated when its task changes column, which would close a dialog it held.
 - Dragging only moves (`POST /api/tasks/:id/move`); nothing starts an agent but a button.
+- Worktrees page: an orphan (no task file) is deleted with its branch; a done task's worktree can be removed on its own (`Engine::delete_worktree`: folder only, task and branch stay); reopening the task (Done → Human Review) brings it back from the branch (`Worktrees::restore`). Any other task's worktree goes with the task.
 - To try the UI by hand: run `ca-server --allow-mock --mock-scenario <file>` on a scratch repository and `yarn dev`; a mock task created in the dialog plays that scenario (see `crates/core/src/bin/mock_agent.rs` for the step format).
 
 ## End-to-end (`ui/e2e/`)

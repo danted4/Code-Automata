@@ -1298,3 +1298,54 @@ async fn commands_during_a_running_task_answer_promptly() {
     }
     engine.pause(&task.id).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake gh is a shell script
+async fn a_done_tasks_worktree_can_be_removed_and_comes_back_on_reopen() {
+    let env = Env::new().await;
+    fake_gh(&env, "echo https://github.com/example/repo/pull/9");
+    let (engine, id) = reviewed_task_with_remote(&env, true).await;
+    let wt = env.worktree(&id);
+    let branch = format!("code-automata/{id}");
+    let tip = git(&wt, &["rev-parse", "HEAD"]);
+
+    // Not before the task is done.
+    let err = engine.delete_worktree(&id).await.unwrap_err();
+    assert!(err.to_string().contains("not done"), "{err}");
+    assert!(wt.exists());
+    let listed = engine.worktrees().await.unwrap();
+    assert!(!listed[0].task_done && !listed[0].orphan);
+
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    assert!(engine.worktrees().await.unwrap()[0].task_done);
+    engine.delete_worktree(&id).await.unwrap();
+    assert!(!wt.exists(), "the folder is gone");
+    assert_eq!(
+        git(&env.repo.path, &["rev-parse", &branch]),
+        tip,
+        "the branch keeps the work"
+    );
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::Done, "the task stays");
+    assert!(engine.worktrees().await.unwrap().is_empty());
+    let err = engine.create_pull_request(&id).await.unwrap_err();
+    assert!(err.to_string().contains("reopen"), "{err}");
+
+    // Reopening brings the worktree back on the same branch.
+    engine.move_task(&id, Phase::HumanReview).await.unwrap();
+    assert!(wt.exists());
+    assert_eq!(git(&wt, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
+    assert_eq!(
+        engine.create_pull_request(&id).await.unwrap(),
+        "https://github.com/example/repo/pull/9"
+    );
+
+    // Done again, removed again, then the task deleted: the branch goes with it.
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    engine.delete_worktree(&id).await.unwrap();
+    engine.delete_task(&id).await.unwrap();
+    assert!(engine.get_task(&id).await.unwrap().is_none());
+    let branches = git(&env.repo.path, &["branch", "--list", &branch]);
+    assert!(branches.is_empty(), "{branches}");
+}
