@@ -6,13 +6,15 @@
 //!   `session_id` on the first event.
 //! * **Archiving:** execute mode archives its thread when it ends, and an archived thread cannot be
 //!   continued, hence `--no-archive-after-execute`.
-//! * **Model:** `agent.mode` maps to `--mode` (`low`, `medium`, `high`, `ultra`), and `agent.model`
-//!   to `--model`.
+//! * **Model:** `agent.model` maps to `--model`, else `agent.mode` to `--mode` (`low`, `medium`,
+//!   `high`, `ultra`). Amp takes one or the other ("--model … instead of --mode"), so with both
+//!   set the model wins and the mode is not passed.
 //! * **Read-only:** not enforceable per run. Permission rules are removed on 2026-11-29 and plugins
 //!   load only from global or project folders, so planning relies on the prompt, and the engine
 //!   resets the worktree afterwards.
 //! * **End of run:** a killed run still writes a final `result` with subtype
-//!   `error_during_execution` and exits 0; the shared success rule treats that as an agent error.
+//!   `error_during_execution` (`is_error: true`) and exits 0: an agent error, or `Stopped` when we
+//!   stopped it.
 
 use super::{CommandSpec, RunRequest};
 use crate::error::Result;

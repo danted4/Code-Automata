@@ -46,10 +46,13 @@ pub struct RunRequest {
     pub max_turns: Option<u32>,
     /// Raw stdout lines, stderr and the outcome are appended here as NDJSON.
     pub log_path: PathBuf,
-    /// Stop the run if it produces no output for this long.
+    /// Stop the run if it produces no output for this long. Paused while a tool call is open,
+    /// since CLIs print nothing while a command runs.
     pub idle_timeout: Option<Duration>,
     /// Stop the run if it takes longer than this in total.
     pub total_timeout: Option<Duration>,
+    /// How long a CLI may linger after printing its final result before it is ended.
+    pub result_grace: Duration,
     /// How long `stop()` and timeouts wait after SIGTERM before SIGKILL.
     pub kill_grace: Duration,
 }
@@ -72,6 +75,7 @@ impl RunRequest {
             log_path: log_path.into(),
             idle_timeout: None,
             total_timeout: None,
+            result_grace: Duration::from_secs(10),
             kill_grace: Duration::from_secs(5),
         }
     }

@@ -389,3 +389,95 @@ async fn stopping_after_the_result_keeps_the_result() {
     };
     assert_eq!(outcome.kind, OutcomeKind::Completed);
 }
+
+#[tokio::test]
+async fn non_utf8_output_does_not_close_the_pipes() {
+    let m = Mock::new();
+    let req = m.request(json!({ "steps": [
+        { "invalidUtf8": "stdout" },
+        { "invalidUtf8": "stderr" },
+        { "text": "still talking" },
+        { "stderr": "still warning" },
+        { "result": { "text": "done" } }
+    ]}));
+    let events = collect(start(req, &Mock::bins()).await.unwrap()).await;
+    assert_eq!(outcome(&events).kind, OutcomeKind::Completed);
+    assert!(events.contains(&AgentEvent::Text {
+        text: "still talking".into()
+    }));
+    assert!(events.contains(&AgentEvent::Stderr {
+        line: "still warning".into()
+    }));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Stderr { line } if line.contains('\u{fffd}')))
+    );
+}
+
+#[tokio::test]
+async fn dropping_the_handle_stops_the_agent_and_its_children() {
+    let m = Mock::new();
+    let pid_file = m.path("child.pid");
+    let req = m.request(json!({ "steps": [
+        { "spawnChild": { "command": "sleep 60", "pidFile": pid_file.to_str().unwrap() } },
+        { "text": "running" },
+        { "hang": true }
+    ]}));
+    let mut agent = start(req, &Mock::bins()).await.unwrap();
+    let agent_pid = agent.pid().unwrap();
+    while let Some(e) = agent.next_event().await {
+        if matches!(e, AgentEvent::Text { .. }) {
+            break;
+        }
+    }
+    let child = read_pid(&pid_file);
+    drop(agent); // no timeouts set: without the fix this would run forever
+    assert!(wait_dead(agent_pid).await, "agent outlived its handle");
+    assert!(wait_dead(child).await, "grandchild outlived the handle");
+    // The outcome is written after the post-exit drain window.
+    let mut log = String::new();
+    for _ in 0..100 {
+        log = std::fs::read_to_string(m.path("logs/run.ndjson")).unwrap();
+        if log.contains("code_automata_outcome") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(log.contains("\"kind\":\"stopped\""), "{log}");
+}
+
+#[tokio::test]
+async fn a_cli_that_lingers_after_its_result_is_ended() {
+    let m = Mock::new();
+    let mut req = m.request(json!({ "steps": [
+        { "result": { "text": "done" } },
+        { "hang": true }
+    ]}));
+    req.result_grace = Duration::from_millis(300);
+    let began = Instant::now();
+    let agent = start(req, &Mock::bins()).await.unwrap();
+    let pid = agent.pid().unwrap();
+    let o = agent.wait().await;
+    assert_eq!(o.kind, OutcomeKind::Completed);
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(wait_dead(pid).await);
+}
+
+#[tokio::test]
+async fn a_long_quiet_tool_call_is_not_an_idle_timeout() {
+    let m = Mock::new();
+    let mut req = m.request(json!({ "steps": [
+        { "text": "starting the build" },
+        { "tool": { "name": "Bash", "input": { "command": "yarn build" }, "output": "ok", "durationMs": 3000 } },
+        { "result": { "text": "built" } }
+    ]}));
+    // Generous enough for process start-up under parallel test load, far shorter than the tool.
+    req.idle_timeout = Some(Duration::from_millis(1000));
+    let o = start(req, &Mock::bins()).await.unwrap().wait().await;
+    assert_eq!(o.kind, OutcomeKind::Completed, "{o:?}");
+}

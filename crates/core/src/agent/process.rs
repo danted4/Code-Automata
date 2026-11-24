@@ -9,6 +9,10 @@
 //! * Every stdout line goes to the run log as-is; stderr lines and the outcome are logged as
 //!   `code_automata_stderr` / `code_automata_outcome` lines.
 //! * Exactly one `Finished` event is sent, last.
+//! * Dropping the `RunningAgent` (or every `Stopper`) stops the run: an agent nobody can stop or
+//!   hear from must not keep editing the worktree.
+//! * A CLI that prints its result and then lingers is ended after `result_grace`.
+//! * The idle timeout pauses while a tool call is open (CLIs print nothing during a long build).
 //!
 //! On Windows only the direct child is killed for now; Job Objects come with packaging (Phase 5).
 
@@ -151,8 +155,10 @@ pub(crate) async fn spawn(
         log,
         idle_timeout: req.idle_timeout,
         total_timeout: req.total_timeout,
+        result_grace: req.result_grace,
         kill_grace: req.kill_grace,
         session_id: spec.session_id.clone(),
+        reaped: false,
     };
     tokio::spawn(supervisor.run(stdout, stderr, stop_rx));
 
@@ -192,8 +198,58 @@ struct Supervisor {
     log: File,
     idle_timeout: Option<Duration>,
     total_timeout: Option<Duration>,
+    result_grace: Duration,
     kill_grace: Duration,
     session_id: Option<String>,
+    /// The agent process has been waited for (its pid and process group id may be reused).
+    reaped: bool,
+}
+
+/// One line-oriented pipe. Lines are read as bytes and decoded lossily, so a stray non-UTF-8
+/// byte cannot close the pipe; only end of file or a real read error does.
+struct Pipe<R> {
+    reader: BufReader<R>,
+    buf: Vec<u8>,
+    open: bool,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> Pipe<R> {
+    fn new(inner: R) -> Self {
+        Pipe {
+            reader: BufReader::new(inner),
+            buf: Vec::new(),
+            open: true,
+        }
+    }
+
+    /// The next complete line, or `None` once the pipe is closed. Cancel-safe: a partly read
+    /// line stays in `buf` and is continued on the next call.
+    async fn next(&mut self) -> Option<String> {
+        match self.reader.read_until(b'\n', &mut self.buf).await {
+            Ok(0) => {
+                self.open = false;
+                if self.buf.is_empty() {
+                    None
+                } else {
+                    Some(self.take_line()) // the last line had no newline
+                }
+            }
+            Ok(_) => Some(self.take_line()),
+            Err(_) => {
+                self.open = false;
+                None
+            }
+        }
+    }
+
+    fn take_line(&mut self) -> String {
+        let mut line = String::from_utf8_lossy(&self.buf).into_owned();
+        self.buf.clear();
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
+        line
+    }
 }
 
 impl Supervisor {
@@ -203,71 +259,93 @@ impl Supervisor {
         stderr: tokio::process::ChildStderr,
         mut stop_rx: watch::Receiver<bool>,
     ) {
-        let mut lines = BufReader::new(stdout).lines();
-        let mut errs = BufReader::new(stderr).lines();
+        let mut out = Pipe::new(stdout);
+        let mut err = Pipe::new(stderr);
         let started = Instant::now();
         let mut last_activity = started;
         let mut result: Option<ResultInfo> = None;
+        let mut result_at: Option<Instant> = None;
         let mut text = String::new();
         let mut ended_by: Option<EndedBy> = None;
         let mut exit_code: Option<i32> = None;
-        let mut exited = false;
         let mut drain_until: Option<Instant> = None;
-        let (mut stdout_open, mut stderr_open, mut stop_open) = (true, true, true);
+        let mut stop_open = true;
+        // Tool calls in flight. The CLIs print nothing while a command runs, so the idle timer
+        // pauses until every open call has its result; the total timeout still applies.
+        let mut open_tools: Vec<String> = Vec::new();
 
         loop {
-            if exited && !stdout_open && !stderr_open {
+            if self.reaped && !out.open && !err.open {
                 break;
             }
+            let running = ended_by.is_none() && !self.reaped;
             let idle_at = self
                 .idle_timeout
-                .filter(|_| ended_by.is_none() && !exited)
+                .filter(|_| running && open_tools.is_empty() && result.is_none())
                 .map(|d| last_activity + d);
-            let total_at = self
-                .total_timeout
-                .filter(|_| ended_by.is_none() && !exited)
-                .map(|d| started + d);
+            let total_at = self.total_timeout.filter(|_| running).map(|d| started + d);
+            // A CLI that has printed its result but lingers is given a short grace, then ended.
+            let linger_at = result_at
+                .filter(|_| running)
+                .map(|at| at + self.result_grace);
 
             tokio::select! {
-                line = lines.next_line(), if stdout_open => match line {
-                    Ok(Some(line)) => {
-                        last_activity = Instant::now();
-                        self.log_line(&line).await;
-                        for parsed in self.parser.parse(&line) {
-                            match parsed {
-                                Parsed::Result(info) => result = Some(info),
-                                Parsed::Event(event) => self.forward(event, &mut text),
+                line = out.next(), if out.open => if let Some(line) = line {
+                    last_activity = Instant::now();
+                    self.log_line(&line).await;
+                    for parsed in self.parser.parse(&line) {
+                        match parsed {
+                            Parsed::Result(info) => {
+                                result = Some(info);
+                                result_at.get_or_insert_with(Instant::now);
+                            }
+                            Parsed::Event(event) => {
+                                match &event {
+                                    AgentEvent::ToolUse { id, .. } => open_tools.push(id.clone()),
+                                    AgentEvent::ToolResult { id, .. } => {
+                                        if let Some(i) = open_tools.iter().position(|t| t == id) {
+                                            open_tools.remove(i);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                self.forward(event, &mut text);
                             }
                         }
                     }
-                    _ => stdout_open = false,
                 },
-                line = errs.next_line(), if stderr_open => match line {
-                    Ok(Some(line)) => {
-                        last_activity = Instant::now();
-                        let record = serde_json::json!({ "type": "code_automata_stderr", "line": line });
-                        self.log_line(&record.to_string()).await;
-                        let _ = self.events.send(AgentEvent::Stderr { line });
-                    }
-                    _ => stderr_open = false,
+                line = err.next(), if err.open => if let Some(line) = line {
+                    last_activity = Instant::now();
+                    let record = serde_json::json!({ "type": "code_automata_stderr", "line": line });
+                    self.log_line(&record.to_string()).await;
+                    let _ = self.events.send(AgentEvent::Stderr { line });
                 },
-                status = self.child.wait(), if !exited => {
-                    exited = true;
+                status = self.child.wait(), if !self.reaped => {
+                    self.reaped = true;
                     exit_code = status.ok().and_then(|s| s.code());
                     // Clean up anything the agent left running, and stop waiting for pipes it
                     // may still hold open.
                     self.terminate();
                     drain_until = Some(Instant::now() + self.kill_grace + DRAIN_AFTER_EXIT);
                 },
-                changed = stop_rx.changed(), if stop_open && ended_by.is_none() && !exited => {
-                    match changed {
-                        Ok(()) if *stop_rx.borrow() => {
-                            ended_by = Some(EndedBy::Stop);
-                            self.terminate();
-                        }
-                        Ok(()) => {}
-                        Err(_) => stop_open = false, // every Stopper dropped: nobody can stop it
+                changed = stop_rx.changed(), if stop_open && running => match changed {
+                    Ok(()) if *stop_rx.borrow() => {
+                        ended_by = Some(EndedBy::Stop);
+                        self.terminate();
                     }
+                    Ok(()) => {}
+                    // Every Stopper is gone, so nobody could ever stop this run: stop it now
+                    // rather than let it keep editing and spending unobserved.
+                    Err(_) => {
+                        stop_open = false;
+                        ended_by = Some(EndedBy::Stop);
+                        self.terminate();
+                    }
+                },
+                // Nobody is listening for events any more (the RunningAgent was dropped).
+                () = self.events.closed(), if running => {
+                    ended_by = Some(EndedBy::Stop);
+                    self.terminate();
                 },
                 () = sleep_opt(idle_at) => {
                     ended_by = Some(EndedBy::Timeout);
@@ -275,6 +353,11 @@ impl Supervisor {
                 },
                 () = sleep_opt(total_at) => {
                     ended_by = Some(EndedBy::Timeout);
+                    self.terminate();
+                },
+                () = sleep_opt(linger_at) => {
+                    // Not a stop or timeout: the result already says how the run went.
+                    result_at = None;
                     self.terminate();
                 },
                 () = sleep_opt(drain_until) => break,
@@ -351,7 +434,30 @@ impl Supervisor {
     }
 }
 
+impl Drop for Supervisor {
+    /// If the supervisor itself is dropped mid-run (the runtime shutting down), `kill_on_drop`
+    /// would kill only the direct child. Kill the whole group instead, at once. Only while the
+    /// agent is unreaped, since until then its process group id cannot have been reused.
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if !self.reaped
+            && let Some(pgid) = self.pid
+            && let Ok(raw) = i32::try_from(pgid)
+        {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(raw),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+    }
+}
+
 /// SIGTERM the group, wait up to `grace` for it to empty, then SIGKILL whatever is left.
+///
+/// The group id is the agent's pid. Once the agent has been reaped, the id stays reserved only
+/// while some member of the group lives, so polling stops the moment the group is empty, and the
+/// group is checked again immediately before SIGKILL. A wrong target would need the pid space to
+/// wrap around inside that window.
 #[cfg(unix)]
 async fn terminate_group(pgid: u32, grace: Duration) {
     use nix::sys::signal::{Signal, killpg};
@@ -369,7 +475,9 @@ async fn terminate_group(pgid: u32, grace: Duration) {
             return;
         }
     }
-    let _ = killpg(group, Signal::SIGKILL);
+    if killpg(group, None).is_ok() {
+        let _ = killpg(group, Signal::SIGKILL);
+    }
 }
 
 async fn sleep_opt(at: Option<Instant>) {

@@ -214,3 +214,102 @@ fn a_missing_binary_is_a_clear_error() {
     let err = command_for(&request(AgentConfig::new(Provider::Claude)), &bins).unwrap_err();
     assert!(err.to_string().contains("not an executable"), "{err}");
 }
+
+#[test]
+fn amp_model_wins_over_mode() {
+    let mut agent = AgentConfig::new(Provider::Amp);
+    agent.mode = Some("low".into());
+    agent.model = Some("anthropic/claude-sonnet".into());
+    let spec = build(&request(agent));
+    assert_eq!(
+        value_after(&spec, "--model"),
+        Some("anthropic/claude-sonnet")
+    );
+    assert!(!has(&spec, "--mode"), "Amp takes --model instead of --mode");
+}
+
+/// A fake CLI whose answers to `--version` and the login check are given as shell snippets.
+fn fake_cli(dir: &Path, name: &str, version: &str, login: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\ncase \"$1\" in\n  --version) {version} ;;\n  *) {login} ;;\nesac\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
+#[tokio::test]
+async fn preflight_reads_claude_login_from_stdout_only() {
+    use ca_core::agent::preflight::check;
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        // A warning on stderr must not hide a good login.
+        (
+            r#"echo '{"loggedIn": true, "email": "someone@example.com"}'; echo 'update available' >&2"#,
+            Some(true),
+        ),
+        (r#"echo '{"loggedIn": false}'"#, Some(false)),
+        // Unreadable output is "could not check", not "not logged in".
+        (r#"echo 'something went wrong'"#, None),
+    ];
+    for (login, expected) in cases {
+        let bin = fake_cli(dir.path(), "claude", "echo '2.1.0 (Claude Code)'", login);
+        let bins = Binaries::default().with_override(Provider::Claude, bin);
+        let report = check(Provider::Claude, &bins).await;
+        assert_eq!(report.logged_in, expected, "{login}");
+        assert_eq!(report.version.as_deref(), Some("2.1.0 (Claude Code)"));
+        assert_eq!(report.ready(), expected == Some(true));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(
+            !json.contains("someone@example.com"),
+            "the account leaked: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn preflight_reads_cursor_and_amp_logins() {
+    use ca_core::agent::preflight::check;
+    let dir = tempfile::tempdir().unwrap();
+    let cursor_in = fake_cli(dir.path(), "agent", "echo 1", "echo '✓ Logged in as a@b.c'");
+    let bins = Binaries::default().with_override(Provider::Cursor, cursor_in);
+    assert_eq!(check(Provider::Cursor, &bins).await.logged_in, Some(true));
+
+    let cursor_out = fake_cli(
+        dir.path(),
+        "agent2",
+        "echo 1",
+        "echo 'Not logged in'; exit 1",
+    );
+    let bins = Binaries::default().with_override(Provider::Cursor, cursor_out);
+    assert_eq!(check(Provider::Cursor, &bins).await.logged_in, Some(false));
+
+    let amp = fake_cli(dir.path(), "amp", "echo 1", "echo 'Signed in as a@b.c'");
+    let bins = Binaries::default().with_override(Provider::Amp, amp);
+    assert_eq!(check(Provider::Amp, &bins).await.logged_in, Some(true));
+}
+
+#[test]
+fn preflight_and_runs_remove_the_same_variables() {
+    use ca_core::agent::{claude, cursor};
+    let mut agent = AgentConfig::new(Provider::Claude);
+    assert_eq!(claude::removed_env(&agent), ["ANTHROPIC_API_KEY"]);
+    assert_eq!(
+        build(&request(agent.clone())).env_remove,
+        claude::removed_env(&agent)
+    );
+    agent.options.insert("useApiKeyFromEnv".into(), json!(true));
+    assert!(claude::removed_env(&agent).is_empty());
+
+    let agent = AgentConfig::new(Provider::Cursor);
+    assert_eq!(
+        build(&request(agent.clone())).env_remove,
+        cursor::removed_env(&agent)
+    );
+}

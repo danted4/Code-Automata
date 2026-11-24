@@ -13,7 +13,8 @@
 //! | --- | --- |
 //! | `{"text": "…"}` | assistant text |
 //! | `{"thinking": "…"}` | assistant thinking |
-//! | `{"tool": {"name", "input", "output", "isError"}}` | a tool_use, then its tool_result |
+//! | `{"tool": {"name", "input", "output", "isError", "durationMs"}}` | a tool_use, a silent pause of `durationMs`, then its tool_result |
+//! | `{"invalidUtf8": "stdout" \| "stderr"}` | a line of bytes that are not UTF-8 |
 //! | `{"write": {"path", "content"}}` | write a file under the cwd (refused with `--read-only`) |
 //! | `{"stderr": "…"}` | a line on stderr |
 //! | `{"sleepMs": n}` | pause |
@@ -102,6 +103,9 @@ fn run() -> i32 {
                 &session_id,
                 json!({ "type": "tool_use", "id": id, "name": tool.get("name"), "input": tool.get("input") }),
             );
+            if let Some(ms) = tool.get("durationMs").and_then(Value::as_u64) {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             tool_result(
                 &session_id,
                 &id,
@@ -133,6 +137,15 @@ fn run() -> i32 {
                     Ok(()) => tool_result(&session_id, &id, "written", false),
                     Err(e) => tool_result(&session_id, &id, &e.to_string(), true),
                 }
+            }
+        } else if let Some(stream) = step.get("invalidUtf8").and_then(Value::as_str) {
+            let bytes: &[u8] = b"\xff\xfe not utf-8 \xc3\x28\n";
+            if stream == "stderr" {
+                let _ = std::io::stderr().write_all(bytes);
+            } else {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(bytes);
+                let _ = out.flush();
             }
         } else if let Some(line) = step.get("stderr").and_then(Value::as_str) {
             eprintln!("{line}");

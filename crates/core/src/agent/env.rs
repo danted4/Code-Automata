@@ -16,6 +16,23 @@ use std::path::{Path, PathBuf};
 use crate::error::{CoreError, Result};
 use crate::task::Provider;
 
+const START: &str = "__CODE_AUTOMATA_PATH_START__";
+const END: &str = "__CODE_AUTOMATA_PATH_END__";
+
+/// The `PATH` between the sentinels, if it looks like one: non-empty, and every entry absolute.
+/// Anything else (an error message, a relative entry) is rejected so it cannot replace a working
+/// `PATH`. Entries may contain spaces (`/Applications/Visual Studio Code.app/...`).
+pub fn parse_path_output(output: &str) -> Option<OsString> {
+    let start = output.rfind(START)? + START.len();
+    let len = output[start..].find(END)?;
+    let value = output[start..start + len].trim();
+    let entries: Vec<&str> = value.split(':').filter(|e| !e.is_empty()).collect();
+    if entries.is_empty() || entries.iter().any(|e| !e.starts_with('/')) {
+        return None;
+    }
+    Some(OsString::from(value))
+}
+
 /// The executable name each provider is found under.
 pub fn binary_name(provider: Provider) -> &'static str {
     match provider {
@@ -43,19 +60,26 @@ impl Binaries {
     }
 
     /// Search the `PATH` the user's login shell reports, falling back to this process's `PATH`
-    /// if the shell cannot be run. Right for an app started from the Dock or Finder.
+    /// if the shell cannot be run or reports something that is not a usable `PATH`. Right for an
+    /// app started from the Dock or Finder.
     pub async fn from_login_shell() -> Self {
         let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/zsh"));
+        let is_fish = Path::new(&shell).file_name().is_some_and(|n| n == "fish");
+        // Sentinels around the value, so banners or motd lines printed by shell startup files
+        // cannot be mistaken for it. fish keeps PATH as a list and needs it joined.
+        let script = if is_fish {
+            format!("printf '{START}%s{END}' (string join : $PATH)")
+        } else {
+            format!("printf '{START}%s{END}' \"$PATH\"")
+        };
         let out = tokio::process::Command::new(&shell)
-            .args(["-ilc", "printf '%s' \"$PATH\""])
+            .args(["-ilc", &script])
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
             .output();
         let path = match tokio::time::timeout(std::time::Duration::from_secs(10), out).await {
-            Ok(Ok(out)) if out.status.success() && !out.stdout.is_empty() => {
-                // A login shell may print a banner first; PATH is the last line.
-                let text = String::from_utf8_lossy(&out.stdout);
-                text.lines().last().map(|l| OsString::from(l.trim()))
+            Ok(Ok(out)) if out.status.success() => {
+                parse_path_output(&String::from_utf8_lossy(&out.stdout))
             }
             _ => None,
         };
@@ -112,4 +136,39 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wrap(v: &str) -> String {
+        format!("{START}{v}{END}")
+    }
+
+    #[test]
+    fn path_output_is_validated() {
+        assert_eq!(
+            parse_path_output(&format!(
+                "Welcome!\nmotd\n{}",
+                wrap("/usr/bin:/opt/homebrew/bin")
+            )),
+            Some(OsString::from("/usr/bin:/opt/homebrew/bin"))
+        );
+        assert_eq!(
+            parse_path_output(&wrap("/usr/bin:/Applications/Visual Studio Code.app/bin")),
+            Some(OsString::from(
+                "/usr/bin:/Applications/Visual Studio Code.app/bin"
+            ))
+        );
+        // A relative entry, an empty value, an error message, no sentinels.
+        for bad in [
+            wrap("/usr/bin:bin"),
+            wrap("command not found: string"),
+            wrap(""),
+            "/usr/bin:/bin".to_string(),
+        ] {
+            assert_eq!(parse_path_output(&bad), None, "{bad:?} was accepted");
+        }
+    }
 }

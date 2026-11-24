@@ -22,6 +22,15 @@ use crate::util::uuid_v4;
 
 pub const READ_ONLY_TOOLS: &str = "Read,Grep,Glob";
 
+/// Variables taken out of the agent's environment; preflight applies the same rule.
+pub fn removed_env(agent: &crate::task::AgentConfig) -> Vec<String> {
+    if option_bool(agent, "useApiKeyFromEnv") {
+        Vec::new()
+    } else {
+        vec!["ANTHROPIC_API_KEY".to_string()]
+    }
+}
+
 pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> {
     let mut args: Vec<String> = [
         "-p",
@@ -64,14 +73,10 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
         args.extend(["--json-schema".into(), text]);
     }
 
-    let mut env_remove = Vec::new();
-    if !option_bool(&req.agent, "useApiKeyFromEnv") {
-        env_remove.push("ANTHROPIC_API_KEY".to_string());
-    }
     Ok(CommandSpec {
         program: bins.locate(Provider::Claude)?,
         args,
-        env_remove,
+        env_remove: removed_env(&req.agent),
         env_set: Vec::new(),
         stdin: req.prompt.clone(),
         session_id: Some(session_id),
