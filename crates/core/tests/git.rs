@@ -386,3 +386,89 @@ async fn diff_keeps_whitespace_and_unusual_file_names() {
     assert!(diff.diff.contains("+line   \n"));
     assert_eq!(diff.untracked, ["café notes.txt"]);
 }
+
+#[tokio::test]
+async fn forced_delete_of_a_locked_worktree_finishes() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-11").await.unwrap();
+    std::fs::write(info.path.join("wip.txt"), "wip").unwrap();
+    git(
+        &repo.path,
+        &["worktree", "lock", info.path.to_str().unwrap()],
+    );
+
+    let report = wts
+        .delete(
+            "task-11",
+            DeleteOptions {
+                force: true,
+                delete_branch: true,
+                ..DeleteOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert!(!info.path.exists());
+    assert!(!git(&repo.path, &["worktree", "list"]).contains("task-11"));
+    assert!(git(&repo.path, &["branch", "--list", "code-automata/task-11"]).is_empty());
+    wts.create("task-11").await.unwrap();
+}
+
+#[tokio::test]
+async fn a_broken_worktree_is_not_deleted_without_force() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-12").await.unwrap();
+    std::fs::write(info.path.join("wip.txt"), "uncommitted").unwrap();
+    // Break the worktree's link to the repository, as a pruned admin dir or a moved repo would.
+    std::fs::write(
+        info.path.join(".git"),
+        "gitdir: /nonexistent/worktrees/task-12\n",
+    )
+    .unwrap();
+
+    let status = wts.status("task-12").await.unwrap();
+    assert!(status.error.is_some(), "{status:?}");
+    assert!(
+        wts.delete("task-12", DeleteOptions::default())
+            .await
+            .is_err()
+    );
+    assert!(
+        info.path.join("wip.txt").exists(),
+        "uncommitted work was wiped"
+    );
+
+    wts.delete(
+        "task-12",
+        DeleteOptions {
+            force: true,
+            ..DeleteOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!info.path.exists());
+}
+
+#[tokio::test]
+async fn squash_accepts_a_tag_as_base() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-13").await.unwrap();
+    git(&info.path, &["tag", "-a", "start", "-m", "start"]);
+    std::fs::write(info.path.join("a.txt"), "a").unwrap();
+    checkpoint_commit(&info.path, "task-13", "s1", "a")
+        .await
+        .unwrap();
+    let squashed = squash_checkpoints(&info.path, "start", "m")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        git(&info.path, &["rev-parse", &format!("{squashed}^")]),
+        info.base_commit.unwrap()
+    );
+}

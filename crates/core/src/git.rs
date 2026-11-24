@@ -184,9 +184,34 @@ async fn probe(path: &Path) -> Probe {
     let canonical = tokio::fs::canonicalize(path)
         .await
         .unwrap_or_else(|_| path.to_path_buf());
-    let Ok(top) = run_git(&canonical, &["rev-parse", "--show-toplevel"]).await else {
-        return Probe::NotWorktree;
+    let rev_parse = ["rev-parse", "--show-toplevel"];
+    let out = match git_output(&canonical, &rev_parse, None).await {
+        Ok(out) => out,
+        // git could not run at all (no git on PATH): we know nothing, so nothing is deletable.
+        Err(e) => {
+            return Probe::Unreadable {
+                path: canonical,
+                error: e.to_string(),
+            };
+        }
     };
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let has_git_entry = tokio::fs::symlink_metadata(canonical.join(".git"))
+            .await
+            .is_ok();
+        // A plain folder outside any repository. A folder with its own `.git` that git rejects is
+        // a broken worktree (admin dir pruned, repo moved) and may hold uncommitted work.
+        return if stderr.contains("not a git repository") && !has_git_entry {
+            Probe::NotWorktree
+        } else {
+            Probe::Unreadable {
+                path: canonical,
+                error: stderr.trim().to_string(),
+            }
+        };
+    }
+    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let top = tokio::fs::canonicalize(&top)
         .await
         .unwrap_or_else(|_| PathBuf::from(top));
@@ -373,13 +398,16 @@ impl Worktrees {
                 let path_str = path.to_string_lossy().to_string();
                 let mut args = vec!["worktree", "remove", path_str.as_str()];
                 if opts.force {
-                    args.push("--force");
+                    // Twice: a single --force does not remove a locked worktree.
+                    args.extend(["--force", "--force"]);
                 }
                 if let Err(e) = run_git(repo, &args).await {
                     if !opts.force {
                         return Err(e);
                     }
-                    // Forced: a locked or broken worktree is removed by hand and git forgets it.
+                    // Forced and git still refused (broken worktree): unlock so prune will drop the
+                    // record, remove the files by hand, then prune.
+                    let _ = run_git(repo, &["worktree", "unlock", path_str.as_str()]).await;
                     remove_dir_if_exists(&path).await?;
                     run_git(repo, &["worktree", "prune"]).await?;
                 }
@@ -444,7 +472,15 @@ impl Worktrees {
             } else {
                 repo.join(path)
             };
-            if path.parent() != Some(base.as_path()) {
+            // Compare canonical forms: on Windows canonicalize yields \\?\C:\... while git
+            // prints C:/..., and on macOS /var vs /private/var. A gone directory keeps its raw parent.
+            let Some(parent) = path.parent() else {
+                continue;
+            };
+            let parent = tokio::fs::canonicalize(parent)
+                .await
+                .unwrap_or_else(|_| parent.to_path_buf());
+            if parent != base {
                 continue;
             }
             let Some(task_id) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
@@ -736,7 +772,11 @@ pub async fn squash_checkpoints(
     let tree = run_git(worktree, &["write-tree"]).await?;
     let base_tree = run_git(worktree, &["rev-parse", &format!("{base_commit}^{{tree}}")]).await?;
     let old_head = head(worktree).await?;
-    let base_full = run_git(worktree, &["rev-parse", base_commit]).await?;
+    let base_full = run_git(
+        worktree,
+        &["rev-parse", &format!("{base_commit}^{{commit}}")],
+    )
+    .await?;
 
     if tree == base_tree {
         if old_head != base_full {
