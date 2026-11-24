@@ -139,6 +139,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

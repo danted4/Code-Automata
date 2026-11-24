@@ -106,6 +106,8 @@ pub enum PlanningStage {
     NotStarted,
     /// Questions are waiting for the user's answers.
     Questions,
+    /// The user answered; the plan is next.
+    Answered,
     /// A plan is written and waiting for approval.
     PlanReady,
     Approved,
@@ -190,6 +192,22 @@ pub struct Subtask {
     /// The agent's note for the subtasks after this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<String>,
+    /// Set on dev subtasks added by a rework round (1-based), for the "Reworking (n/m)" label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework_round: Option<u32>,
+    /// A finished QA subtask's verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<QaVerdict>,
+}
+
+/// What a QA reviewer concluded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QaVerdict {
+    pub passed: bool,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<String>,
 }
 
 impl Subtask {
@@ -209,6 +227,8 @@ impl Subtask {
             finished_at: None,
             checkpoint: None,
             handoff: None,
+            rework_round: None,
+            verdict: None,
         }
     }
 }
@@ -334,6 +354,9 @@ pub struct Run {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// When that process started, as `ps` reports it, so a reused pid is never mistaken for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_started: Option<String>,
     /// The app process that owns the run; a different boot id means the owner died.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_id: Option<String>,
@@ -355,6 +378,7 @@ impl Run {
             provider: None,
             session_id: None,
             pid: None,
+            process_started: None,
             boot_id: None,
             started_at: now,
             updated_at: now,
@@ -493,6 +517,19 @@ impl Task {
                     )));
                 }
                 _ => {}
+            }
+            if s.verdict.is_some() && (s.kind != SubtaskKind::Qa || s.status != SubtaskStatus::Done)
+            {
+                return Err(Invalid(format!(
+                    "subtask {:?} has a verdict but is not a finished QA subtask",
+                    s.id
+                )));
+            }
+            if s.rework_round.is_some() && s.kind != SubtaskKind::Dev {
+                return Err(Invalid(format!(
+                    "rework subtask {:?} must be a dev subtask",
+                    s.id
+                )));
             }
         }
         let mut seen = std::collections::HashSet::new();

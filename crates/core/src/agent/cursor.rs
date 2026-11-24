@@ -13,7 +13,9 @@
 use serde_json::Value;
 
 use super::stream_json::{str_field, summarize};
-use super::{AgentEvent, CommandSpec, LineParser, Parsed, ResultInfo, RunRequest, option_bool};
+use super::{
+    Access, AgentEvent, CommandSpec, LineParser, Parsed, ResultInfo, RunRequest, option_bool,
+};
 use crate::error::Result;
 use crate::task::Provider;
 
@@ -45,7 +47,9 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
     if let Some(id) = &req.resume {
         args.extend(["--resume".into(), id.clone()]);
     }
-    if req.read_only {
+    // Cursor has no "commands but no edits" mode, so Review runs in the normal mode and the
+    // engine discards any edits afterwards.
+    if req.access == Access::ReadOnly {
         args.extend(["--mode".into(), "ask".into()]);
     }
     Ok(CommandSpec {
@@ -173,6 +177,7 @@ fn tool_entry(call: Option<&Value>) -> Option<(String, &Value)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

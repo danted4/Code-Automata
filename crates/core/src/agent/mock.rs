@@ -5,7 +5,7 @@
 //! name a scenario file (`scenario`); `record` optionally names a file each invocation is appended
 //! to, for tests that check how the agent was called.
 
-use super::{CommandSpec, RunRequest, option_str};
+use super::{Access, CommandSpec, RunRequest, option_str};
 use crate::error::{CoreError, Result};
 use crate::task::Provider;
 use crate::util::uuid_v4;
@@ -29,8 +29,10 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
             id
         }
     };
-    if req.read_only {
-        args.push("--read-only".into());
+    match req.access {
+        Access::Full => {}
+        Access::Review => args.push("--review".into()),
+        Access::ReadOnly => args.push("--read-only".into()),
     }
     Ok(CommandSpec {
         program: bins.locate(Provider::Mock)?,

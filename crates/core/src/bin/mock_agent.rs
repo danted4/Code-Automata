@@ -3,7 +3,7 @@
 //! Speaks Claude Code's stream-json on stdout and takes the same session flags:
 //!
 //! ```text
-//! mock-agent --scenario <file> [--session-id <id> | --resume <id>] [--record <file>] [--read-only]
+//! mock-agent --scenario <file> [--session-id <id> | --resume <id>] [--record <file>] [--read-only | --review]
 //! ```
 //!
 //! The prompt is read from stdin. The scenario is JSON: `{"steps": [...], "resumeSteps": [...]}`;
@@ -53,7 +53,8 @@ fn run() -> i32 {
         .clone()
         .or_else(|| flag("--session-id"))
         .unwrap_or_else(|| "mock-session".to_string());
-    let read_only = args.iter().any(|a| a == "--read-only");
+    // Read-only and review runs both refuse the scripted write steps.
+    let read_only = args.iter().any(|a| a == "--read-only" || a == "--review");
 
     let mut prompt = String::new();
     let _ = std::io::stdin().read_to_string(&mut prompt);

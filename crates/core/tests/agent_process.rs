@@ -359,7 +359,7 @@ async fn read_only_reaches_the_agent() {
         { "write": { "path": "nope.txt", "content": "x" } },
         { "result": { "text": "could not write" } }
     ]}));
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     let events = collect(start(req, &Mock::bins()).await.unwrap()).await;
     assert!(!m.path("nope.txt").exists());
     assert!(

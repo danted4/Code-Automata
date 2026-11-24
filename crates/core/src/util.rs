@@ -75,6 +75,7 @@ pub fn validate_task_id(id: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -39,8 +39,9 @@ pub struct RunRequest {
     pub prompt: String,
     /// Provider session id to continue instead of starting a new session.
     pub resume: Option<String>,
-    /// Planning: no edits and no commands, where the provider can enforce it.
-    pub read_only: bool,
+    /// What the agent may do. The engine resets the worktree after `Review` and `ReadOnly` runs,
+    /// so a provider that cannot enforce the limit still cannot leave changes behind.
+    pub access: Access,
     /// JSON Schema for the final answer, honoured by providers with structured output.
     pub json_schema: Option<Value>,
     pub max_turns: Option<u32>,
@@ -72,7 +73,7 @@ impl RunRequest {
             cwd: cwd.into(),
             prompt: prompt.into(),
             resume: None,
-            read_only: false,
+            access: Access::Full,
             json_schema: None,
             max_turns: None,
             log_path: log_path.into(),
@@ -83,6 +84,19 @@ impl RunRequest {
             kill_grace: Duration::from_secs(5),
         }
     }
+}
+
+/// How much an agent run may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    /// Dev work: edit files and run commands.
+    #[default]
+    Full,
+    /// QA and triage: run commands and tests, but no editing tools.
+    Review,
+    /// Planning: read files only.
+    ReadOnly,
 }
 
 /// What the agent is doing, in provider-independent form.
@@ -155,8 +169,10 @@ impl Outcome {
 /// What a provider can guarantee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Capabilities {
-    /// `read_only` is enforced by the CLI, not just requested in the prompt.
+    /// `Access::ReadOnly` is enforced by the CLI, not just requested in the prompt.
     pub enforced_read_only: bool,
+    /// `Access::Review` (no editing tools, commands allowed) is enforced by the CLI.
+    pub enforced_review: bool,
     /// `json_schema` is honoured and the answer arrives validated in `Outcome::structured`.
     pub structured_output: bool,
     /// `resume` continues the previous session.
@@ -167,21 +183,25 @@ pub fn capabilities(provider: Provider) -> Capabilities {
     match provider {
         Provider::Claude => Capabilities {
             enforced_read_only: true,
+            enforced_review: true,
             structured_output: true,
             resume: true,
         },
         Provider::Cursor => Capabilities {
             enforced_read_only: true,
+            enforced_review: false,
             structured_output: false,
             resume: true,
         },
         Provider::Amp => Capabilities {
             enforced_read_only: false,
+            enforced_review: false,
             structured_output: false,
             resume: true,
         },
         Provider::Mock => Capabilities {
             enforced_read_only: false,
+            enforced_review: false,
             structured_output: true,
             resume: true,
         },

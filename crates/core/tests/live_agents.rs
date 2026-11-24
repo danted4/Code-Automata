@@ -152,7 +152,7 @@ async fn live_claude_structured_output() {
         "What is two plus three? Give the number as a word.",
         "s.ndjson",
     );
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     req.json_schema = Some(json!({
         "type": "object",
         "properties": { "answer": { "type": "string" } },
@@ -178,7 +178,7 @@ async fn live_claude_read_only_cannot_write_and_keeps_user_config_out() {
         "Create a file named b.txt containing beta, then say in one sentence what README.md contains.",
         "ro.ndjson",
     );
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     let o = start(req, &bins).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::Completed, "{o:?}");
     assert!(

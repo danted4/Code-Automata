@@ -2,6 +2,7 @@
 //! loopback HTTP server are built on. No UI, HTTP or Tauri dependency lives here.
 
 pub mod agent;
+pub mod engine;
 pub mod error;
 pub mod git;
 pub mod project;
@@ -14,6 +15,6 @@ pub use error::{CoreError, Result};
 pub use project::ProjectDir;
 pub use store::{TaskList, TaskStore};
 pub use task::{
-    AgentConfig, Phase, PlanningStage, Provider, Run, RunKind, RunState, Subtask, SubtaskKind,
-    SubtaskStatus, Task,
+    AgentConfig, Phase, PlanningStage, Provider, QaVerdict, Run, RunKind, RunState, Subtask,
+    SubtaskKind, SubtaskStatus, Task,
 };

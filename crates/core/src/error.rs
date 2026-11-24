@@ -29,6 +29,9 @@ pub enum CoreError {
     #[error("{path} holds task {found:?}, which does not match its directory")]
     IdMismatch { path: PathBuf, found: String },
 
+    #[error("the project is already open in another Code-Automata window ({holder})")]
+    ProjectLocked { holder: String },
+
     #[error("invalid project directory {path}: {reason}")]
     InvalidProject { path: PathBuf, reason: String },
 

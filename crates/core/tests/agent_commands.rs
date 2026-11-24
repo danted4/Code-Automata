@@ -93,7 +93,7 @@ fn claude_new_run() {
 fn claude_resume_read_only_with_schema() {
     let mut req = request(AgentConfig::new(Provider::Claude));
     req.resume = Some("5b0c1d2e-3f40-4a51-b627-38394a5b6c7d".into());
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     req.json_schema = Some(json!({ "type": "object" }));
     let spec = build(&req);
 
@@ -146,7 +146,7 @@ fn cursor_runs() {
     assert_prompt_on_stdin_only(&spec);
 
     let mut req = request(agent);
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     req.resume = Some("697e09e5".into());
     let spec = build(&req);
     assert_eq!(
@@ -198,7 +198,7 @@ fn mock_needs_a_scenario() {
     let mut agent = AgentConfig::new(Provider::Mock);
     agent.options.insert("scenario".into(), json!("/s.json"));
     let mut req = request(agent);
-    req.read_only = true;
+    req.access = ca_core::agent::Access::ReadOnly;
     let spec = command_for(&req, &bins).unwrap().0;
     assert_eq!(value_after(&spec, "--scenario"), Some("/s.json"));
     assert!(has(&spec, "--read-only"));
@@ -311,5 +311,24 @@ fn preflight_and_runs_remove_the_same_variables() {
     assert_eq!(
         build(&request(agent.clone())).env_remove,
         cursor::removed_env(&agent)
+    );
+}
+
+#[test]
+fn review_access_keeps_the_shell_but_not_editing_tools() {
+    let mut req = request(AgentConfig::new(Provider::Claude));
+    req.access = ca_core::agent::Access::Review;
+    let spec = build(&req);
+    assert_eq!(
+        value_after(&spec, "--disallowedTools"),
+        Some("Edit,Write,NotebookEdit")
+    );
+    assert!(!has(&spec, "--tools"));
+
+    let mut req = request(AgentConfig::new(Provider::Cursor));
+    req.access = ca_core::agent::Access::Review;
+    assert!(
+        !has(&build(&req), "--mode"),
+        "ask mode would block the shell QA needs"
     );
 }
