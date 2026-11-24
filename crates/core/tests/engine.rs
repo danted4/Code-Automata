@@ -1036,6 +1036,59 @@ async fn pausing_during_checks_stops_them_promptly() {
     assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
 }
 
+/// The check's shell starts a process of its own; pausing must kill that grandchild too (a
+/// process group on Unix, the Job Object on Windows).
+#[tokio::test(flavor = "multi_thread")]
+async fn pausing_during_checks_kills_what_the_check_started() {
+    let env = Env::new().await;
+    let pid_file = env.path("grandchild.pid");
+    // The command after it keeps the shell from exec-ing the sleeper in its own place.
+    let line = format!(
+        "\"{m}\" --sleep-ms 60000 --pid-file \"{f}\" {sep} exit 0",
+        m = env!("CARGO_BIN_EXE_mock-agent"),
+        f = pid_file.display(),
+        sep = if cfg!(windows) { "&" } else { ";" },
+    );
+    env.settings(|s| {
+        s.checks = Some(vec![CheckCommand {
+            name: "spawns".into(),
+            command: line,
+        }]);
+    })
+    .await;
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Checks with a grandchild", "", env.agent(1, vec![]), false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    let mut pid = None;
+    for _ in 0..400 {
+        if let Ok(t) = std::fs::read_to_string(&pid_file)
+            && let Ok(p) = t.trim().parse::<u32>()
+        {
+            pid = Some(p);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let pid = pid.expect("the check never started its child");
+    assert!(alive(pid));
+
+    engine.pause(&task.id).await.unwrap();
+    let mut dead = false;
+    for _ in 0..100 {
+        if !alive(pid) {
+            dead = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(dead, "the check's grandchild {pid} outlived the pause");
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.run.as_ref().unwrap().state, RunState::Paused);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn skipping_a_halted_subtask_drops_its_partial_work() {
     let env = Env::new().await;

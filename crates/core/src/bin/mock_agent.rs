@@ -72,10 +72,16 @@ fn run() -> i32 {
         let _ = std::fs::write(file, json!(rest).to_string());
         return 0;
     }
-    // A child started by a portable spawnChild step: `mock-agent --sleep-ms n`.
-    if let [flag, ms] = args.as_slice()
+    // A child started by a portable spawnChild step: `mock-agent --sleep-ms n`. With
+    // `--pid-file f` it first writes its own pid there (tests that start it from a shell).
+    if let [flag, ms, rest @ ..] = args.as_slice()
         && flag == "--sleep-ms"
     {
+        if let [pf, file] = rest
+            && pf == "--pid-file"
+        {
+            let _ = std::fs::write(file, std::process::id().to_string());
+        }
         std::thread::sleep(Duration::from_millis(ms.parse().unwrap_or(60_000)));
         return 0;
     }
