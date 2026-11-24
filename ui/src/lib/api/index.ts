@@ -67,8 +67,12 @@ export const api = {
   worktrees: {
     list: () => request<WorktreeEntry[]>('GET', '/api/worktrees'),
     usage: () => request<DiskUsage>('GET', '/api/worktrees/usage'),
-    remove: (taskId: string) =>
-      request<DeleteReport>('DELETE', `/api/worktrees/${encodeURIComponent(taskId)}`),
+    /** `force` discards uncommitted changes in a done task's worktree (asked in the dialog). */
+    remove: (taskId: string, force = false) =>
+      request<DeleteReport>(
+        'DELETE',
+        `/api/worktrees/${encodeURIComponent(taskId)}${force ? '?force=true' : ''}`
+      ),
   },
 
   settings: {

@@ -1310,7 +1310,7 @@ async fn a_done_tasks_worktree_can_be_removed_and_comes_back_on_reopen() {
     let tip = git(&wt, &["rev-parse", "HEAD"]);
 
     // Not before the task is done.
-    let err = engine.delete_worktree(&id).await.unwrap_err();
+    let err = engine.delete_worktree(&id, false).await.unwrap_err();
     assert!(err.to_string().contains("not done"), "{err}");
     assert!(wt.exists());
     let listed = engine.worktrees().await.unwrap();
@@ -1318,7 +1318,7 @@ async fn a_done_tasks_worktree_can_be_removed_and_comes_back_on_reopen() {
 
     engine.move_task(&id, Phase::Done).await.unwrap();
     assert!(engine.worktrees().await.unwrap()[0].task_done);
-    engine.delete_worktree(&id).await.unwrap();
+    engine.delete_worktree(&id, false).await.unwrap();
     assert!(!wt.exists(), "the folder is gone");
     assert_eq!(
         git(&env.repo.path, &["rev-parse", &branch]),
@@ -1343,9 +1343,69 @@ async fn a_done_tasks_worktree_can_be_removed_and_comes_back_on_reopen() {
 
     // Done again, removed again, then the task deleted: the branch goes with it.
     engine.move_task(&id, Phase::Done).await.unwrap();
-    engine.delete_worktree(&id).await.unwrap();
+    engine.delete_worktree(&id, false).await.unwrap();
     engine.delete_task(&id).await.unwrap();
     assert!(engine.get_task(&id).await.unwrap().is_none());
     let branches = git(&env.repo.path, &["branch", "--list", &branch]);
     assert!(branches.is_empty(), "{branches}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_and_restoring_a_done_worktree_guards_the_users_work() {
+    let env = Env::new().await;
+    let agent = env.agent(1, vec![]);
+    let engine = Engine::open(env.project.clone(), env.bins()).await.unwrap();
+    let id = engine
+        .create_task("Guarded", "", agent, false)
+        .await
+        .unwrap()
+        .id;
+    let t = run_to_end(&engine, &id).await;
+    assert_eq!(t.phase, Phase::HumanReview);
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    let wt = env.worktree(&id);
+    let branch = format!("code-automata/{id}");
+
+    // Uncommitted changes are not on the branch: refused unless forced.
+    std::fs::write(wt.join("hand-edit.txt"), "mine").unwrap();
+    let err = engine.delete_worktree(&id, false).await.unwrap_err();
+    assert!(err.to_string().contains("uncommitted"), "{err}");
+    assert!(wt.exists());
+    engine.delete_worktree(&id, true).await.unwrap();
+    assert!(!wt.exists());
+
+    // Moving a done task to Done again does not bring the worktree back.
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    assert!(!wt.exists());
+
+    // A leftover plain folder (a removal that failed partway) is not taken for the worktree:
+    // git run in it would act on the main checkout.
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(wt.join("leftover.txt"), "x").unwrap();
+    engine.move_task(&id, Phase::HumanReview).await.unwrap();
+    assert_eq!(git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
+    assert_eq!(
+        git(&wt, &["rev-parse", "--show-toplevel"]),
+        ca_core::util::plain_path(std::fs::canonicalize(&wt).unwrap())
+            .to_string_lossy()
+            .to_string(),
+        "the folder is the task's own worktree now"
+    );
+    assert!(!wt.join("leftover.txt").exists());
+
+    // The branch checked out in the main checkout: reopening says where, instead of git's error.
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    engine.delete_worktree(&id, false).await.unwrap();
+    git(&env.repo.path, &["checkout", "-q", &branch]);
+    let err = engine.move_task(&id, Phase::HumanReview).await.unwrap_err();
+    assert!(err.to_string().contains("is checked out in"), "{err}");
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(
+        t.phase,
+        Phase::Done,
+        "the refused reopen did not move the task"
+    );
+    git(&env.repo.path, &["checkout", "-q", "main"]);
+    engine.move_task(&id, Phase::HumanReview).await.unwrap();
+    assert!(wt.exists());
 }

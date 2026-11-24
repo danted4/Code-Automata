@@ -20,8 +20,10 @@ import { useTaskStore } from '@/store/task-store';
 function useWorktreeCount(): number {
   const projectPath = useProjectStore((s) => s.projectPath);
   const worktreeRefreshKey = useProjectStore((s) => s.worktreeRefreshKey);
-  // A task gets its worktree when planning starts and loses it when deleted.
+  // A task gets its worktree when planning starts and loses it when deleted; a done task's can be
+  // removed, and reopening the task (leaving Done) brings it back.
   const tasksWithWorktrees = useTaskStore((s) => s.tasks.filter((t) => t.baseCommit).length);
+  const doneTasks = useTaskStore((s) => s.tasks.filter((t) => t.phase === 'done').length);
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -44,7 +46,7 @@ function useWorktreeCount(): number {
     return () => {
       cancelled = true;
     };
-  }, [projectPath, worktreeRefreshKey, tasksWithWorktrees]);
+  }, [projectPath, worktreeRefreshKey, tasksWithWorktrees, doneTasks]);
 
   return count;
 }

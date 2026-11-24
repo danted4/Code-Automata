@@ -104,10 +104,12 @@ export default function WorktreesPage() {
   }, [load]);
 
   const deleteOne = async (taskId: string) => {
-    const done = worktrees?.find((w) => w.taskId === taskId)?.taskDone ?? false;
-    const what = done ? 'Worktree removed' : 'Orphan worktree deleted';
+    const target = worktrees?.find((w) => w.taskId === taskId);
+    const what = target?.taskDone ? 'Worktree removed' : 'Orphan worktree deleted';
     try {
-      const report = await api.worktrees.remove(taskId);
+      // The dialog warned about uncommitted changes when the page knew of them; changes made
+      // since are refused by the server, and a reload shows the warning.
+      const report = await api.worktrees.remove(taskId, target?.isDirty === true);
       if (report.warnings.length > 0) {
         toast.warning(`${what} with warnings`, {
           description: lines(report.warnings),

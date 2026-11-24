@@ -298,7 +298,19 @@ impl Engine {
     ///
     /// Any other task's worktree, readable or not, goes only with the task, through
     /// [`Engine::delete_task`].
-    pub async fn delete_worktree(&self, task_id: &str) -> Result<crate::git::DeleteReport> {
+    ///
+    /// A done task's worktree with uncommitted changes is refused unless `force`: those changes
+    /// are not on the branch and would be lost.
+    pub async fn delete_worktree(
+        &self,
+        task_id: &str,
+        force: bool,
+    ) -> Result<crate::git::DeleteReport> {
+        crate::util::validate_task_id(task_id)?;
+        // The phase is read under the lock that reopening and pull requests hold, so a reopen
+        // cannot slip between the check and the removal.
+        let lock = self.pr_lock(task_id);
+        let guard = lock.lock().await;
         let done_task = match self.inner.store.load(task_id).await {
             Ok(None) => false,
             Ok(Some(t)) if t.phase == Phase::Done => true,
@@ -314,11 +326,16 @@ impl Engine {
                 )));
             }
         };
-        // Not while a pull request is being pushed from it (allowed from Done).
-        let lock = self.pr_lock(task_id);
-        let _guard = lock.lock().await;
-        if !self.inner.worktrees.status(task_id).await?.exists {
+        let status = self.inner.worktrees.status(task_id).await?;
+        if !status.exists {
             return Err(CoreError::NotFound(format!("worktree {task_id}")));
+        }
+        if done_task && !force && status.has_changes != Some(false) {
+            return Err(CoreError::Invalid(
+                "the worktree has uncommitted changes that are not on the task's branch; remove \
+                 it anyway to discard them"
+                    .into(),
+            ));
         }
         let report = self
             .inner
@@ -332,10 +349,13 @@ impl Engine {
                 },
             )
             .await?;
+        drop(guard);
         if done_task {
             self.inner.emit(EngineEvent::TaskChanged {
                 task_id: task_id.to_string(),
             });
+        } else {
+            self.drop_pr_lock(task_id);
         }
         Ok(report)
     }
@@ -348,6 +368,15 @@ impl Engine {
             .entry(id.to_string())
             .or_default()
             .clone()
+    }
+
+    /// Forget a task's lock once the task (or orphan) is gone.
+    fn drop_pr_lock(&self, id: &str) {
+        self.inner
+            .pr_locks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
     }
 
     pub async fn worktree_usage(&self) -> Result<crate::git::DiskUsage> {
@@ -717,10 +746,15 @@ impl Engine {
         if to == Phase::Planning && task.phase != Phase::Planning {
             self.discard_dropped_dev_work(&task).await?;
         }
-        if task.phase == Phase::Done {
-            // Reopening a done task whose worktree was removed brings it back from the branch.
-            let lock = self.pr_lock(id);
-            let _guard = lock.lock().await;
+        // Reopening a done task whose worktree was removed brings it back from the branch. The
+        // lock (which removal and pull requests hold) covers the restore and the move together.
+        let reopening = task.phase == Phase::Done && to != Phase::Done;
+        let lock = reopening.then(|| self.pr_lock(id));
+        let _guard = match &lock {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
+        if reopening {
             self.inner.worktrees.restore(id).await?;
         }
         let task = self.inner.store.move_phase(id, to, Mover::User).await?;
@@ -757,6 +791,7 @@ impl Engine {
             )
             .await?;
         self.inner.store.delete(id).await?;
+        self.drop_pr_lock(id);
         self.inner.emit(EngineEvent::TaskChanged {
             task_id: id.to_string(),
         });

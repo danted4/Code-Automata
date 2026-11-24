@@ -887,6 +887,38 @@ async fn worktrees_are_listed_and_only_orphans_deleted() {
     h.ok("DELETE", "/api/worktrees/orphan-1", p, None).await;
     let list = h.ok("GET", "/api/worktrees", p, None).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["taskDone"], false);
+
+    // Once the task is done its worktree can go; uncommitted changes need ?force=true.
+    h.ok(
+        "POST",
+        &format!("/api/tasks/{id}/move"),
+        p,
+        Some(json!({ "to": "done" })),
+    )
+    .await;
+    let list = h.ok("GET", "/api/worktrees", p, None).await;
+    assert_eq!(list[0]["taskDone"], true);
+    let wt = list[0]["path"].as_str().unwrap().to_string();
+    std::fs::write(Path::new(&wt).join("hand-edit.txt"), "mine").unwrap();
+    let (status, body) = h
+        .call("DELETE", &format!("/api/worktrees/{id}"), p, None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("uncommitted"),
+        "{body}"
+    );
+    h.ok(
+        "DELETE",
+        &format!("/api/worktrees/{id}?force=true"),
+        p,
+        None,
+    )
+    .await;
+    assert!(!Path::new(&wt).exists());
+    let task = h.ok("GET", &format!("/api/tasks/{id}"), p, None).await;
+    assert_eq!(phase(&task), "done", "the task stays");
 }
 
 #[tokio::test(flavor = "multi_thread")]
