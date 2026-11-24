@@ -12,7 +12,8 @@
 //! * Dropping the `RunningAgent` (or every `Stopper`) stops the run: an agent nobody can stop or
 //!   hear from must not keep editing the worktree.
 //! * A CLI that prints its result and then lingers is ended after `result_grace`.
-//! * The idle timeout pauses while a tool call is open (CLIs print nothing during a long build).
+//! * While a tool call is open the idle timeout is replaced by the longer tool timeout (CLIs print
+//!   nothing during a long build); open calls are forgotten once the agent talks again.
 //!
 //! On Windows only the direct child is killed for now; Job Objects come with packaging (Phase 5).
 
@@ -154,6 +155,7 @@ pub(crate) async fn spawn(
         events: event_tx,
         log,
         idle_timeout: req.idle_timeout,
+        tool_timeout: req.tool_timeout,
         total_timeout: req.total_timeout,
         result_grace: req.result_grace,
         kill_grace: req.kill_grace,
@@ -197,6 +199,7 @@ struct Supervisor {
     events: mpsc::UnboundedSender<AgentEvent>,
     log: File,
     idle_timeout: Option<Duration>,
+    tool_timeout: Option<Duration>,
     total_timeout: Option<Duration>,
     result_grace: Duration,
     kill_grace: Duration,
@@ -270,8 +273,8 @@ impl Supervisor {
         let mut exit_code: Option<i32> = None;
         let mut drain_until: Option<Instant> = None;
         let mut stop_open = true;
-        // Tool calls in flight. The CLIs print nothing while a command runs, so the idle timer
-        // pauses until every open call has its result; the total timeout still applies.
+        // Tool calls in flight. The CLIs print nothing while a command runs, so while any call is
+        // open the (longer) tool timeout applies instead of the idle timeout.
         let mut open_tools: Vec<String> = Vec::new();
 
         loop {
@@ -279,9 +282,13 @@ impl Supervisor {
                 break;
             }
             let running = ended_by.is_none() && !self.reaped;
-            let idle_at = self
-                .idle_timeout
-                .filter(|_| running && open_tools.is_empty() && result.is_none())
+            let quiet_limit = if open_tools.is_empty() {
+                self.idle_timeout
+            } else {
+                self.tool_timeout
+            };
+            let idle_at = quiet_limit
+                .filter(|_| running && result.is_none())
                 .map(|d| last_activity + d);
             let total_at = self.total_timeout.filter(|_| running).map(|d| started + d);
             // A CLI that has printed its result but lingers is given a short grace, then ended.
@@ -298,6 +305,7 @@ impl Supervisor {
                             Parsed::Result(info) => {
                                 result = Some(info);
                                 result_at.get_or_insert_with(Instant::now);
+                                open_tools.clear();
                             }
                             Parsed::Event(event) => {
                                 match &event {
@@ -306,6 +314,11 @@ impl Supervisor {
                                         if let Some(i) = open_tools.iter().position(|t| t == id) {
                                             open_tools.remove(i);
                                         }
+                                    }
+                                    // The agent is talking again, so no call is still running;
+                                    // a call whose result never matched must not pin the timer.
+                                    AgentEvent::Text { .. } | AgentEvent::Thinking { .. } => {
+                                        open_tools.clear();
                                     }
                                     _ => {}
                                 }

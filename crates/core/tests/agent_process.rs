@@ -481,3 +481,45 @@ async fn a_long_quiet_tool_call_is_not_an_idle_timeout() {
     let o = start(req, &Mock::bins()).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::Completed, "{o:?}");
 }
+
+#[tokio::test]
+async fn a_tool_call_that_never_returns_hits_the_tool_timeout() {
+    let m = Mock::new();
+    let mut req = m.request(json!({ "steps": [
+        { "toolStart": { "name": "Bash", "input": { "command": "yarn dev" } } },
+        { "hang": true }
+    ]}));
+    // The idle limit covers process start-up until the tool call is seen, so it must leave room
+    // for a slow start under parallel test load; the tool limit is well beyond it.
+    req.idle_timeout = Some(Duration::from_millis(1000));
+    req.tool_timeout = Some(Duration::from_millis(3000));
+    let began = Instant::now();
+    let o = start(req, &Mock::bins()).await.unwrap().wait().await;
+    assert_eq!(o.kind, OutcomeKind::TimedOut);
+    let took = began.elapsed();
+    assert!(
+        took >= Duration::from_millis(2900),
+        "the idle timeout fired during the tool: {took:?}"
+    );
+    assert!(took < Duration::from_secs(6), "{took:?}");
+}
+
+#[tokio::test]
+async fn an_unmatched_tool_call_is_forgotten_once_the_agent_talks_again() {
+    let m = Mock::new();
+    let mut req = m.request(json!({ "steps": [
+        { "toolStart": { "name": "Bash", "input": {} } },
+        { "text": "moving on" },
+        { "hang": true }
+    ]}));
+    req.idle_timeout = Some(Duration::from_millis(500));
+    req.tool_timeout = Some(Duration::from_secs(60));
+    let began = Instant::now();
+    let o = start(req, &Mock::bins()).await.unwrap().wait().await;
+    assert_eq!(o.kind, OutcomeKind::TimedOut);
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "the stale call kept the tool timeout in force: {:?}",
+        began.elapsed()
+    );
+}

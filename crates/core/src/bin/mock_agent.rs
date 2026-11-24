@@ -15,6 +15,7 @@
 //! | `{"thinking": "…"}` | assistant thinking |
 //! | `{"tool": {"name", "input", "output", "isError", "durationMs"}}` | a tool_use, a silent pause of `durationMs`, then its tool_result |
 //! | `{"invalidUtf8": "stdout" \| "stderr"}` | a line of bytes that are not UTF-8 |
+//! | `{"toolStart": {"name", "input"}}` | a tool_use whose result never comes |
 //! | `{"write": {"path", "content"}}` | write a file under the cwd (refused with `--read-only`) |
 //! | `{"stderr": "…"}` | a line on stderr |
 //! | `{"sleepMs": n}` | pause |
@@ -113,6 +114,11 @@ fn run() -> i32 {
                 tool.get("isError")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+            );
+        } else if let Some(tool) = step.get("toolStart") {
+            assistant(
+                &session_id,
+                json!({ "type": "tool_use", "id": format!("tool-{n}"), "name": tool.get("name"), "input": tool.get("input") }),
             );
         } else if let Some(write) = step.get("write") {
             let id = format!("tool-{n}");

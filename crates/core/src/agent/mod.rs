@@ -46,9 +46,12 @@ pub struct RunRequest {
     pub max_turns: Option<u32>,
     /// Raw stdout lines, stderr and the outcome are appended here as NDJSON.
     pub log_path: PathBuf,
-    /// Stop the run if it produces no output for this long. Paused while a tool call is open,
-    /// since CLIs print nothing while a command runs.
+    /// Stop the run if it produces no output for this long. Replaced by `tool_timeout` while a
+    /// tool call is open, since CLIs print nothing while a command runs.
     pub idle_timeout: Option<Duration>,
+    /// Stop the run if a tool call stays open with no output for this long (a dev server, a
+    /// command waiting on input, or a call whose result never arrives).
+    pub tool_timeout: Option<Duration>,
     /// Stop the run if it takes longer than this in total.
     pub total_timeout: Option<Duration>,
     /// How long a CLI may linger after printing its final result before it is ended.
@@ -75,6 +78,7 @@ impl RunRequest {
             log_path: log_path.into(),
             idle_timeout: None,
             total_timeout: None,
+            tool_timeout: Some(Duration::from_secs(30 * 60)),
             result_grace: Duration::from_secs(10),
             kill_grace: Duration::from_secs(5),
         }
