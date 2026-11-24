@@ -27,19 +27,21 @@ const TOKEN: &str = "test-token";
 const PORT: u16 = 7999;
 
 fn mock_agent() -> PathBuf {
+    // The final binaries sit in target/<profile>/. Test executables are below it, in deps/ or
+    // (newer Cargo) build/<package>/<hash>/, so look in each folder above this one.
+    let name = format!("mock-agent{}", std::env::consts::EXE_SUFFIX);
     let exe = std::env::current_exe().unwrap();
-    // target/<profile>/deps/http-<hash> -> target/<profile>/mock-agent
-    let path = exe
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join(format!("mock-agent{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        path.exists(),
-        "{} is missing: run `cargo build -p code-automata-core` (or `cargo test` at the workspace root)",
-        path.display()
-    );
-    path
+    exe.ancestors()
+        .skip(1)
+        .map(|dir| dir.join(&name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "no {name} above {}: run `cargo build -p code-automata-core` (or `cargo test` at \
+                 the workspace root)",
+                exe.display()
+            )
+        })
 }
 
 fn git(cwd: &Path, args: &[&str]) {
