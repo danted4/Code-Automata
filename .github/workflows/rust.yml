@@ -17,6 +17,7 @@ on:
       - 'Cargo.lock'
       - 'crates/**'
       - 'ui/src/lib/api/types/**'
+      - 'ui/package.json'
       - '.github/workflows/rust.yml'
 
 env:

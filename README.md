@@ -37,7 +37,7 @@ The installers are not code-signed, so the first launch needs one extra step:
 
 Check a download against `checksums.sha256` from the same release: `shasum -a 256 -c checksums.sha256 --ignore-missing`.
 
-The app checks for a new version once at launch and asks before installing it. Updating restarts the app; tasks that were running stop where they are and continue with Resume.
+The app checks for a new version once at launch and asks before installing it. Updating restarts the app; tasks that were running stop where they are and continue with Resume. Only stable releases are offered: a pre-release (`3.0.0-rc.1`, say) is installed by hand and is offered the next stable version.
 
 ## What it is
 

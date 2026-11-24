@@ -5,6 +5,10 @@
 # * Run by hand without a tag: a dry run. Everything is built, signed when the updater key is
 #   set, and uploaded as workflow artifacts (installers, latest.json, checksums); no release.
 #
+# Only stable releases are offered as updates: the app asks for GitHub's "latest" release, which
+# skips pre-releases (versions with a "-", marked --prerelease here). Pre-releases are installed
+# by hand; an installed pre-release is offered the next stable version.
+#
 # Installers: one universal macOS DMG (plus the .app.tar.gz the updater uses), a per-user NSIS
 # installer for Windows, an AppImage and a deb for Linux (built on Ubuntu 22.04 for its older
 # glibc). Nothing is code-signed; updates are signed with TAURI_SIGNING_PRIVATE_KEY and checked
@@ -38,11 +42,13 @@ jobs:
     steps:
       - name: Which tag
         id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@v4
         with:
@@ -139,6 +145,7 @@ jobs:
         env:
           V: ${{ needs.version.outputs.version }}
           B: ${{ matrix.bundle }}
+          RELEASE: ${{ needs.version.outputs.release }}
         run: |
           mkdir -p dist
           # copy <glob> <name>: the one file matching, and its updater signature if there is one.
@@ -155,7 +162,8 @@ jobs:
           case "${{ matrix.platform }}" in
             macos)
               copy "$B/dmg/*.dmg" "Code-Automata-$V-macos-universal.dmg"
-              if compgen -G "$B/macos/*.app.tar.gz" > /dev/null; then
+              # The updater's archive exists only when update files were built (always for a release).
+              if [ "$RELEASE" = "true" ] || compgen -G "$B/macos/*.app.tar.gz" > /dev/null; then
                 copy "$B/macos/*.app.tar.gz" "Code-Automata-$V-macos-universal.app.tar.gz"
               fi
               ;;
@@ -189,29 +197,39 @@ jobs:
           V: ${{ needs.version.outputs.version }}
           TAG: ${{ needs.version.outputs.tag }}
           REPO: ${{ github.repository }}
+          RELEASE: ${{ needs.version.outputs.release }}
         run: |
           python3 - <<'PY'
-          import datetime, json, os
+          import datetime, json, os, sys
           v, repo = os.environ["V"], os.environ["REPO"]
+          release = os.environ["RELEASE"] == "true"
           tag = os.environ["TAG"] or f"v{v}"
           base = f"https://github.com/{repo}/releases/download/{tag}/"
           def entry(name):
               sig = open(f"dist/{name}.sig").read().strip()
               return {"signature": sig, "url": base + name}
+          # The updater looks for "<os>-<arch>-<installer>", then "<os>-<arch>". Without the
+          # required ones, installs on that platform could never update: a release fails.
           files = {
-              # The updater looks for "<os>-<arch>-<installer>", then "<os>-<arch>".
-              f"Code-Automata-{v}-macos-universal.app.tar.gz": ["darwin-aarch64", "darwin-x86_64"],
-              f"Code-Automata-{v}-windows-x64-setup.exe": ["windows-x86_64", "windows-x86_64-nsis"],
-              f"Code-Automata-{v}-linux-x86_64.AppImage": ["linux-x86_64", "linux-x86_64-appimage"],
-              f"Code-Automata-{v}-linux-amd64.deb": ["linux-x86_64-deb"],
+              f"Code-Automata-{v}-macos-universal.app.tar.gz": (["darwin-aarch64", "darwin-x86_64"], True),
+              f"Code-Automata-{v}-windows-x64-setup.exe": (["windows-x86_64", "windows-x86_64-nsis"], True),
+              f"Code-Automata-{v}-linux-x86_64.AppImage": (["linux-x86_64", "linux-x86_64-appimage"], True),
+              f"Code-Automata-{v}-linux-amd64.deb": (["linux-x86_64-deb"], False),
           }
           platforms = {}
-          for name, keys in files.items():
+          missing = []
+          for name, (keys, required) in files.items():
               if os.path.exists(f"dist/{name}.sig"):
                   for key in keys:
                       platforms[key] = entry(name)
+              elif release and required:
+                  missing.append(name)
               else:
                   print(f"::warning::no update signature for {name}")
+          for name in missing:
+              print(f"::error::no update signature for {name}")
+          if missing:
+              sys.exit(1)
           if platforms:
               manifest = {
                   "version": v,
@@ -264,7 +282,7 @@ jobs:
           notes = ""
           if os.path.exists("CHANGELOG.md"):
               text = open("CHANGELOG.md").read()
-              m = re.search(rf"^## {re.escape(v)}\b.*?$(.*?)(?=^## |^---$|\Z)", text, re.M | re.S)
+              m = re.search(rf"^## {re.escape(v)}(?=\s|$).*?$(.*?)(?=^## |^---$|\Z)", text, re.M | re.S)
               if m:
                   notes = m.group(1).strip()
           if not notes:
