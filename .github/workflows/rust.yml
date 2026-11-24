@@ -48,10 +48,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           rm -rf ui/src/lib/api/types
-          cargo test --workspace --locked --features ts export_bindings
+          cargo test -p code-automata-core -p code-automata-server --locked --features ts export_bindings
           changes="$(git status --porcelain ui/src/lib/api/types)"
           if [ -n "$changes" ]; then
             echo "$changes"
-            echo "::error::Regenerate them: rm -rf ui/src/lib/api/types && cargo test --workspace --features ts export_bindings"
+            echo "::error::Regenerate them: rm -rf ui/src/lib/api/types && cargo test -p code-automata-core -p code-automata-server --features ts export_bindings"
             exit 1
           fi

@@ -29,6 +29,7 @@ ts = ["dep:ts-rs"]
 
 [dependencies]
 ts-rs = { version = "12", optional = true, features = ["serde-json-impl", "no-serde-warnings"] }
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
@@ -39,7 +40,7 @@ nix = { version = "0.30", default-features = false, features = ["signal", "proce
 
 [target.'cfg(windows)'.dependencies]
 # Job Objects: an agent and everything it starts are stopped together, and die with this process.
-process-wrap = { version = "11", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }
+process-wrap = { version = "11", default-features = false, features = ["tokio1", "creation-flags", "job-object", "kill-on-drop"] }
 
 [dev-dependencies]
 tempfile = "3"

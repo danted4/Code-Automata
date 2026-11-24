@@ -121,6 +121,7 @@ async fn run(args: Args) -> Result<(), String> {
         allow_mock: args.allow_mock,
         mock_scenario: args.mock_scenario,
         bins,
+        allowed_origins: Vec::new(),
     });
 
     println!("listening on http://127.0.0.1:{port}");

@@ -104,7 +104,7 @@ fn index_held(stderr: &[u8]) -> bool {
 }
 
 async fn git_output_once(cwd: &Path, args: &[&str], timeout: Option<Duration>) -> Result<Output> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = crate::proc::command("git");
     cmd.args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -152,7 +152,7 @@ async fn git_succeeds(cwd: &Path, args: &[&str]) -> Result<bool> {
 }
 
 pub async fn git_available() -> bool {
-    tokio::process::Command::new("git")
+    crate::proc::command("git")
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

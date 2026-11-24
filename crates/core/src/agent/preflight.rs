@@ -135,7 +135,7 @@ async fn run(
     bins: &Binaries,
     env_remove: &[String],
 ) -> Option<CheckOutput> {
-    let mut cmd = tokio::process::Command::new(binary);
+    let mut cmd = crate::proc::command(binary);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
         .env("NO_COLOR", "1")

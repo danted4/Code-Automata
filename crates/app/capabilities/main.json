@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window: the app's own commands, nothing else.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-pick-folder",
+    "allow-available-editors",
+    "allow-path-exists",
+    "allow-open-in-editor",
+    "allow-reveal-folder",
+    "allow-smoke-report"
+  ]
+}

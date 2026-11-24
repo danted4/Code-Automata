@@ -25,7 +25,7 @@ pub async fn process_started(pid: u32) -> Option<String> {
     if cfg!(windows) {
         return None;
     }
-    let out = tokio::process::Command::new("ps")
+    let out = crate::proc::command("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         // The date format follows the locale; the same pid must give the same text whatever
         // locale the recording and the checking process ran under.

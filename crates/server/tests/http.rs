@@ -105,6 +105,7 @@ impl Harness {
             allow_mock,
             mock_scenario: None,
             bins,
+            allowed_origins: Vec::new(),
         });
         Harness {
             app: ca_server::router(state.clone()),
@@ -332,6 +333,125 @@ async fn every_request_needs_the_token_and_the_right_host() {
     let (status, body) = h.send(ok).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["tasks"], json!([]));
+}
+
+/// The desktop app's page calls the server cross-origin. Only its own origin gets CORS headers,
+/// a preflight needs no token, and every real request still does.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_app_origin_may_call_cross_origin_and_still_needs_the_token() {
+    const APP: &str = "tauri://localhost";
+    let state = AppState::new(Config {
+        token: TOKEN.into(),
+        port: PORT,
+        allow_mock: false,
+        mock_scenario: None,
+        bins: Binaries::from_env(),
+        allowed_origins: vec![APP.into()],
+    });
+    let app = ca_server::router(state);
+    let send = |req: Request<Body>| {
+        let app = app.clone();
+        async move { app.oneshot(req).await.unwrap() }
+    };
+    let preflight = |origin: &str| {
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/api/providers")
+            .header("host", format!("127.0.0.1:{PORT}"))
+            .header("origin", origin)
+            .header("access-control-request-method", "GET")
+            .header(
+                "access-control-request-headers",
+                "authorization,x-project-path",
+            )
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let res = send(preflight(APP)).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let h = res.headers();
+    assert_eq!(h["access-control-allow-origin"], APP);
+    assert!(
+        h["access-control-allow-headers"]
+            .to_str()
+            .unwrap()
+            .contains("x-project-path")
+    );
+
+    let res = send(preflight("https://evil.example")).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(!res.headers().contains_key("access-control-allow-origin"));
+
+    // A preflight still has to name this server.
+    let mut wrong_host = preflight(APP);
+    wrong_host
+        .headers_mut()
+        .insert("host", "evil.example:7999".parse().unwrap());
+    assert_eq!(send(wrong_host).await.status(), StatusCode::FORBIDDEN);
+
+    // From the app's origin without the token: refused, but readable by the page.
+    let res = send(
+        Request::builder()
+            .uri("/api/providers")
+            .header("host", format!("127.0.0.1:{PORT}"))
+            .header("origin", APP)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(res.headers()["access-control-allow-origin"], APP);
+
+    let res = send(
+        Request::builder()
+            .uri("/api/providers")
+            .header("host", format!("127.0.0.1:{PORT}"))
+            .header("origin", APP)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["access-control-allow-origin"], APP);
+
+    // Another origin with the token works as without any origin (the browser would hide the
+    // answer), and gets no CORS header.
+    let res = send(
+        Request::builder()
+            .uri("/api/providers")
+            .header("host", format!("127.0.0.1:{PORT}"))
+            .header("origin", "https://evil.example")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(!res.headers().contains_key("access-control-allow-origin"));
+}
+
+/// `ca-server` (no allowed origins) never sends CORS headers, preflight or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_plain_server_sends_no_cors_headers() {
+    let h = Harness::new(false);
+    let mut req = h.request("GET", "/api/providers", None, None);
+    req.headers_mut()
+        .insert("origin", "tauri://localhost".parse().unwrap());
+    let res = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!res.headers().contains_key("access-control-allow-origin"));
+}
+
+/// Open projects are listed by repository root, for the desktop app's path checks.
+#[tokio::test(flavor = "multi_thread")]
+async fn open_roots_lists_opened_projects() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    assert!(h.state.open_roots().await.is_empty());
+    h.ok("GET", "/api/tasks", &repo.path, None).await;
+    assert_eq!(h.state.open_roots().await, vec![repo.path.clone()]);
+    assert_eq!(h.state.running_count().await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1070,6 +1190,7 @@ async fn mock_tasks_from_the_ui_get_the_default_scenario() {
             allow_mock: true,
             mock_scenario: Some(scenario.clone()),
             bins: Binaries::from_env().with_override(Provider::Mock, mock_agent()),
+            allowed_origins: Vec::new(),
         });
         Harness {
             app: ca_server::router(state.clone()),

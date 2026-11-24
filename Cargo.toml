@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/server"]
+members = ["crates/core", "crates/server", "crates/app"]
+# The desktop app needs the platform webview's development files (webkit2gtk on Linux) and takes
+# long to build; `cargo build`, `cargo test` and `cargo clippy` at the root leave it out. Build it
+# with `-p code-automata-app` or `cargo tauri dev` / `cargo tauri build` in `crates/app`.
+default-members = ["crates/core", "crates/server"]
 
 [workspace.package]
 version = "3.0.0-alpha.0"

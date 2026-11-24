@@ -24,6 +24,9 @@ pub struct Config {
     pub mock_scenario: Option<PathBuf>,
     /// Where the agent CLIs are.
     pub bins: Binaries,
+    /// Page origins allowed to call the API cross-origin, exactly as browsers send them (the
+    /// desktop app's `tauri://localhost`). Empty for `ca-server`.
+    pub allowed_origins: Vec<String>,
 }
 
 pub struct AppState {
@@ -93,6 +96,28 @@ impl AppState {
             ));
         }
         Ok(engine.clone())
+    }
+
+    /// The repository roots of the projects opened so far.
+    pub async fn open_roots(&self) -> Vec<PathBuf> {
+        self.engines
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, slot)| slot.initialized())
+            .map(|(root, _)| root.clone())
+            .collect()
+    }
+
+    /// How many tasks are running across every open project.
+    pub async fn running_count(&self) -> usize {
+        self.engines
+            .lock()
+            .await
+            .values()
+            .filter_map(|slot| slot.get())
+            .map(|engine| engine.running_count())
+            .sum()
     }
 
     /// Fires once the server starts shutting down.

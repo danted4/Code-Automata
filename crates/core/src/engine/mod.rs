@@ -137,6 +137,10 @@ impl Inner {
     }
 
     pub fn emit(&self, event: EngineEvent) {
+        // Errors also go to the log (the desktop app's log file), since nobody may be watching.
+        if let EngineEvent::Error { task_id, message } = &event {
+            log::error!("task {task_id}: {message}");
+        }
         let _ = self.events.send(event);
     }
 
@@ -345,6 +349,15 @@ impl Engine {
 
     pub fn is_running(&self, id: &str) -> bool {
         self.inner.control(id).is_some()
+    }
+
+    /// How many tasks have a step in progress (an agent, checks or git work).
+    pub fn running_count(&self) -> usize {
+        self.inner
+            .drivers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
     }
 
     pub async fn create_task(

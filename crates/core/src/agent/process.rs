@@ -103,7 +103,7 @@ pub(crate) async fn spawn(
 ) -> Result<RunningAgent> {
     let log = open_log(&req.log_path).await?;
 
-    let mut cmd = tokio::process::Command::new(&spec.program);
+    let mut cmd = crate::proc::command(&spec.program);
     cmd.args(&spec.args)
         .current_dir(&req.cwd)
         .stdin(Stdio::piped())

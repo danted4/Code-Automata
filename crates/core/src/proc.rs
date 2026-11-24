@@ -27,6 +27,21 @@ pub(crate) struct TreeChild {
     pid: Option<u32>,
 }
 
+/// `CREATE_NO_WINDOW`: start a console program without a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A command for a program run in the background. Every process this crate starts is made here
+/// (a test in `tests/no_console_windows.rs` checks): on Windows a GUI app, which has no console
+/// of its own, would otherwise open a console window for each `git`, agent or check it runs.
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 /// Start `cmd` as the root of a new process tree.
 pub(crate) fn spawn(mut cmd: Command) -> io::Result<TreeChild> {
     cmd.kill_on_drop(true);
@@ -39,9 +54,14 @@ pub(crate) fn spawn(mut cmd: Command) -> io::Result<TreeChild> {
     }
     #[cfg(windows)]
     {
-        use process_wrap::tokio::{CommandWrap, JobObject, JobObjectChild, KillOnDrop};
+        use process_wrap::tokio::{
+            CommandWrap, CreationFlags, JobObject, JobObjectChild, KillOnDrop,
+        };
         let mut wrap = CommandWrap::from(cmd);
-        wrap.wrap(JobObject).wrap(KillOnDrop);
+        // The job wrapper sets the creation flags itself; this keeps CREATE_NO_WINDOW in them.
+        wrap.wrap(CreationFlags(CREATE_NO_WINDOW))
+            .wrap(JobObject)
+            .wrap(KillOnDrop);
         let child = wrap.spawn()?;
         let any: &dyn std::any::Any = child.as_ref();
         let job = any
@@ -177,7 +197,7 @@ async fn terminate_group(pgid: u32, grace: Duration) {
 pub(crate) fn shell_command(line: &str) -> Command {
     #[cfg(unix)]
     {
-        let mut cmd = Command::new("sh");
+        let mut cmd = command("sh");
         cmd.arg("-c").arg(line);
         cmd
     }
@@ -189,7 +209,7 @@ pub(crate) fn shell_command(line: &str) -> Command {
         // %ComSpec% rather than a PATH lookup: checks run with the user's PATH, which need not
         // include System32. A command line is limited to about 8191 characters.
         let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
-        let mut cmd = Command::new(comspec);
+        let mut cmd = command(comspec);
         cmd.args(["/D", "/S", "/C"]).raw_arg(format!("\"{line}\""));
         cmd
     }

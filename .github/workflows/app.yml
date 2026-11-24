@@ -1,0 +1,77 @@
+# The desktop app (crates/app): lint and test it, build it with the UI embedded, then start it
+# with CODE_AUTOMATA_SMOKE=1, which checks the webview -> server -> webview path and exits. This
+# is the only automated run of the platform webviews (WebKit, WebView2, WebKitGTK).
+name: App
+
+on:
+  push:
+    branches: [main, v3-tauri]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'ui/**'
+      - '.github/workflows/app.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'ui/**'
+      - '.github/workflows/app.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Webview development files (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+      - run: yarn install --frozen-lockfile
+        working-directory: ui
+      # tauri-build needs the UI it embeds to exist before clippy and the tests build the crate.
+      - run: yarn build
+        working-directory: ui
+      - name: Clippy
+        run: cargo clippy -p code-automata-app --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test -p code-automata-app --locked
+      - name: Build the app (debug, UI embedded)
+        working-directory: crates/app
+        run: ../../ui/node_modules/.bin/tauri build --debug --no-bundle
+      - name: Smoke test
+        env:
+          CODE_AUTOMATA_SMOKE: '1'
+          # Software rendering in a headless X server.
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          app=target/debug/code-automata
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a "$app" | tee smoke.log
+          else
+            "$app" | tee smoke.log
+          fi
+          grep -q '^smoke: passed' smoke.log

@@ -64,6 +64,15 @@ impl Binaries {
         }
     }
 
+    /// Search exactly this `PATH`-style list of folders.
+    pub fn from_search_path(path: OsString) -> Self {
+        Binaries {
+            search_path: Some(path),
+            overrides: HashMap::new(),
+            tools: HashMap::new(),
+        }
+    }
+
     /// Search the `PATH` the user's login shell reports, falling back to this process's `PATH`
     /// if the shell cannot be run or reports something that is not a usable `PATH`. Right for an
     /// app started from the Dock or Finder.
@@ -80,7 +89,7 @@ impl Binaries {
         } else {
             format!("printf '{START}%s{END}' \"$PATH\"")
         };
-        let out = tokio::process::Command::new(&shell)
+        let out = crate::proc::command(&shell)
             .args(["-ilc", &script])
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
@@ -146,7 +155,7 @@ impl Binaries {
     }
 
     /// The first executable called `name` on the search path.
-    fn search(&self, name: &str) -> Option<PathBuf> {
+    pub fn search(&self, name: &str) -> Option<PathBuf> {
         let names = executable_names(name, std::env::var_os("PATHEXT").as_deref());
         self.search_path
             .as_deref()

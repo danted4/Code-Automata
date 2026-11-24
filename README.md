@@ -15,7 +15,7 @@ _"Ever since the first MVP was shipped, Code-Automata™ has started modifying i
 ---
 
 > [!IMPORTANT]
-> This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. The app runs in a browser against the Rust server today; the desktop app (Tauri) and installers are not built yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
+> This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. The desktop app builds from source; installers are not released yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
 
 ## What it is
 
@@ -40,21 +40,23 @@ Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-co
 | --- | --- |
 | `crates/core` | The Rust core (`ca_core`): task store, run engine, agent processes, git and worktrees |
 | `crates/server` | The HTTP API and event stream the UI talks to (`ca_server`), and the `ca-server` binary |
+| `crates/app` | The desktop app (Tauri 2): the UI in a window with the server in-process |
 | `ui/` | The React UI (Vite, React Router, Tailwind), with its end-to-end scenarios in `ui/e2e/` |
 | `docs/images/` | Screenshots and logos |
 
-The Tauri shell (`crates/app`) is not built yet.
-
 ## Development
 
-Requirements: Rust 1.89 or newer, Node 22 and Yarn 1, and Git. Agents: Claude Code, Cursor's `agent` CLI or Amp, logged in.
+Requirements: Rust 1.89 or newer, Node 22 and Yarn 1, and Git; on Linux, the webview development files (`libwebkit2gtk-4.1-dev`). Agents: Claude Code, Cursor's `agent` CLI or Amp, logged in.
 
 ```bash
 # Rust
 cargo test
 cargo clippy --all-targets -- -D warnings
 
-# Run the app in a browser
+# The desktop app (Tauri CLI: cargo install tauri-cli --version "^2.12" --locked)
+cd ui && yarn install && cd ../crates/app && cargo tauri dev
+
+# Or the app in a browser
 cargo run -p code-automata-server --bin ca-server -- --port 7878 --token dev
 cd ui && yarn install && yarn dev        # http://localhost:5173
 

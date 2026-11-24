@@ -122,7 +122,7 @@ fn body(task: &Task) -> String {
 }
 
 async fn gh_output(inner: &Inner, gh: &PathBuf, wt: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(gh);
+    let mut cmd = crate::proc::command(gh);
     cmd.args(args)
         .current_dir(wt)
         .stdin(std::process::Stdio::null())
