@@ -38,6 +38,13 @@ cargo test --test git worktree_lifecycle      # one integration test
 - Phase moves go through `transitions::check_move`; UI edits through `apply_patch`, which accepts only `EDITABLE_FIELDS`.
 - A project is always a git repository root; picking a subfolder opens its repository.
 
+`crates/core/src/agent/` runs agent CLIs (Claude Code, Cursor, Amp, and the scripted `mock-agent` binary for tests):
+
+- A run's outcome comes only from the provider's final `result` event; exit codes are ignored. No `result` means crashed, timed out or stopped.
+- Agents run in their own process group; stop and timeouts kill the whole group (SIGTERM, then SIGKILL after `kill_grace`).
+- Prompts go on stdin, never in arguments. Claude runs with project settings only and no MCP servers, so the user's own hooks and connectors never reach task agents.
+- Live tests make real model calls: `cargo test --test live_agents -- --ignored --test-threads=1`. Amp spends credit; keep it to `--mode low`.
+
 ## How a task actually runs
 
 The orchestration is not in `src/lib`. It lives inside the route handlers under `src/app/api/agents/`, as closures that keep running after the HTTP response is sent:
