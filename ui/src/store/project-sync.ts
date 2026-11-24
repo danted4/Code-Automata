@@ -18,6 +18,8 @@ import { useTaskViewStore } from '@/store/task-view-store';
 
 interface SyncState {
   stream: StreamState;
+  /** Why the server refused the stream, while it does. */
+  streamError: string | null;
   /** The project's settings, for labels such as "Reworking (n/m)"; null until loaded. */
   settings: Settings | null;
   setSettings: (s: Settings | null) => void;
@@ -25,11 +27,13 @@ interface SyncState {
 
 export const useSyncStore = create<SyncState>((set) => ({
   stream: 'closed',
+  streamError: null,
   settings: null,
   setSettings: (settings) => set({ settings }),
 }));
 
-function handle(event: ServerEvent) {
+function handle(project: string, event: ServerEvent) {
+  if (useProjectStore.getState().projectPath !== project) return;
   const tasks = useTaskStore.getState();
   switch (event.type) {
     case 'hello':
@@ -43,9 +47,15 @@ function handle(event: ServerEvent) {
     case 'reload':
       api.tasks
         .get(event.taskId)
-        .then((t) => useTaskStore.getState().upsert(t))
+        .then((t) => {
+          if (useProjectStore.getState().projectPath === project) useTaskStore.getState().upsert(t);
+        })
         .catch((e) => {
-          if (e instanceof ApiError && e.status === 404)
+          if (
+            e instanceof ApiError &&
+            e.status === 404 &&
+            useProjectStore.getState().projectPath === project
+          )
             useTaskStore.getState().remove(event.taskId);
         });
       break;
@@ -74,11 +84,19 @@ export function useProjectSync() {
     if (!projectPath) return;
     api.settings
       .get()
-      .then((r) => useSyncStore.getState().setSettings(r.settings))
+      .then((r) => {
+        if (useProjectStore.getState().projectPath === projectPath) {
+          useSyncStore.getState().setSettings(r.settings);
+        }
+      })
       .catch(() => {});
     return followEvents(projectPath, {
-      onEvent: handle,
-      onState: (stream) => useSyncStore.setState({ stream }),
+      onEvent: (event) => handle(projectPath, event),
+      onState: (stream, reason) =>
+        useSyncStore.setState({
+          stream,
+          streamError: stream === 'refused' ? (reason ?? null) : null,
+        }),
     });
   }, [projectPath]);
 }

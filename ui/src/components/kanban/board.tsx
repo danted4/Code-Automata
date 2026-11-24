@@ -33,6 +33,8 @@ export function KanbanBoard() {
   const skipped = useTaskStore((s) => s.skipped);
   const loadError = useTaskStore((s) => s.error);
   const stream = useSyncStore((s) => s.stream);
+  const streamError = useSyncStore((s) => s.streamError);
+  const retryLoad = () => void useTaskStore.getState().load();
   const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   const sensors = useSensors(
@@ -77,9 +79,24 @@ export function KanbanBoard() {
           className="mx-4 mt-3 rounded-md border px-3 py-2 text-xs"
           style={{ borderColor: 'var(--color-border)', color: 'var(--color-warning)' }}
         >
-          {loadError
-            ? `Cannot load tasks: ${loadError}`
-            : 'Reconnecting to the Code-Automata server…'}
+          {loadError ? (
+            <span className="flex items-center gap-2">
+              Cannot load tasks: {loadError}. Retrying…
+              <Button
+                data-testid="board-retry"
+                size="sm"
+                variant="outline"
+                className="h-6 text-xs"
+                onClick={retryLoad}
+              >
+                Retry now
+              </Button>
+            </span>
+          ) : stream === 'refused' ? (
+            `The server refused this project: ${streamError ?? 'unknown reason'}`
+          ) : (
+            'Reconnecting to the Code-Automata server…'
+          )}
         </div>
       )}
       {skipped.length > 0 && (

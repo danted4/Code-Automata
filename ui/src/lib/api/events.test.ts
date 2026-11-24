@@ -39,4 +39,27 @@ describe('followEvents', () => {
     }
     expect(seen).toEqual([{ type: 'hello' }, { type: 'lagged', missed: 3 }]);
   });
+
+  it('reports a 4xx refusal with the server message instead of retrying quietly', async () => {
+    const states: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ error: 'invalid project directory /gone', code: 'invalid_project' }),
+        {
+          status: 400,
+        }
+      )) as typeof fetch;
+    try {
+      const stop = followEvents('/gone', {
+        onEvent: () => {},
+        onState: (s, reason) => states.push(reason ? `${s}: ${reason}` : s),
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      stop();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(states).toEqual(['connecting', 'refused: invalid project directory /gone']);
+  });
 });

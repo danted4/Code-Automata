@@ -425,9 +425,11 @@ impl Supervisor {
     }
 
     async fn log_line(&mut self, line: &str) {
-        // Best effort: a full disk must not kill the run, and the events still flow.
+        // Best effort: a full disk must not kill the run, and the events still flow. Flushed per
+        // line (tokio's File holds writes until then), so a crash loses at most the line in hand.
         let _ = self.log.write_all(line.as_bytes()).await;
         let _ = self.log.write_all(b"\n").await;
+        let _ = self.log.flush().await;
     }
 
     /// Stop the agent and everything it started, in the background.

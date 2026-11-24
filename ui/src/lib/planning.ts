@@ -75,9 +75,10 @@ export function awaitsAnswers(task: Task): boolean {
 export type PlanReviewState =
   /** A plan waiting for the user: approve, request changes or edit. */
   | { kind: 'reviewable' }
-  /** A revision has been asked for and is queued or being written. */
+  /** A revision is being written. */
   | { kind: 'revising' }
-  /** A revision run stopped (paused, interrupted or failed) before it finished. */
+  /** A revision is waiting: not started yet (Start on the card), or stopped (paused,
+   * interrupted or failed) before it finished. */
   | { kind: 'revision_halted'; status: TaskStatus }
   /** Some other run is active on the task. */
   | { kind: 'working'; label: string }
@@ -95,8 +96,7 @@ export function planReviewState(task: Task): PlanReviewState {
   }
   const status = taskStatus(task);
   if (task.planning.revision) {
-    // A queued revision has no run record yet, so the status reads as `ready` until it starts.
-    if (status.kind === 'working' || status.kind === 'ready') return { kind: 'revising' };
+    if (status.kind === 'working') return { kind: 'revising' };
     return { kind: 'revision_halted', status };
   }
   if (status.kind === 'working') return { kind: 'working', label: status.label };

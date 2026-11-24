@@ -92,7 +92,9 @@ describe('numbers', () => {
   it('accepts fractional timeouts within the server bounds', () => {
     const r = save(settings(), (f) => (f.timeouts.idle = '0.5'));
     expect('settings' in r && r.settings.timeouts.idleMinutes).toBe(0.5);
-    for (const bad of ['0', '-2', '1441', '', 'abc', 'Infinity']) {
+    const dot = save(settings(), (f) => (f.timeouts.idle = '.5'));
+    expect('settings' in dot && dot.settings.timeouts.idleMinutes).toBe(0.5);
+    for (const bad of ['0', '-2', '1441', '', 'abc', 'Infinity', '0x10', '1e2', '1.2.3']) {
       const form = toForm(settings(), defaults);
       form.timeouts.check = bad;
       const errors = validateForm(form);

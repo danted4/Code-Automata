@@ -303,3 +303,28 @@ async fn an_active_run_still_blocks_the_user() {
     ));
     assert!(store.load(&id).await.unwrap().unwrap().run.is_some());
 }
+
+/// Clients keep the newest copy of a task by `updatedAt`, so every write must raise it, even
+/// several within one millisecond.
+#[tokio::test]
+async fn every_write_raises_updated_at() {
+    let repo = TempRepo::new();
+    let store = TaskStore::new(&repo.project().await);
+    let task = store.create(new_task("Quick")).await.unwrap();
+    let mut last = task.updated_at;
+    for i in 0..20 {
+        let t = store
+            .update(&task.id, |t| {
+                t.title = format!("Quick {i}");
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            t.updated_at > last,
+            "write {i}: {} after {last}",
+            t.updated_at
+        );
+        last = t.updated_at;
+    }
+}

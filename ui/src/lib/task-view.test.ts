@@ -61,6 +61,12 @@ describe('taskStatus and primaryAction', () => {
     );
   });
 
+  it('treats a revision with no run as ready, so Start can continue it', () => {
+    const t = task({ planning: { stage: 'plan_ready', plan: 'p', revision: 'shorter' } });
+    expect(taskStatus(t).kind).toBe('ready');
+    expect(primaryAction(taskStatus(t))).toBe('start');
+  });
+
   it('waits on the user for questions and for plan approval', () => {
     expect(taskStatus(task({ planning: { stage: 'questions' } })).kind).toBe('needs_answers');
     const ready = { stage: 'plan_ready' as const, plan: 'p' };
@@ -80,16 +86,23 @@ describe('taskStatus and primaryAction', () => {
 });
 
 describe('reworkLabel and progress', () => {
-  it('shows the latest rework round against the limit', () => {
+  it('shows the current rework round against the limit', () => {
     const subtasks = [
       sub({}),
       sub({ id: 'rework-1', reworkRound: 1, status: 'done' }),
       sub({ id: 'rework-2', reworkRound: 2 }),
     ];
-    expect(reworkLabel(task({ phase: 'in_progress', subtasks }), 2)).toBe('Reworking (2/2)');
-    expect(reworkLabel(task({ phase: 'in_progress', subtasks }), null)).toBe('Reworking (2)');
-    expect(reworkLabel(task({ phase: 'human_review', subtasks }), 2)).toBeNull();
+    const review = (reworkCount: number) => ({ reworkCount });
+    const t = (over: Partial<Task>) => task({ phase: 'in_progress', subtasks, ...over });
+    expect(reworkLabel(t({ review: review(2) }), 2)).toBe('Reworking (2/2)');
+    expect(reworkLabel(t({ review: review(2) }), null)).toBe('Reworking (2)');
+    expect(reworkLabel(t({ phase: 'human_review', review: review(2) }), 2)).toBeNull();
     expect(reworkLabel(task({ phase: 'in_progress', subtasks: [sub({})] }), 2)).toBeNull();
+    // A user's rework resets the count: after AI rounds 1 and 2, the user's round is round 1.
+    const afterUser = [...subtasks, sub({ id: 'rework-1-2', reworkRound: 1 })];
+    expect(reworkLabel(t({ subtasks: afterUser, review: review(1) }), 2)).toBe('Reworking (1/2)');
+    // Moved back by hand with no new rework subtask: not reworking.
+    expect(reworkLabel(t({ subtasks, review: review(1) }), 2)).toBeNull();
   });
 
   it('counts skipped subtasks as finished', () => {

@@ -7,14 +7,17 @@
 import { apiUrl, requestHeaders } from './client';
 import type { ServerEvent } from './types/ServerEvent';
 
-export type StreamState = 'connecting' | 'open' | 'closed';
+export type StreamState = 'connecting' | 'open' | 'closed' | 'refused';
 
 export type StreamHandlers = {
   onEvent: (event: ServerEvent) => void;
-  onState?: (state: StreamState) => void;
+  /** `refused` comes with the server's reason (a 4xx: the folder is gone, a wrong token). */
+  onState?: (state: StreamState, reason?: string) => void;
 };
 
 const RETRY_MS = [500, 1000, 2000, 5000];
+/** A refusal will not fix itself quickly; ask again now and then in case it does. */
+const REFUSED_RETRY_MS = 30_000;
 
 /** Follow `project`'s events until the returned function is called. */
 export function followEvents(project: string, handlers: StreamHandlers): () => void {
@@ -32,6 +35,11 @@ async function run(project: string, handlers: StreamHandlers, signal: AbortSigna
         headers: requestHeaders(project),
         signal,
       });
+      if (response.status >= 400 && response.status < 500) {
+        handlers.onState?.('refused', await refusal(response));
+        await sleep(REFUSED_RETRY_MS, signal);
+        continue;
+      }
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
       failures = 0;
       handlers.onState?.('open');
@@ -45,6 +53,16 @@ async function run(project: string, handlers: StreamHandlers, signal: AbortSigna
     failures += 1;
     await sleep(wait, signal);
   }
+}
+
+async function refusal(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === 'string') return body.error;
+  } catch {
+    // Not JSON.
+  }
+  return `HTTP ${response.status}`;
 }
 
 /** Split the stream into SSE messages and hand each `data:` payload over as JSON. */

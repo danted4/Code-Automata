@@ -42,15 +42,7 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     check_provider(&state, req.agent.provider)?;
     let mut agent = req.agent;
-    if agent.provider == Provider::Mock
-        && !agent.options.contains_key("scenario")
-        && let Some(scenario) = &state.config.mock_scenario
-    {
-        agent.options.insert(
-            "scenario".into(),
-            Value::String(scenario.display().to_string()),
-        );
-    }
+    default_mock_scenario(&state, agent.provider, &mut agent.options);
     let (title, description, approval) = (&req.title, &req.description, req.require_plan_approval);
     let task = if req.start {
         engine
@@ -64,6 +56,20 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(task)))
 }
 
+/// A mock agent with no scenario plays the server's `--mock-scenario`, if it has one (the UI has
+/// no field for a scenario). Used on create and on edit.
+fn default_mock_scenario(state: &AppState, provider: Provider, options: &mut Map<String, Value>) {
+    if provider == Provider::Mock
+        && !options.contains_key("scenario")
+        && let Some(scenario) = &state.config.mock_scenario
+    {
+        options.insert(
+            "scenario".into(),
+            Value::String(scenario.display().to_string()),
+        );
+    }
+}
+
 /// Edit title, description, agent or plan approval; any other key is refused.
 pub async fn patch(
     State(state): State<Arc<AppState>>,
@@ -71,12 +77,21 @@ pub async fn patch(
     Path(id): Path<String>,
     Body(patch): Body<Map<String, Value>>,
 ) -> ApiResult<Task> {
-    if let Some(provider) = patch
-        .get("agent")
-        .and_then(|a| a.get("provider"))
-        .and_then(|p| serde_json::from_value::<Provider>(p.clone()).ok())
+    let mut patch = patch;
+    if let Some(agent) = patch.get_mut("agent").and_then(Value::as_object_mut)
+        && let Some(provider) = agent
+            .get("provider")
+            .and_then(|p| serde_json::from_value::<Provider>(p.clone()).ok())
     {
         check_provider(&state, provider)?;
+        if provider == Provider::Mock {
+            let options = agent
+                .entry("options")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(options) = options.as_object_mut() {
+                default_mock_scenario(&state, provider, options);
+            }
+        }
     }
     Ok(Json(engine.patch_task(&id, &patch).await?))
 }

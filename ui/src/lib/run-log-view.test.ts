@@ -5,6 +5,7 @@ import type { RunLogInfo } from '@/lib/api/types/RunLogInfo';
 import type { RunLogLine } from '@/lib/api/types/RunLogLine';
 import type { Task } from '@/lib/api/types/Task';
 import {
+  unseenLive,
   eventRow,
   liveRunName,
   logEnded,
@@ -202,5 +203,21 @@ describe('eventRow and logRows', () => {
     const abandoned: RunLogLine[] = [...lines, { line: 'abandoned', at: 5, reason: 'no binary' }];
     expect(logRows(abandoned).at(-1)).toEqual({ type: 'abandoned', reason: 'no binary' });
     expect(logEnded(abandoned)).toBe(true);
+  });
+});
+
+describe('unseenLive', () => {
+  const text = (t: string) => ({ type: 'text' as const, text: t });
+  const line = (t: string): RunLogLine => ({ line: 'event', at: 0, event: text(t) });
+
+  it('drops buffered events the replay already has', () => {
+    const lines = [line('a'), line('b'), line('c')];
+    expect(unseenLive(lines, [text('b'), text('c'), text('d')])).toEqual([text('d')]);
+    expect(unseenLive(lines, [text('c')])).toEqual([]);
+  });
+
+  it('keeps everything when the replay ended before the buffer began', () => {
+    expect(unseenLive([line('a')], [text('b'), text('c')])).toEqual([text('b'), text('c')]);
+    expect(unseenLive([], [text('x')])).toEqual([text('x')]);
   });
 });

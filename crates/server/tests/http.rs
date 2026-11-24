@@ -1045,3 +1045,55 @@ async fn sigterm_stops_the_server_and_leaves_runs_interrupted() {
         .success();
     assert!(!alive, "the agent outlived the server");
 }
+
+/// The UI has no scenario field: a task created as, or edited to, the mock agent plays the
+/// server's `--mock-scenario`.
+#[tokio::test(flavor = "multi_thread")]
+async fn mock_tasks_from_the_ui_get_the_default_scenario() {
+    let repo = Repo::new().await;
+    let scenario = repo.path.join("default-scenario.json");
+    let h = {
+        let state = AppState::new(Config {
+            token: TOKEN.into(),
+            port: PORT,
+            allow_mock: true,
+            mock_scenario: Some(scenario.clone()),
+            bins: Binaries::from_env().with_override(Provider::Mock, mock_agent()),
+        });
+        Harness {
+            app: ca_server::router(state.clone()),
+            state,
+            files: tempfile::tempdir().unwrap(),
+        }
+    };
+    let p = &repo.path;
+    let created = h
+        .ok(
+            "POST",
+            "/api/tasks",
+            p,
+            Some(json!({ "title": "Mock", "agent": { "provider": "mock" }, "start": false })),
+        )
+        .await;
+    assert_eq!(created["agent"]["options"]["scenario"], json!(scenario));
+
+    let other = h
+        .ok(
+            "POST",
+            "/api/tasks",
+            p,
+            Some(json!({ "title": "Claude", "agent": { "provider": "claude" }, "start": false })),
+        )
+        .await;
+    assert!(other["agent"]["options"].is_null(), "{other}");
+    let id = other["id"].as_str().unwrap();
+    let edited = h
+        .ok(
+            "PATCH",
+            &format!("/api/tasks/{id}"),
+            p,
+            Some(json!({ "agent": { "provider": "mock" } })),
+        )
+        .await;
+    assert_eq!(edited["agent"]["options"]["scenario"], json!(scenario));
+}

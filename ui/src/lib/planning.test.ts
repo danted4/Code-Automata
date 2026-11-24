@@ -96,7 +96,11 @@ describe('planReviewState', () => {
   });
 
   it('shows a revision from the moment it is asked for until the new plan arrives', () => {
-    expect(planReviewState(task({ revision: 'more tests' })).kind).toBe('revising');
+    // No run yet: waiting for Start (the server may have stopped before the run began).
+    expect(planReviewState(task({ revision: 'more tests' }))).toEqual({
+      kind: 'revision_halted',
+      status: { kind: 'ready' },
+    });
     expect(planReviewState(task({ revision: 'more tests' }, { run: run() })).kind).toBe('revising');
     expect(
       planReviewState(task({ revision: 'x' }, { run: run({ state: 'failed', error: 'boom' }) }))

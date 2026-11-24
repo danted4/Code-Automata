@@ -70,11 +70,6 @@ function workingLabel(task: Task): string {
 
 export function taskStatus(task: Task): TaskStatus {
   const run = task.run;
-  // Feedback just sent: the revision run is about to start (the command returns before the
-  // driver writes its run record).
-  if (!run && task.phase === 'planning' && task.planning.revision) {
-    return { kind: 'working', label: 'Revising the plan' };
-  }
   if (run) {
     switch (run.state) {
       case 'queued':
@@ -133,14 +128,17 @@ export const ACTION_LABELS: Record<Exclude<PrimaryAction, null>, string> = {
   human_review: 'Review',
 };
 
-/** "Reworking (n/m)" while a rework round is under way, else null. */
+/**
+ * "Reworking (n/m)" while a rework round is under way, else null. The round is
+ * `review.reworkCount`, which a user's rework resets; the newest rework subtask carries the same
+ * number while its round is current.
+ */
 export function reworkLabel(task: Task, reworkLimit: number | null): string | null {
   if (task.phase !== 'in_progress' && task.phase !== 'ai_review') return null;
-  const rounds = (task.subtasks ?? [])
-    .map((s) => s.reworkRound)
-    .filter((r): r is number => typeof r === 'number');
-  if (rounds.length === 0) return null;
-  const round = Math.max(...rounds);
+  const round = task.review?.reworkCount ?? 0;
+  if (round === 0) return null;
+  const rework = (task.subtasks ?? []).filter((s) => typeof s.reworkRound === 'number');
+  if (rework.at(-1)?.reworkRound !== round) return null;
   return reworkLimit ? `Reworking (${round}/${reworkLimit})` : `Reworking (${round})`;
 }
 

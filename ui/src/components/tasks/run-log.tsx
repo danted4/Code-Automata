@@ -10,6 +10,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { api, errorMessage } from '@/lib/api';
+import type { AgentEvent } from '@/lib/api/types/AgentEvent';
 import type { RunLogInfo } from '@/lib/api/types/RunLogInfo';
 import { onAgentEvent } from '@/lib/agent-events';
 import {
@@ -17,6 +18,7 @@ import {
   liveRunName,
   logEnded,
   logRows,
+  unseenLive,
   newestFirst,
   runRowState,
   runStateLabel,
@@ -201,22 +203,36 @@ function RunEvents({
   useEffect(() => {
     let cancelled = false;
     let stop: (() => void) | null = null;
+    // Follow first and hold what arrives during the replay's round trip; once the replay is in,
+    // add only the held events it does not already contain.
+    let held: AgentEvent[] | null = live ? [] : null;
+    let ended = false;
+    const show = (event: AgentEvent) => {
+      const row = eventRow(event);
+      if (row) setRows((prev) => [...(prev ?? []), row]);
+    };
+    if (live) {
+      stop = onAgentEvent(taskId, (e) => {
+        if (ended || e.runId !== runId) return;
+        // The same run may write another log next (a repair turn): stop at this one's end.
+        if (e.event.type === 'finished') ended = true;
+        if (held) held.push(e.event);
+        else show(e.event);
+      });
+    }
     api.tasks
       .runLog(taskId, name)
       .then((lines) => {
         if (cancelled) return;
         setRows(logRows(lines));
         setError(null);
-        if (!live || logEnded(lines)) return;
-        // Subscribe only after the replay, so nothing is shown twice.
-        let ended = false;
-        stop = onAgentEvent(taskId, (e) => {
-          if (ended || e.runId !== runId) return;
-          // The same run may write another log next (a repair turn): stop at this one's end.
-          if (e.event.type === 'finished') ended = true;
-          const row = eventRow(e.event);
-          if (row) setRows((prev) => [...(prev ?? []), row]);
-        });
+        const pending = held ?? [];
+        held = null;
+        if (logEnded(lines)) {
+          ended = true;
+          return;
+        }
+        unseenLive(lines, pending).forEach(show);
       })
       .catch((e) => {
         if (!cancelled) setError(errorMessage(e));

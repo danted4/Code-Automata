@@ -261,7 +261,9 @@ function StateNotice({ state }: { state: PlanReviewState }) {
       text =
         state.status.kind === 'failed'
           ? `The revision failed: ${state.status.error.replace(/\.$/, '')}. Retry it from the task card.`
-          : 'The revision stopped before it finished. Resume the task to continue it.';
+          : state.status.kind === 'ready'
+            ? 'The revision has not started. Press Start on the task card to write it.'
+            : 'The revision stopped before it finished. Resume the task to continue it.';
       break;
     case 'closed':
       text = `${state.message} There is nothing to review here.`;

@@ -155,7 +155,9 @@ impl TaskStore {
         if task.id != id {
             return Err(CoreError::Invalid("a task's id cannot change".into()));
         }
-        task.updated_at = now_ms();
+        // Strictly increasing, even within one millisecond or across a clock step back, so a
+        // client can keep whichever copy of a task is newest.
+        task.updated_at = now_ms().max(task.updated_at.saturating_add(1));
         task.validate()?;
         write_json_atomic(&path, &task).await?;
         Ok(task)

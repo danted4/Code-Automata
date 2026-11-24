@@ -89,7 +89,8 @@ function parseCount(text: string, min: number): number | null {
 
 function parseMinutes(text: string): number | null {
   const s = text.trim();
-  if (s === '') return null;
+  // Plain decimals only: Number() would also take "0x10" and "1e2".
+  if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) return null;
   const n = Number(s);
   return Number.isFinite(n) && n > 0 && n <= MAX_TIMEOUT_MINUTES ? n : null;
 }

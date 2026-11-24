@@ -24,7 +24,8 @@ export function subtaskRows(task: Task): { dev: SubtaskRow[]; qa: SubtaskRow[] }
     subtask: s,
     current: s.id === currentId,
     running: working && s.id === currentId,
-    canSkip: s.status === 'pending',
+    // The server refuses a skip while a step runs: pause first.
+    canSkip: s.status === 'pending' && !working,
   });
   const subs = task.subtasks ?? [];
   return {

@@ -207,3 +207,18 @@ export function logEnded(lines: RunLogLine[]): boolean {
     (l) => l.line === 'abandoned' || (l.line === 'event' && l.event.type === 'finished')
   );
 }
+
+/**
+ * Live events that arrived while the log was being replayed, minus those the replay already has.
+ * The replay ends somewhere inside the buffered events: drop the longest run of buffered events
+ * that matches the end of the replay, keep the rest.
+ */
+export function unseenLive(lines: RunLogLine[], buffered: AgentEvent[]): AgentEvent[] {
+  const replayed = lines.flatMap((l) => (l.line === 'event' ? [JSON.stringify(l.event)] : []));
+  const live = buffered.map((e) => JSON.stringify(e));
+  for (let k = Math.min(replayed.length, live.length); k > 0; k--) {
+    const tail = replayed.slice(replayed.length - k);
+    if (tail.every((e, i) => e === live[i])) return buffered.slice(k);
+  }
+  return buffered;
+}

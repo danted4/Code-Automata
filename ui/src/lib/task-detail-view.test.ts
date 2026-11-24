@@ -47,12 +47,13 @@ describe('subtaskRows', () => {
     expect(rows.dev.map((r) => r.subtask.id)).toEqual(['dev-1', 'dev-2', 'dev-3']);
     expect(rows.qa.map((r) => r.subtask.id)).toEqual(['qa-1']);
     expect(rows.dev.map((r) => r.running)).toEqual([false, true, false]);
-    expect(rows.dev.map((r) => r.canSkip)).toEqual([false, true, false]);
+    // Nothing can be skipped while a step runs (the server says to pause first).
+    expect(rows.dev.map((r) => r.canSkip)).toEqual([false, false, false]);
   });
 
   it('keeps a halted step current but not running', () => {
     const rows = subtaskRows(task({ subtasks, run: run({ state: 'paused' }) }));
-    expect(rows.dev[1]).toMatchObject({ running: false, current: true });
+    expect(rows.dev[1]).toMatchObject({ running: false, current: true, canSkip: true });
   });
 
   it('handles a task without subtasks', () => {
