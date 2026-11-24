@@ -9,7 +9,9 @@
   "agent": {
     "provider": "claude",
     "model": "sonnet",
-    "options": { "maxTurns": 40 }
+    "options": {
+      "maxTurns": 40
+    }
   },
   "requirePlanApproval": true,
   "planning": {
@@ -20,11 +22,13 @@
         "text": "Cursor or offset pagination?",
         "options": ["cursor", "offset"],
         "required": true,
-        "answer": { "choice": "cursor", "note": "Keep page size configurable." }
+        "answer": {
+          "choice": "cursor",
+          "note": "Keep page size configurable."
+        }
       }
     ],
-    "plan": "# Plan\n\n1. Add a cursor to the list query.\n2. Return `next`.\n",
-    "approvedAt": 1764000300000
+    "plan": "# Plan\n\n1. Add a cursor to the list query.\n2. Return `next`.\n"
   },
   "subtasks": [
     {
@@ -63,12 +67,10 @@
     },
     "feedback": "Fix the type of the page size."
   },
-  "git": {
-    "branch": "code-automata/task-1764000000000-ab12c",
-    "worktree": "/repo/.code-automata/worktrees/task-1764000000000-ab12c",
-    "baseCommit": "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c"
+  "baseCommit": "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c",
+  "pullRequest": {
+    "url": "https://github.com/example/repo/pull/7"
   },
-  "pullRequest": { "url": "https://github.com/example/repo/pull/7" },
   "run": {
     "id": "run-1764000700000-x9y8z7",
     "kind": "dev",
@@ -81,7 +83,6 @@
     "bootId": "boot-1764000690000-k3j2",
     "startedAt": 1764000700000,
     "updatedAt": 1764000800000,
-    "checkpoint": "3f1c2a9e0b7d4c5f8a6e2d1b0c9f8e7d6a5b4c3d",
     "error": "app exited while the agent was running"
   }
 }

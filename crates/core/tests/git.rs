@@ -502,3 +502,52 @@ async fn code_automata_state_is_excluded_from_git_status() {
     let exclude = std::fs::read_to_string(repo.path.join(".git/info/exclude")).unwrap();
     assert_eq!(exclude.matches("/.code-automata/").count(), 1, "{exclude}");
 }
+
+#[tokio::test]
+async fn the_exclude_file_is_appended_to_not_rewritten() {
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    let exclude = repo.path.join(".git/info/exclude");
+    // Existing user entries: not UTF-8, no trailing newline.
+    let mut existing = b"*.log\n# caf\xe9\nbuild".to_vec();
+    std::fs::write(&exclude, &existing).unwrap();
+
+    project.ensure_git_exclude().await.unwrap();
+    let after = std::fs::read(&exclude).unwrap();
+    assert!(
+        after.starts_with(&existing),
+        "existing entries were changed"
+    );
+    existing.extend_from_slice(b"\n");
+    assert_eq!(
+        &after[existing.len()..],
+        b"# Code-Automata task state and worktrees\n/.code-automata/\n"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_first_writes_add_the_exclude_line_once() {
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        let p = project.clone();
+        handles.push(tokio::spawn(async move {
+            p.ensure_git_exclude().await.unwrap()
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    let text = std::fs::read_to_string(repo.path.join(".git/info/exclude")).unwrap();
+    assert_eq!(text.matches("/.code-automata/").count(), 1, "{text}");
+}
+
+#[tokio::test]
+async fn a_task_worktree_cannot_be_opened_as_a_project() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-15").await.unwrap();
+    let err = ProjectDir::open(info.path.join(".")).await.unwrap_err();
+    assert!(err.to_string().contains("task worktree"), "{err}");
+}

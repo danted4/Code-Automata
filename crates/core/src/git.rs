@@ -32,7 +32,11 @@ fn git_error(args: &[&str], stderr: impl Into<String>) -> CoreError {
     }
 }
 
-async fn git_output(cwd: &Path, args: &[&str], timeout: Option<Duration>) -> Result<Output> {
+pub(crate) async fn git_output(
+    cwd: &Path,
+    args: &[&str],
+    timeout: Option<Duration>,
+) -> Result<Output> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(args)
         .current_dir(cwd)

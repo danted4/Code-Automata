@@ -79,6 +79,18 @@ pub fn check_move(task: &Task, to: Phase, mover: Mover) -> Result<()> {
     Ok(())
 }
 
+/// Check the move, then make it. A run that belongs to another phase is dropped: an active run
+/// already blocked a user move, so what is dropped is a paused, interrupted, failed or finished run
+/// the user chose to leave behind by moving the card (or, for the engine, the run it is replacing).
+pub fn apply_move(task: &mut Task, to: Phase, mover: Mover) -> Result<()> {
+    check_move(task, to, mover)?;
+    task.phase = to;
+    if task.run.as_ref().is_some_and(|r| r.kind.phase() != to) {
+        task.run = None;
+    }
+    Ok(())
+}
+
 /// Fields a UI edit may change. Everything else (phase, run, subtasks, planning, review, git)
 /// changes only through the engine or [`check_move`].
 pub const EDITABLE_FIELDS: &[&str] = &["title", "description", "agent", "requirePlanApproval"];

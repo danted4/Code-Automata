@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use crate::error::{CoreError, Result, io_at};
 use crate::project::ProjectDir;
 use crate::task::{Phase, SCHEMA, Task};
-use crate::transitions::{Mover, apply_patch, check_move};
+use crate::transitions::{Mover, apply_move, apply_patch};
 use crate::util::{now_ms, unique_u64, validate_task_id};
 
 const TASK_FILE: &str = "task.json";
@@ -81,7 +81,7 @@ impl TaskStore {
 
     /// Load one task. `Ok(None)` if there is no such task.
     pub async fn load(&self, id: &str) -> Result<Option<Task>> {
-        read_task(&self.file_for(id)?).await
+        read_task(&self.file_for(id)?, id).await
     }
 
     /// All tasks, newest first. Unreadable task files are listed in `skipped`, not fatal.
@@ -104,12 +104,8 @@ impl TaskStore {
                 continue;
             }
             let path = entry.path().join(TASK_FILE);
-            match read_task(&path).await {
-                Ok(Some(task)) if task.id == name => out.tasks.push(task),
-                Ok(Some(task)) => out.skipped.push(SkippedFile {
-                    path,
-                    error: format!("the file's id {:?} does not match its directory", task.id),
-                }),
+            match read_task(&path, &name).await {
+                Ok(Some(task)) => out.tasks.push(task),
                 Ok(None) => {} // a directory without a task file, or deleted meanwhile
                 Err(e) => out.skipped.push(SkippedFile {
                     path,
@@ -145,7 +141,7 @@ impl TaskStore {
         let path = self.file_for(id)?;
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
-        let mut task = read_task(&path)
+        let mut task = read_task(&path, id)
             .await?
             .ok_or_else(|| CoreError::TaskNotFound(id.to_string()))?;
         change(&mut task)?;
@@ -165,12 +161,7 @@ impl TaskStore {
 
     /// Move a task to another phase, subject to the phase table and its guards.
     pub async fn move_phase(&self, id: &str, to: Phase, mover: Mover) -> Result<Task> {
-        self.update(id, |task| {
-            check_move(task, to, mover)?;
-            task.phase = to;
-            Ok(())
-        })
-        .await
+        self.update(id, |task| apply_move(task, to, mover)).await
     }
 
     /// Delete a task and everything in its directory (logs included). Its worktree is separate;
@@ -190,7 +181,8 @@ impl TaskStore {
     }
 }
 
-async fn read_task(path: &Path) -> Result<Option<Task>> {
+/// Read and strictly parse a task file, which must carry the id of its directory.
+async fn read_task(path: &Path, expected_id: &str) -> Result<Option<Task>> {
     let bytes = match tokio::fs::read(path).await {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -218,7 +210,14 @@ async fn read_task(path: &Path) -> Result<Option<Task>> {
             });
         }
     }
-    serde_json::from_value(value).map(Some).map_err(corrupt)
+    let task: Task = serde_json::from_value(value).map_err(corrupt)?;
+    if task.id != expected_id {
+        return Err(CoreError::IdMismatch {
+            path: path.to_path_buf(),
+            found: task.id,
+        });
+    }
+    Ok(Some(task))
 }
 
 /// Write pretty JSON to a hidden temp file next to `path`, flush it to disk, then rename it over

@@ -47,7 +47,9 @@ Path alias: `@/` → `src/`.
 
 **Project scoping.** The app operates on a git repo chosen at launch. Persist that path in `useProjectStore`. All API work that touches tasks/git/agents must go through `apiFetch` (sets `X-Project-Path`) or `buildStreamUrl` for EventSource (query `projectPath`). Server reads the path via `getProjectDir()` in `src/lib/project-dir.ts`. Do not assume `process.cwd()` is the user’s project.
 
-**On-disk layout (inside the selected project):**
+**On-disk layout, 3.0 (`v3-tauri`, Rust core):** everything under `<repo root>/.code-automata/`, which the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs in the same directory; `worktrees/<id>/` is the worktree on branch `code-automata/<id>`. There is no aggregate file. Subtasks are `pending`, `done` or `skipped`. 3.0 reads nothing written by 2.2.x.
+
+**On-disk layout, 2.2.x (Electron app on `main`):**
 
 | Path                                      | Role                    |
 | ----------------------------------------- | ----------------------- |

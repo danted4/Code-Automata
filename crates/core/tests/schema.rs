@@ -33,7 +33,7 @@ async fn example_file_loads_with_every_field() {
     assert_eq!(task.subtasks[2].kind, SubtaskKind::Qa);
     assert_eq!(task.review.rework_count, 1);
     assert!(!task.review.checks.as_ref().unwrap().passed);
-    assert!(task.git.as_ref().unwrap().base_commit.starts_with("9d8c"));
+    assert!(task.base_commit.as_ref().unwrap().starts_with("9d8c"));
     assert!(task.pull_request.is_some());
 
     let run = task.run.as_ref().unwrap();
@@ -142,4 +142,95 @@ fn a_new_task_is_minimal_on_disk() {
 
     let blank = ca_core::Task::new(" ", "", ca_core::AgentConfig::new(Provider::Mock));
     assert_eq!(blank.title, blank.id);
+}
+
+/// Load the example, apply `change`, and expect validation (via `update`) to refuse it.
+async fn assert_refused(change: impl FnOnce(&mut ca_core::Task), why: &str) {
+    let (_repo, project, store, id) = store_with_example().await;
+    let before = read_task_json(&project, &id);
+    let err = store
+        .update(&id, |t| {
+            change(t);
+            Ok(())
+        })
+        .await;
+    assert!(matches!(err, Err(CoreError::Invalid(_))), "{why}: {err:?}");
+    assert_eq!(read_task_json(&project, &id), before, "{why}: wrote anyway");
+}
+
+#[tokio::test]
+async fn validate_keeps_run_phase_and_subtasks_consistent() {
+    assert_refused(|t| t.phase = Phase::Planning, "dev run on a planning task").await;
+    assert_refused(
+        |t| t.run.as_mut().unwrap().kind = RunKind::Plan,
+        "plan run on an in_progress task",
+    )
+    .await;
+    assert_refused(
+        |t| t.run.as_mut().unwrap().subtask_id = Some("qa-1".into()),
+        "dev run on a QA subtask",
+    )
+    .await;
+    assert_refused(
+        |t| t.run.as_mut().unwrap().subtask_id = None,
+        "dev run without a subtask",
+    )
+    .await;
+    assert_refused(
+        |t| t.run.as_mut().unwrap().subtask_id = Some("dev-1".into()),
+        "unfinished run on a done subtask",
+    )
+    .await;
+    assert_refused(
+        |t| {
+            t.phase = Phase::AiReview;
+            let run = t.run.as_mut().unwrap();
+            run.kind = RunKind::Checks;
+        },
+        "checks run pointing at a subtask",
+    )
+    .await;
+    assert_refused(
+        |t| t.subtasks[1].finished_at = Some(1),
+        "pending subtask with a finish time",
+    )
+    .await;
+    assert_refused(
+        |t| t.subtasks[0].finished_at = None,
+        "done subtask without a finish time",
+    )
+    .await;
+    assert_refused(
+        |t| {
+            t.subtasks[2].status = SubtaskStatus::Skipped;
+            t.subtasks[2].finished_at = Some(1);
+            t.subtasks[2].checkpoint = Some("abc".into());
+        },
+        "skipped subtask with a checkpoint",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_file_must_carry_its_directory_id_on_every_path() {
+    let (_repo, project, store, id) = store_with_example().await;
+    let mut moved = fixture_json("task-example.json");
+    moved["id"] = "task-elsewhere".into();
+    write_task_json(&project, &id, &moved);
+
+    assert!(matches!(
+        store.load(&id).await,
+        Err(CoreError::IdMismatch { .. })
+    ));
+    assert!(matches!(
+        store.update(&id, |_| Ok(())).await,
+        Err(CoreError::IdMismatch { .. })
+    ));
+    let list = store.list().await.unwrap();
+    assert!(list.tasks.is_empty());
+    assert!(
+        list.skipped[0].error.contains("does not match"),
+        "{:?}",
+        list.skipped
+    );
 }

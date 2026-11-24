@@ -33,6 +33,7 @@ cargo test --test git worktree_lifecycle      # one integration test
 - One directory per task: `.code-automata/tasks/<id>/task.json` plus that task's logs. `tests/fixtures/task-example.json` shows every field.
 - Each piece of state lives in one place: `phase` is the column, `run` says whether an agent is working, paused, interrupted or failed and on which subtask, a subtask is only `pending`, `done` or `skipped`. Do not add derived or duplicated fields.
 - Task files are strict: unknown keys and any `schema` other than 1 are refused.
+- `Task::validate` ties `run` to the phase (plan/subtask_gen → planning, dev → in_progress, qa/checks → ai_review) and a dev/qa run to a pending subtask of its kind. `transitions::apply_move` drops a run the move leaves behind. Branch, worktree path and last checkpoint are derived (from the id and HEAD), not stored.
 - `TaskStore::update` is the only write path: per-task lock, then atomic temp-file-and-rename. Reads never write.
 - Phase moves go through `transitions::check_move`; UI edits through `apply_patch`, which accepts only `EDITABLE_FIELDS`.
 - A project is always a git repository root; picking a subfolder opens its repository.

@@ -119,10 +119,6 @@ async fn unreadable_tasks_are_reported_not_fatal() {
     let broken = project.tasks_dir().join("task-broken");
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("task.json"), b"{ not json").unwrap();
-    // A file whose id disagrees with its directory.
-    let mut moved = common::fixture_json("task-example.json");
-    moved["id"] = "task-elsewhere".into();
-    common::write_task_json(&project, "task-misplaced", &moved);
     // Not task directories at all: ignored.
     std::fs::write(project.tasks_dir().join("notes.txt"), "x").unwrap();
     std::fs::create_dir_all(project.tasks_dir().join("task-empty")).unwrap();
@@ -130,7 +126,7 @@ async fn unreadable_tasks_are_reported_not_fatal() {
     let list = store.list().await.unwrap();
     assert_eq!(list.tasks.len(), 1);
     assert_eq!(list.tasks[0].id, id);
-    assert_eq!(list.skipped.len(), 2, "{:?}", list.skipped);
+    assert_eq!(list.skipped.len(), 1, "{:?}", list.skipped);
 
     assert!(matches!(
         store.load("task-broken").await,
@@ -217,7 +213,7 @@ async fn patch_accepts_only_editable_fields() {
         json!({ "subtasks": [] }),
         json!({ "planning": { "stage": "approved" } }),
         json!({ "review": {} }),
-        json!({ "git": null }),
+        json!({ "baseCommit": null }),
         json!({ "id": "task-other" }),
         json!({ "schema": 2 }),
         // A forbidden key rejects the whole patch, including the allowed part.
@@ -274,4 +270,36 @@ async fn move_phase_uses_the_table_and_guards() {
         .await
         .unwrap();
     assert_eq!(moved.phase, Phase::InProgress);
+}
+
+#[tokio::test]
+async fn moving_a_card_drops_a_run_left_behind() {
+    let (_repo, _project, store, id) = store_with_example().await;
+    // The example has an interrupted dev run on an in_progress task.
+    let moved = store
+        .move_phase(&id, Phase::Planning, Mover::User)
+        .await
+        .unwrap();
+    assert_eq!(moved.phase, Phase::Planning);
+    assert!(
+        moved.run.is_none(),
+        "an orphaned dev run survived replanning"
+    );
+}
+
+#[tokio::test]
+async fn an_active_run_still_blocks_the_user() {
+    let (_repo, _project, store, id) = store_with_example().await;
+    store
+        .update(&id, |t| {
+            t.run.as_mut().unwrap().state = ca_core::RunState::Running;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.move_phase(&id, Phase::Planning, Mover::User).await,
+        Err(CoreError::Transition { .. })
+    ));
+    assert!(store.load(&id).await.unwrap().unwrap().run.is_some());
 }

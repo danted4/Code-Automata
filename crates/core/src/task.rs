@@ -8,11 +8,12 @@
 //! * a subtask is `pending`, `done` or `skipped` ("running" is `run.subtaskId`);
 //! * `planning.stage` says where planning stands ("generating" is a `plan` run).
 //!
-//! Nothing is derived or duplicated, so nothing can disagree. Files are strict: unknown keys and any
-//! other schema version are refused rather than guessed at.
+//! Nothing derivable is stored (the branch and worktree path follow from the id; the last checkpoint
+//! is the worktree's HEAD), and [`Task::validate`] rejects the combinations that could still
+//! disagree, such as a run whose kind does not belong to the phase. Files are strict: unknown keys
+//! and any other schema version are refused rather than guessed at.
 
 use std::fmt;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -144,8 +145,6 @@ pub struct Planning {
     /// The plan, as markdown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,15 +245,6 @@ impl Review {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GitInfo {
-    pub branch: String,
-    pub worktree: PathBuf,
-    /// Commit the branch started from; checkpoints are squashed back onto it.
-    pub base_commit: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PullRequest {
     pub url: String,
 }
@@ -287,6 +277,26 @@ pub enum RunState {
     /// The agent reported an error or timed out.
     Failed,
     Done,
+}
+
+impl RunKind {
+    /// The only phase a run of this kind can belong to.
+    pub fn phase(self) -> Phase {
+        match self {
+            RunKind::Plan | RunKind::SubtaskGen => Phase::Planning,
+            RunKind::Dev => Phase::InProgress,
+            RunKind::Qa | RunKind::Checks => Phase::AiReview,
+        }
+    }
+
+    /// The subtask kind a run of this kind works through, if any.
+    pub fn subtask_kind(self) -> Option<SubtaskKind> {
+        match self {
+            RunKind::Dev => Some(SubtaskKind::Dev),
+            RunKind::Qa => Some(SubtaskKind::Qa),
+            RunKind::Plan | RunKind::SubtaskGen | RunKind::Checks => None,
+        }
+    }
 }
 
 impl RunState {
@@ -329,9 +339,6 @@ pub struct Run {
     pub boot_id: Option<String>,
     pub started_at: i64,
     pub updated_at: i64,
-    /// Commit the current step started from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -351,7 +358,6 @@ impl Run {
             boot_id: None,
             started_at: now,
             updated_at: now,
-            checkpoint: None,
             error: None,
         }
     }
@@ -381,8 +387,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Review::is_empty")]
     pub review: Review,
 
+    /// Commit the task's branch started from, set when its worktree is created. The branch
+    /// (`code-automata/<id>`) and worktree path (`.code-automata/worktrees/<id>`) follow from the
+    /// id and are not stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git: Option<GitInfo>,
+    pub base_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -412,7 +421,7 @@ impl Task {
             planning: Planning::default(),
             subtasks: Vec::new(),
             review: Review::default(),
-            git: None,
+            base_commit: None,
             pull_request: None,
             run: None,
         }
@@ -464,6 +473,27 @@ impl Task {
             if !seen.insert(s.id.as_str()) {
                 return Err(Invalid(format!("duplicate subtask id {:?}", s.id)));
             }
+            match s.status {
+                SubtaskStatus::Pending if s.finished_at.is_some() || s.checkpoint.is_some() => {
+                    return Err(Invalid(format!(
+                        "pending subtask {:?} has a finish time or checkpoint",
+                        s.id
+                    )));
+                }
+                SubtaskStatus::Done | SubtaskStatus::Skipped if s.finished_at.is_none() => {
+                    return Err(Invalid(format!(
+                        "finished subtask {:?} has no finish time",
+                        s.id
+                    )));
+                }
+                SubtaskStatus::Skipped if s.checkpoint.is_some() => {
+                    return Err(Invalid(format!(
+                        "skipped subtask {:?} has a checkpoint",
+                        s.id
+                    )));
+                }
+                _ => {}
+            }
         }
         let mut seen = std::collections::HashSet::new();
         for q in &self.planning.questions {
@@ -471,14 +501,52 @@ impl Task {
                 return Err(Invalid(format!("duplicate question id {:?}", q.id)));
             }
         }
-        if let Some(run) = &self.run
-            && let Some(sub) = &run.subtask_id
-            && self.subtask(sub).is_none()
-        {
-            return Err(Invalid(format!(
-                "run points at subtask {sub:?}, which does not exist"
-            )));
+        if let Some(run) = &self.run {
+            self.validate_run(run)?;
         }
         Ok(())
+    }
+
+    /// A run must belong to the task's phase, and a `dev`/`qa` run must point at a subtask of its
+    /// kind that is still pending (or finished, once the run itself is done).
+    fn validate_run(&self, run: &Run) -> Result<()> {
+        use CoreError::Invalid;
+        if run.kind.phase() != self.phase {
+            return Err(Invalid(format!(
+                "a {:?} run cannot belong to a task in {}",
+                run.kind, self.phase
+            )));
+        }
+        match (run.kind.subtask_kind(), &run.subtask_id) {
+            (None, None) => Ok(()),
+            (None, Some(sub)) => Err(Invalid(format!(
+                "a {:?} run does not work on subtasks but points at {sub:?}",
+                run.kind
+            ))),
+            (Some(_), None) => Err(Invalid(format!(
+                "a {:?} run must point at a subtask",
+                run.kind
+            ))),
+            (Some(kind), Some(sub)) => {
+                let Some(subtask) = self.subtask(sub) else {
+                    return Err(Invalid(format!(
+                        "run points at subtask {sub:?}, which does not exist"
+                    )));
+                };
+                if subtask.kind != kind {
+                    return Err(Invalid(format!(
+                        "a {:?} run points at {sub:?}, which is a {:?} subtask",
+                        run.kind, subtask.kind
+                    )));
+                }
+                if run.state != RunState::Done && subtask.status != SubtaskStatus::Pending {
+                    return Err(Invalid(format!(
+                        "an unfinished run points at {sub:?}, which is already {:?}",
+                        subtask.status
+                    )));
+                }
+                Ok(())
+            }
+        }
     }
 }

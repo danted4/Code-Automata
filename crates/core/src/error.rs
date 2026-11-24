@@ -26,6 +26,9 @@ pub enum CoreError {
         supported: u32,
     },
 
+    #[error("{path} holds task {found:?}, which does not match its directory")]
+    IdMismatch { path: PathBuf, found: String },
+
     #[error("invalid project directory {path}: {reason}")]
     InvalidProject { path: PathBuf, reason: String },
 
