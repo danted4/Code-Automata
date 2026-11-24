@@ -117,6 +117,9 @@ async fn remove_dead_lock(stderr: &[u8]) -> bool {
     let Some(Some(lock)) = index_lock_in(stderr) else {
         return false;
     };
+    if !removable_lock_path(&lock) {
+        return false;
+    }
     let old = std::fs::metadata(&lock)
         .and_then(|m| m.modified())
         .ok()
@@ -133,6 +136,13 @@ async fn remove_dead_lock(stderr: &[u8]) -> bool {
         // Held open (a live git), or gone already: the normal retry decides.
         Err(_) => false,
     }
+}
+
+/// Only an absolute path to a file named exactly `index.lock` may be deleted: the path comes from
+/// git's message, and nothing else it might name (or a relative path, which would resolve against
+/// this process's working directory) is ever touched.
+fn removable_lock_path(lock: &Path) -> bool {
+    lock.is_absolute() && lock.file_name().is_some_and(|n| n == "index.lock")
 }
 
 /// The command failed because another git process holds an index lock right now. A stale lock
@@ -1109,6 +1119,25 @@ pub async fn squash_checkpoints(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_an_absolute_index_lock_may_be_removed() {
+        let abs = std::env::temp_dir()
+            .join("repo")
+            .join(".git")
+            .join("index.lock");
+        assert!(super::removable_lock_path(&abs));
+        assert!(!super::removable_lock_path(std::path::Path::new(
+            ".git/index.lock"
+        )));
+        assert!(!super::removable_lock_path(
+            &abs.with_file_name("HEAD.lock")
+        ));
+        assert!(!super::removable_lock_path(&abs.with_file_name("index")));
+        assert!(!super::removable_lock_path(
+            &abs.with_file_name("index.lock.bak")
+        ));
+    }
+
     use super::*;
 
     #[test]
