@@ -576,7 +576,9 @@ async fn a_write_waits_out_a_briefly_held_index_lock() {
 }
 
 /// A lock left by a git process that died is not waited on: the error comes at once and names
-/// the file to remove.
+/// the file to remove. Unix only: on Windows a lock no process holds open is removed instead
+/// (`a_dead_index_lock_does_not_block_the_next_checkpoint`).
+#[cfg(not(windows))]
 #[tokio::test]
 async fn a_stale_index_lock_fails_at_once_with_its_path() {
     let repo = TempRepo::new();
