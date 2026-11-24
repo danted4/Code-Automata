@@ -75,6 +75,7 @@ impl Server {
             if let Some(path) = bins.path_var() {
                 ca_core::proc::set_child_path(path.to_owned());
             }
+            log_git(&bins).await;
             let mock = mock_config();
             if let Some((agent, _)) = &mock {
                 bins = bins.with_override(ca_core::Provider::Mock, agent);
@@ -160,6 +161,26 @@ impl Server {
             let _ = done.await;
         }
     }
+}
+
+/// Which git the app runs (the login shell's, which may be Homebrew's rather than the system's):
+/// once in the log, for support reports.
+async fn log_git(bins: &Binaries) {
+    let path = bins.search("git");
+    let version = ca_core::proc::command("git")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
+    log::info!(
+        "git: {} ({})",
+        path.map(|p| p.display().to_string())
+            .unwrap_or_else(|| "not found".into()),
+        version.unwrap_or_else(|| "no version".into())
+    );
 }
 
 /// The mock agent and its default scenario, only in a debug build and only when asked for:

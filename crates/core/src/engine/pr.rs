@@ -1,7 +1,10 @@
 //! Opening the pull request for a reviewed task, or bringing an open one up to date.
 //!
 //! The task's checkpoint commits are squashed into one commit on top of its base commit, and the
-//! branch is pushed (with `--force-with-lease`, since squashing rewrites it). The first time,
+//! branch is pushed (with `--force-with-lease`, since squashing rewrites it, and `--no-verify`: a
+//! pre-push hook is a file in the tree the agents edited, such as `.husky/pre-push`, and must not
+//! run with the user's PATH outside the agents' permission rules; the project's checks already ran
+//! in AI Review). The first time,
 //! `gh pr create` opens the PR against the main branch; afterwards (rework done after the PR was
 //! opened) only the squash and push happen. If `gh` fails after the push, the PR it may still have
 //! created is looked up with `gh pr view`, so a retry never trips over "already exists".
@@ -55,6 +58,7 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
         &wt,
         &[
             "push",
+            "--no-verify",
             "--force-with-lease",
             "-u",
             "origin",
