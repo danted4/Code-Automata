@@ -213,15 +213,6 @@ export function logEnded(lines: RunLogLine[]): boolean {
   );
 }
 
-/**
- * Live events that arrived while the log was being replayed, minus those the replay already has:
- * the ones numbered after the replay's last event.
- */
-export function unseenLive<T extends { seq: number }>(lines: RunLogLine[], held: T[]): T[] {
-  const last = lastSeq(lines);
-  return held.filter((e) => e.seq > last);
-}
-
 /** The highest event number in a replayed log (0 when it has none). */
 export function lastSeq(lines: RunLogLine[]): number {
   return lines.reduce((max, l) => (l.line === 'event' ? Math.max(max, l.seq) : max), 0);

@@ -63,9 +63,20 @@ const INDEX_LOCK_RETRIES: u32 = 6;
 /// out: they create or delete directories, branches or remote refs on their own schedule.
 fn retry_safe(args: &[&str]) -> bool {
     matches!(
-        args.first().copied(),
+        subcommand(args),
         Some("reset" | "add" | "commit" | "clean" | "status" | "diff" | "write-tree")
     )
+}
+
+/// The git subcommand, past any leading `-c name=value` options (the identity fallback adds them).
+fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let mut rest = args;
+    while let [flag, _value, tail @ ..] = rest
+        && *flag == "-c"
+    {
+        rest = tail;
+    }
+    rest.first().copied()
 }
 
 /// A lock older than this was left by a git process that died; waiting will not clear it.
@@ -941,4 +952,28 @@ pub async fn squash_checkpoints(
     let new_commit = run_with_identity(worktree, &args).await?;
     run_git(worktree, &["update-ref", "HEAD", &new_commit, &old_head]).await?;
     Ok(Some(new_commit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_safety_looks_past_identity_options() {
+        assert!(retry_safe(&["commit", "-m", "x"]));
+        assert!(retry_safe(&[
+            "-c",
+            "user.name=CA",
+            "-c",
+            "user.email=ca@x",
+            "commit",
+            "-m",
+            "x"
+        ]));
+        assert!(retry_safe(&["reset", "--hard", "-q", "HEAD"]));
+        assert!(!retry_safe(&["worktree", "add", "-b", "b", "p", "c"]));
+        assert!(!retry_safe(&["-c", "user.name=CA", "branch", "-D", "b"]));
+        assert!(!retry_safe(&["-c"]));
+        assert!(!retry_safe(&[]));
+    }
 }

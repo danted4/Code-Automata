@@ -6,7 +6,6 @@ import type { RunLogLine } from '@/lib/api/types/RunLogLine';
 import type { Task } from '@/lib/api/types/Task';
 import {
   lastSeq,
-  unseenLive,
   eventRow,
   liveRunName,
   logEnded,
@@ -206,32 +205,6 @@ describe('eventRow and logRows', () => {
     const abandoned: RunLogLine[] = [...lines, { line: 'abandoned', at: 5, reason: 'no binary' }];
     expect(logRows(abandoned).at(-1)).toEqual({ type: 'abandoned', reason: 'no binary' });
     expect(logEnded(abandoned)).toBe(true);
-  });
-});
-
-describe('unseenLive', () => {
-  const text = (t: string) => ({ type: 'text' as const, text: t });
-  const line = (seq: number, t: string): RunLogLine => ({
-    line: 'event',
-    at: 0,
-    seq,
-    event: text(t),
-  });
-  const live = (seq: number, t: string) => ({ seq, event: text(t) });
-
-  it('keeps only events numbered after the replay', () => {
-    const lines = [line(1, 'a'), line(2, 'b'), line(3, 'c')];
-    expect(unseenLive(lines, [live(2, 'b'), live(3, 'c'), live(4, 'd')])).toEqual([live(4, 'd')]);
-    expect(unseenLive(lines, [live(3, 'c')])).toEqual([]);
-  });
-
-  it('keeps a new event that looks exactly like the last replayed one', () => {
-    const lines = [line(1, 'same')];
-    expect(unseenLive(lines, [live(2, 'same')])).toEqual([live(2, 'same')]);
-  });
-
-  it('keeps everything when nothing was replayed', () => {
-    expect(unseenLive([], [live(1, 'x')])).toEqual([live(1, 'x')]);
   });
 });
 
