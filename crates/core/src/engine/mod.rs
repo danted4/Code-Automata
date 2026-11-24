@@ -50,6 +50,9 @@ pub enum EngineEvent {
     Agent {
         task_id: String,
         run_id: String,
+        /// The run log the event is written to (`RunLogInfo::name`): one run can write several
+        /// (triage, the step, a repair turn), each numbering its events from 1.
+        log: String,
         /// The event's number in its run log (1-based), the same as the log line's `seq`.
         seq: u64,
         event: AgentEvent,

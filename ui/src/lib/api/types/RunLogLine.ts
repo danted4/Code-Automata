@@ -14,5 +14,7 @@ export type RunLogLine = { "line": "start", at: number, runId: string, attempt: 
 label: string, kind: RunKind, subtaskId?: string | null, provider: Provider, } | { "line": "event", at: number, 
 /**
  * 1-based position among this log's events; the live event carries the same number.
+ * Logs written before `seq` existed read as 0 (3.0 has no users yet; kept so old logs
+ * still replay rather than vanish).
  */
 seq: number, event: AgentEvent, } | { "line": "abandoned", at: number, reason: string, };

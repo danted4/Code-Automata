@@ -39,6 +39,8 @@ pub enum ServerEvent {
     Agent {
         task_id: String,
         run_id: String,
+        /// The run log it belongs to (`RunLogInfo.name`); `seq` counts within that log.
+        log: String,
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
         seq: u64,
         event: AgentEvent,
@@ -93,11 +95,13 @@ async fn convert(engine: &Engine, event: EngineEvent) -> ServerEvent {
         EngineEvent::Agent {
             task_id,
             run_id,
+            log,
             seq,
             event,
         } => ServerEvent::Agent {
             task_id,
             run_id,
+            log,
             seq,
             event,
         },

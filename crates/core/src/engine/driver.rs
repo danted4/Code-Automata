@@ -744,6 +744,7 @@ async fn execute(
         inner.emit(EngineEvent::Agent {
             task_id: ctx.id.to_string(),
             run_id: ctx.run_id.clone(),
+            log: events_log.name().to_string(),
             seq,
             event,
         });

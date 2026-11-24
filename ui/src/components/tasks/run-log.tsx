@@ -10,15 +10,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { api, errorMessage } from '@/lib/api';
-import type { AgentEvent } from '@/lib/api/types/AgentEvent';
 import type { RunLogInfo } from '@/lib/api/types/RunLogInfo';
 import { onAgentEvent, type LiveAgentEvent } from '@/lib/agent-events';
 import {
   eventRow,
   liveRunName,
   logEnded,
+  lastSeq,
   logRows,
-  unseenLive,
   newestFirst,
   runRowState,
   runStateLabel,
@@ -177,7 +176,6 @@ export function RunLog({ taskId }: { taskId: string }) {
           key={selected.name}
           taskId={taskId}
           name={selected.name}
-          runId={selected.runId}
           live={selected.name === liveName}
         />
       )}
@@ -185,17 +183,7 @@ export function RunLog({ taskId }: { taskId: string }) {
   );
 }
 
-function RunEvents({
-  taskId,
-  name,
-  runId,
-  live,
-}: {
-  taskId: string;
-  name: string;
-  runId: string;
-  live: boolean;
-}) {
+function RunEvents({ taskId, name, live }: { taskId: string; name: string; live: boolean }) {
   const [rows, setRows] = useState<DisplayRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -204,21 +192,24 @@ function RunEvents({
   useEffect(() => {
     let cancelled = false;
     let stop: (() => void) | null = null;
-    // Follow first and hold what arrives during the replay's round trip; once the replay is in,
-    // add only the held events it does not already contain.
+    // Follow first and hold what arrives during the replay's round trip. Only this log's events
+    // count (the run may write others, each numbering from 1), and each number is shown once:
+    // the server writes a line before it sends the event, so the replay can already have it.
     let held: LiveAgentEvent[] | null = live ? [] : null;
     let ended = false;
-    const show = (event: AgentEvent) => {
-      const row = eventRow(event);
+    let shown = 0;
+    const show = (e: LiveAgentEvent) => {
+      if (e.seq <= shown) return;
+      shown = e.seq;
+      const row = eventRow(e.event);
       if (row) setRows((prev) => [...(prev ?? []), row]);
     };
     if (live) {
       stop = onAgentEvent(taskId, (e) => {
-        if (ended || e.runId !== runId) return;
-        // The same run may write another log next (a repair turn): stop at this one's end.
+        if (ended || e.log !== name) return;
         if (e.event.type === 'finished') ended = true;
         if (held) held.push(e);
-        else show(e.event);
+        else show(e);
       });
     }
     api.tasks
@@ -227,13 +218,14 @@ function RunEvents({
         if (cancelled) return;
         setRows(logRows(lines));
         setError(null);
+        shown = lastSeq(lines);
         const pending = held ?? [];
         held = null;
         if (logEnded(lines)) {
           ended = true;
           return;
         }
-        unseenLive(lines, pending).forEach((e) => show(e.event));
+        pending.forEach(show);
       })
       .catch((e) => {
         if (!cancelled) setError(errorMessage(e));
@@ -242,7 +234,7 @@ function RunEvents({
       cancelled = true;
       stop?.();
     };
-  }, [taskId, name, runId, live]);
+  }, [taskId, name, live]);
 
   useLayoutEffect(() => {
     const el = scroller.current;

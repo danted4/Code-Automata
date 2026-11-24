@@ -32,28 +32,45 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function waitForLine(child, pattern, what, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
     let seen = '';
+    const done = (settle, value) => {
+      clearTimeout(timer);
+      child.stdout.off('data', onData);
+      child.stderr.off('data', onData);
+      child.off('exit', onExit);
+      child.off('error', onError);
+      settle(value);
+    };
     const timer = setTimeout(
-      () => reject(new Error(`${what} did not start in time:\n${seen}`)),
+      () => done(reject, new Error(`${what} did not start in time:\n${seen}`)),
       timeoutMs
     );
     const onData = (chunk) => {
       seen += chunk.toString();
-      if (pattern.test(seen)) {
-        clearTimeout(timer);
-        resolve(seen);
-      }
+      if (pattern.test(seen)) done(resolve, seen);
     };
+    const onExit = (code) => done(reject, new Error(`${what} exited with ${code}:\n${seen}`));
+    // A missing or non-executable binary: an error event, not an exit.
+    const onError = (e) => done(reject, new Error(`${what} could not start: ${e.message}`));
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      reject(new Error(`${what} exited with ${code}:\n${seen}`));
-    });
+    child.on('exit', onExit);
+    child.on('error', onError);
   });
 }
 
+/** Start `child` and wait for its ready line; on any failure it is stopped before rethrowing. */
+async function started(child, pattern, what) {
+  try {
+    await waitForLine(child, pattern, what);
+  } catch (e) {
+    await stopChild(child);
+    throw e;
+  }
+}
+
 function stopChild(child) {
-  if (!child || child.exitCode !== null) return Promise.resolve();
+  // Already gone: exited (exitCode) or killed by a signal (signalCode).
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     child.once('exit', () => resolve());
     child.kill('SIGTERM');
@@ -75,7 +92,7 @@ export async function startPreview() {
       CA_SERVER_TOKEN: TOKEN,
     },
   });
-  await waitForLine(child, /localhost:\d+/, 'vite preview');
+  await started(child, /localhost:\d+/, 'vite preview');
   return { stop: () => stopChild(child) };
 }
 
@@ -97,7 +114,7 @@ export async function startServer(rules) {
     ['--port', String(SERVER_PORT), '--token', TOKEN, '--allow-mock', '--mock-scenario', scenario],
     { env: { ...process.env, CODE_AUTOMATA_MOCK_AGENT: path.join(BIN, `mock-agent${EXE}`) } }
   );
-  await waitForLine(child, /listening on/, 'ca-server');
+  await started(child, /listening on/, 'ca-server');
   return { scenarioDir: dir, stop: () => stopChild(child) };
 }
 
@@ -184,6 +201,8 @@ export async function until(what, probe, accept = Boolean, timeoutMs = 45_000) {
 /** Open the app with `project` already chosen (the open-project dialog has its own test). */
 export async function openProject(project) {
   ab('open', `${BASE}/`);
+  // Start clean (theme included), whatever an earlier or aborted run left behind.
+  js('localStorage.clear() || true');
   js(
     `localStorage.setItem('code-automata-project', JSON.stringify({ state: { projectPath: ${JSON.stringify(project)}, recentPaths: [] }, version: 0 })) || true`
   );

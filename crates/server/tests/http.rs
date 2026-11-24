@@ -718,6 +718,10 @@ async fn the_event_stream_says_hello_then_carries_task_changes_and_agent_output(
                 }
                 Some("agent") => {
                     assert!(m["seq"].as_u64().is_some_and(|n| n >= 1), "{m}");
+                    assert!(
+                        m["log"].as_str().is_some_and(|l| l.starts_with("run-")),
+                        "{m}"
+                    );
                     saw_agent |= m["event"]["type"] == "text" || m["event"]["type"] == "finished"
                 }
                 _ => {}

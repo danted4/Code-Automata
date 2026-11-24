@@ -5,6 +5,7 @@ import type { RunLogInfo } from '@/lib/api/types/RunLogInfo';
 import type { RunLogLine } from '@/lib/api/types/RunLogLine';
 import type { Task } from '@/lib/api/types/Task';
 import {
+  lastSeq,
   unseenLive,
   eventRow,
   liveRunName,
@@ -231,5 +232,18 @@ describe('unseenLive', () => {
 
   it('keeps everything when nothing was replayed', () => {
     expect(unseenLive([], [live(1, 'x')])).toEqual([live(1, 'x')]);
+  });
+});
+
+describe('lastSeq', () => {
+  it('is the highest event number replayed, 0 for none', () => {
+    const ev = (seq: number): RunLogLine => ({
+      line: 'event',
+      at: 0,
+      seq,
+      event: { type: 'text', text: 'x' },
+    });
+    expect(lastSeq([ev(1), ev(3), ev(2)])).toBe(3);
+    expect(lastSeq([])).toBe(0);
   });
 });

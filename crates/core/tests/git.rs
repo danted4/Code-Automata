@@ -574,3 +574,24 @@ async fn a_write_waits_out_a_briefly_held_index_lock() {
         "# test\n"
     );
 }
+
+/// A lock left by a git process that died is not waited on: the error comes at once and names
+/// the file to remove.
+#[tokio::test]
+async fn a_stale_index_lock_fails_at_once_with_its_path() {
+    let repo = TempRepo::new();
+    std::fs::write(repo.path.join("README.md"), "changed\n").unwrap();
+    let lock = repo.path.join(".git").join("index.lock");
+    let file = std::fs::File::create(&lock).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(120))
+        .unwrap();
+    drop(file);
+    let started = std::time::Instant::now();
+    let err = ca_core::git::discard_changes(&repo.path).await.unwrap_err();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "waited {:?} on a stale lock",
+        started.elapsed()
+    );
+    assert!(err.to_string().contains("index.lock"), "{err}");
+}

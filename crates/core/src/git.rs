@@ -42,7 +42,11 @@ pub(crate) async fn git_output(
         let out = git_output_once(cwd, args, timeout).await?;
         // Another git process (an editor's git integration, say) holding the index lock for a
         // moment: wait and try again rather than fail the task's step.
-        if !out.status.success() && attempt < INDEX_LOCK_RETRIES && index_locked(&out.stderr) {
+        if !out.status.success()
+            && attempt < INDEX_LOCK_RETRIES
+            && retry_safe(args)
+            && index_held(&out.stderr)
+        {
             attempt += 1;
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
             continue;
@@ -54,9 +58,38 @@ pub(crate) async fn git_output(
 /// About 2 s in all.
 const INDEX_LOCK_RETRIES: u32 = 6;
 
-fn index_locked(stderr: &[u8]) -> bool {
+/// Commands that take the index lock before changing anything, so a run that failed on the lock
+/// did nothing and can simply run again. `worktree add`/`remove`, `branch` and `push` are left
+/// out: they create or delete directories, branches or remote refs on their own schedule.
+fn retry_safe(args: &[&str]) -> bool {
+    matches!(
+        args.first().copied(),
+        Some("reset" | "add" | "commit" | "clean" | "status" | "diff" | "write-tree")
+    )
+}
+
+/// A lock older than this was left by a git process that died; waiting will not clear it.
+const STALE_LOCK: Duration = Duration::from_secs(15);
+
+/// The command failed because another git process holds an index lock right now. A stale lock
+/// (from a killed git) is not waited on: git's own message names the file to remove.
+fn index_held(stderr: &[u8]) -> bool {
     let text = String::from_utf8_lossy(stderr);
-    text.contains("index.lock") && text.contains("File exists")
+    if !(text.contains("index.lock") && text.contains("File exists")) {
+        return false;
+    }
+    let Some(lock) = text
+        .split_once("Unable to create '")
+        .and_then(|(_, rest)| rest.split_once("': File exists"))
+        .map(|(path, _)| std::path::PathBuf::from(path))
+    else {
+        return true;
+    };
+    match std::fs::metadata(&lock).and_then(|m| m.modified()) {
+        Ok(modified) => modified.elapsed().map_or(true, |age| age < STALE_LOCK),
+        // Gone by now: released, so a retry will get it.
+        Err(_) => true,
+    }
 }
 
 async fn git_output_once(cwd: &Path, args: &[&str], timeout: Option<Duration>) -> Result<Output> {

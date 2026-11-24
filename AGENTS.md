@@ -50,7 +50,7 @@ yarn format         # Prettier
 yarn e2e            # after `cargo build` and `yarn build`: ten agent-browser scenarios
 ```
 
-CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows), `ui.yml` and `e2e.yml`. They fail on any warning.
+CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml` fail on any warning (clippy `-D warnings`, ESLint `--max-warnings 0`); `e2e.yml` runs the browser scenarios.
 
 ## Invariants
 

@@ -63,6 +63,7 @@ function handle(project: string, event: ServerEvent) {
       publishAgentEvent({
         taskId: event.taskId,
         runId: event.runId,
+        log: event.log,
         seq: event.seq,
         event: event.event,
         at: Date.now(),

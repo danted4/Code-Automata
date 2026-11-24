@@ -5,10 +5,11 @@
 
 import type { AgentEvent } from '@/lib/api/types/AgentEvent';
 
-/** `seq` is the event's number in its run log, as on the replayed log line. */
+/** `log` is the run log the event belongs to; `seq` is its number there, as on the log line. */
 export type LiveAgentEvent = {
   taskId: string;
   runId: string;
+  log: string;
   seq: number;
   event: AgentEvent;
   at: number;

@@ -44,6 +44,9 @@ pub enum RunLogLine {
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
         at: i64,
         /// 1-based position among this log's events; the live event carries the same number.
+        /// Logs written before `seq` existed read as 0 (3.0 has no users yet; kept so old logs
+        /// still replay rather than vanish).
+        #[serde(default)]
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
         seq: u64,
         event: AgentEvent,
@@ -84,6 +87,8 @@ pub struct RunLogInfo {
 /// Appends a run's events to its log.
 pub(crate) struct RunLogWriter {
     file: Option<File>,
+    /// The log's name, as `list` reports it.
+    name: String,
     /// Events written so far.
     seq: u64,
 }
@@ -93,6 +98,12 @@ impl RunLogWriter {
     /// writer does nothing.
     pub async fn create(raw_log: &Path, start: RunLogLine) -> RunLogWriter {
         let path = events_path(raw_log);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(SUFFIX))
+            .unwrap_or_default()
+            .to_string();
         let file = match path.parent() {
             Some(dir) if tokio::fs::create_dir_all(dir).await.is_err() => None,
             _ => tokio::fs::OpenOptions::new()
@@ -102,9 +113,13 @@ impl RunLogWriter {
                 .await
                 .ok(),
         };
-        let mut writer = RunLogWriter { file, seq: 0 };
+        let mut writer = RunLogWriter { file, name, seq: 0 };
         writer.write(&start).await;
         writer
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Log the event and return its number, counted even when the file cannot be written.
@@ -277,6 +292,7 @@ mod tests {
         )
         .await;
         w.event(&AgentEvent::Text { text: "hi".into() }).await;
+        let w_name = w.name().to_string();
         drop(w);
         // A torn last line is skipped, not an error.
         let path = dir.path().join("run-7-1-run.events.ndjson");
@@ -287,6 +303,7 @@ mod tests {
         let runs = list(dir.path()).await.unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].name, "run-7-1-run");
+        assert_eq!(w_name, "run-7-1-run");
         assert_eq!(runs[0].subtask_id.as_deref(), Some("dev-1"));
         assert!(runs[0].outcome.is_none());
 
