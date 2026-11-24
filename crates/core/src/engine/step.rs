@@ -71,8 +71,15 @@ pub fn next_step(task: &Task, settings: &Settings) -> Step {
                     Step::Agent(AgentStep::Questions)
                 }
                 PlanningStage::NotStarted | PlanningStage::Answered => Step::Agent(AgentStep::Plan),
+                // Plan approval switched off while questions waited: they become optional.
+                PlanningStage::Questions if !task.require_plan_approval => {
+                    Step::Agent(AgentStep::Plan)
+                }
                 PlanningStage::Questions => Step::Wait(Waiting::Answers),
-                PlanningStage::PlanReady if task.require_plan_approval => {
+                PlanningStage::PlanReady if task.planning.revision.is_some() => {
+                    Step::Agent(AgentStep::Plan)
+                }
+                PlanningStage::PlanReady if task.require_plan_approval || task.planning.hold => {
                     Step::Wait(Waiting::Approval)
                 }
                 PlanningStage::PlanReady => Step::AutoApprove,
@@ -117,17 +124,13 @@ fn first_pending(task: &Task, kind: SubtaskKind) -> Option<String> {
         .map(|s| s.id.clone())
 }
 
-/// Checks are current when they ran after the last dev subtask finished.
+/// Checks are current when they ran against the last dev checkpoint. Commits, not clock times:
+/// a clock that steps back cannot make them look stale forever.
 fn checks_are_current(task: &Task) -> bool {
-    let Some(checks) = &task.review.checks else {
-        return false;
-    };
-    let last_dev = task
-        .subtasks_of(SubtaskKind::Dev)
-        .filter_map(|s| s.finished_at)
-        .max()
-        .unwrap_or(i64::MIN);
-    checks.at >= last_dev
+    match (&task.review.checks, task.last_dev_checkpoint()) {
+        (Some(checks), Some(commit)) => checks.commit == commit,
+        _ => false,
+    }
 }
 
 fn failed_qa(task: &Task) -> impl Iterator<Item = &Subtask> {
@@ -164,10 +167,45 @@ pub fn rework_feedback(task: &Task, cause: ReworkCause) -> String {
     }
 }
 
-/// Start a rework round: a new dev subtask carrying the feedback, QA reset so it runs again on the
-/// fixed code, and the task back in in_progress. The caller sets the next run in the same update.
+/// Start an automatic rework round from failing checks or QA. See [`add_rework`].
 pub fn apply_rework(task: &mut Task, cause: ReworkCause, settings: &Settings) -> Result<String> {
     let feedback = rework_feedback(task, cause);
+    add_rework(task, feedback, settings)
+}
+
+/// A rework the user asked for from review, with what to fix. It starts a fresh budget of
+/// automatic rework rounds.
+pub fn apply_user_rework(task: &mut Task, feedback: &str, settings: &Settings) -> Result<String> {
+    if !matches!(task.phase, Phase::AiReview | Phase::HumanReview) {
+        return Err(crate::error::CoreError::Invalid(
+            "rework can be requested from AI review or human review".into(),
+        ));
+    }
+    if task.has_active_run() {
+        return Err(crate::error::CoreError::Invalid(
+            "pause the task before requesting rework".into(),
+        ));
+    }
+    if feedback.trim().is_empty() {
+        return Err(crate::error::CoreError::Invalid(
+            "say what should be fixed".into(),
+        ));
+    }
+    task.review.rework_count = 0;
+    add_rework(
+        task,
+        format!(
+            "The reviewer asked for these changes:\n\n{}",
+            feedback.trim()
+        ),
+        settings,
+    )
+}
+
+/// Add a rework dev subtask carrying `feedback`, reset the QA that ran (or that the engine skipped)
+/// so it runs again on the fixed code, and move back to in_progress. QA the user skipped stays
+/// skipped. The caller sets the next run in the same update.
+fn add_rework(task: &mut Task, feedback: String, settings: &Settings) -> Result<String> {
     let round = task.review.rework_count + 1;
     let mut id = format!("rework-{round}");
     let mut n = 1;
@@ -186,15 +224,14 @@ pub fn apply_rework(task: &mut Task, cause: ReworkCause, settings: &Settings) ->
         .rposition(|s| s.kind == SubtaskKind::Dev)
         .map_or(0, |i| i + 1);
     task.subtasks.insert(at, sub);
-    for qa in task
-        .subtasks
-        .iter_mut()
-        .filter(|s| s.kind == SubtaskKind::Qa)
-    {
+    for qa in task.subtasks.iter_mut().filter(|s| {
+        s.kind == SubtaskKind::Qa && (s.status == SubtaskStatus::Done || s.skipped_reason.is_some())
+    }) {
         qa.status = SubtaskStatus::Pending;
         qa.verdict = None;
         qa.finished_at = None;
         qa.checkpoint = None;
+        qa.skipped_reason = None;
     }
     task.review.rework_count = round;
     task.review.feedback = Some(feedback);
@@ -228,6 +265,7 @@ pub fn apply_finish_review(task: &mut Task) -> Result<()> {
     {
         qa.status = SubtaskStatus::Skipped;
         qa.finished_at = Some(now);
+        qa.skipped_reason = Some("not run: the checks were still failing".into());
     }
     task.run = None;
     apply_move(task, Phase::HumanReview, Mover::Engine)
@@ -262,7 +300,8 @@ mod tests {
         t
     }
 
-    fn checks(passed: bool, at: i64) -> Option<Checks> {
+    /// Checks that ran against `commit`.
+    fn checks(passed: bool, commit: &str) -> Option<Checks> {
         Some(Checks {
             passed,
             summary: if passed {
@@ -271,8 +310,15 @@ mod tests {
                 "✗ build".into()
             },
             details: (!passed).then(|| "error at x".into()),
-            at,
+            at: 0,
+            commit: commit.into(),
         })
+    }
+
+    fn done_dev(id: &str, checkpoint: &str) -> Subtask {
+        let mut s = sub(id, SubtaskKind::Dev, SubtaskStatus::Done, Some(1));
+        s.checkpoint = Some(checkpoint.into());
+        s
     }
 
     fn verdict(passed: bool) -> Option<QaVerdict> {
@@ -302,6 +348,9 @@ mod tests {
         assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Plan));
         t.planning.stage = PlanningStage::PlanReady;
         assert_eq!(next_step(&t, &s), Step::Wait(Waiting::Approval));
+        t.planning.revision = Some("use a cursor".into());
+        assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Plan));
+        t.planning.revision = None;
         t.require_plan_approval = false;
         assert_eq!(next_step(&t, &s), Step::AutoApprove);
         t.planning.stage = PlanningStage::Approved;
@@ -351,14 +400,14 @@ mod tests {
         let s = settings();
         let mut t = with_phase(base(), Phase::AiReview);
         t.subtasks = vec![
-            sub("dev-1", SubtaskKind::Dev, SubtaskStatus::Done, Some(10)),
+            done_dev("dev-1", "c1"),
             sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Pending, None),
             sub("qa-2", SubtaskKind::Qa, SubtaskStatus::Pending, None),
         ];
         assert_eq!(next_step(&t, &s), Step::RunChecks);
-        t.review.checks = checks(true, 5); // older than the last dev subtask
+        t.review.checks = checks(true, "c0"); // ran against an older commit
         assert_eq!(next_step(&t, &s), Step::RunChecks);
-        t.review.checks = checks(true, 20);
+        t.review.checks = checks(true, "c1");
         assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Qa("qa-1".into())));
         t.subtasks[1].status = SubtaskStatus::Done;
         t.subtasks[1].verdict = verdict(true);
@@ -373,17 +422,17 @@ mod tests {
         let s = settings();
         let mut t = with_phase(base(), Phase::AiReview);
         t.subtasks = vec![
-            sub("dev-1", SubtaskKind::Dev, SubtaskStatus::Done, Some(10)),
+            done_dev("dev-1", "c1"),
             sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Pending, None),
         ];
-        t.review.checks = checks(false, 20);
+        t.review.checks = checks(false, "c1");
         assert_eq!(next_step(&t, &s), Step::Rework(ReworkCause::Checks));
         t.review.rework_count = 2;
         assert_eq!(next_step(&t, &s), Step::FinishReview);
 
         // QA: all QA runs first, then one rework for every failed verdict.
         t.review.rework_count = 0;
-        t.review.checks = checks(true, 20);
+        t.review.checks = checks(true, "c1");
         t.subtasks
             .push(sub("qa-2", SubtaskKind::Qa, SubtaskStatus::Pending, None));
         t.subtasks[1].status = SubtaskStatus::Done;
@@ -401,11 +450,17 @@ mod tests {
         let s = settings();
         let mut t = with_phase(base(), Phase::AiReview);
         t.subtasks = vec![
-            sub("dev-1", SubtaskKind::Dev, SubtaskStatus::Done, Some(10)),
+            done_dev("dev-1", "c1"),
             sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Done, Some(30)),
+            sub(
+                "qa-user-skipped",
+                SubtaskKind::Qa,
+                SubtaskStatus::Skipped,
+                Some(31),
+            ),
         ];
         t.subtasks[1].verdict = verdict(false);
-        t.review.checks = checks(true, 20);
+        t.review.checks = checks(true, "c1");
 
         let id = apply_rework(&mut t, ReworkCause::Qa, &s).unwrap();
         assert_eq!(id, "rework-1");
@@ -419,6 +474,11 @@ mod tests {
         let qa = t.subtask("qa-1").unwrap();
         assert_eq!(qa.status, SubtaskStatus::Pending);
         assert!(qa.verdict.is_none());
+        assert_eq!(
+            t.subtask("qa-user-skipped").unwrap().status,
+            SubtaskStatus::Skipped,
+            "a user's skip must survive a rework round"
+        );
         t.validate().unwrap();
 
         // Next: the rework subtask runs; after it, checks are stale again.
@@ -432,14 +492,18 @@ mod tests {
     fn finishing_with_failures_skips_unrun_qa_and_keeps_the_findings() {
         let mut t = with_phase(base(), Phase::AiReview);
         t.subtasks = vec![
-            sub("dev-1", SubtaskKind::Dev, SubtaskStatus::Done, Some(10)),
+            done_dev("dev-1", "c1"),
             sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Pending, None),
         ];
-        t.review.checks = checks(false, 20);
+        t.review.checks = checks(false, "c1");
         t.review.rework_count = 2;
         apply_finish_review(&mut t).unwrap();
         assert_eq!(t.phase, Phase::HumanReview);
         assert_eq!(t.subtasks[1].status, SubtaskStatus::Skipped);
+        assert!(
+            t.subtasks[1].skipped_reason.is_some(),
+            "engine skips are marked"
+        );
         assert!(
             t.review
                 .feedback
@@ -461,5 +525,81 @@ mod tests {
             next_step(&with_phase(base(), Phase::Done), &s),
             Step::Wait(Waiting::Done)
         );
+    }
+
+    #[test]
+    fn a_clock_jump_cannot_keep_checks_stale() {
+        let s = settings();
+        let mut t = with_phase(base(), Phase::AiReview);
+        let mut dev = done_dev("dev-1", "c1");
+        dev.finished_at = Some(i64::MAX); // finished "in the future"
+        t.subtasks = vec![
+            dev,
+            sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Pending, None),
+        ];
+        t.review.checks = checks(true, "c1");
+        assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Qa("qa-1".into())));
+    }
+
+    #[test]
+    fn questions_become_optional_when_approval_is_switched_off() {
+        let s = settings();
+        let mut t = base();
+        t.planning.stage = PlanningStage::Questions;
+        t.require_plan_approval = false;
+        assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Plan));
+    }
+
+    #[test]
+    fn replanning_waits_for_approval_and_is_not_undone() {
+        let s = settings();
+        let mut t = with_phase(base(), Phase::AiReview);
+        t.subtasks = vec![
+            done_dev("dev-1", "c1"),
+            sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Pending, None),
+        ];
+        t.planning.plan = Some("# P".into());
+        apply_move(&mut t, Phase::Planning, Mover::User).unwrap();
+        assert!(t.subtasks.is_empty());
+        assert_eq!(t.planning.stage, PlanningStage::PlanReady);
+        assert!(!t.require_plan_approval, "the user's setting is untouched");
+        assert_eq!(
+            next_step(&t, &s),
+            Step::Wait(Waiting::Approval),
+            "the engine must not move it straight back"
+        );
+        t.validate().unwrap();
+    }
+
+    #[test]
+    fn a_rework_drag_needs_feedback_and_user_rework_is_not_undone() {
+        let s = settings();
+        let mut t = with_phase(base(), Phase::HumanReview);
+        t.subtasks = vec![
+            done_dev("dev-1", "c1"),
+            sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Done, Some(2)),
+        ];
+        t.subtasks[1].verdict = verdict(true);
+        t.review.rework_count = 2;
+        assert!(apply_move(&mut t, Phase::InProgress, Mover::User).is_err());
+
+        let id = apply_user_rework(&mut t, "Rename the endpoint", &s).unwrap();
+        assert_eq!(t.phase, Phase::InProgress);
+        assert_eq!(
+            t.review.rework_count, 1,
+            "a user rework starts a fresh budget"
+        );
+        assert!(
+            t.subtask(&id)
+                .unwrap()
+                .detail
+                .contains("Rename the endpoint")
+        );
+        assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Dev(id)));
+        assert!(
+            apply_user_rework(&mut t, "again", &s).is_err(),
+            "only from review"
+        );
+        t.validate().unwrap();
     }
 }

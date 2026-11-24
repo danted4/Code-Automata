@@ -63,7 +63,8 @@
       "passed": false,
       "summary": "typecheck failed",
       "details": "src/list.rs:12: expected u32",
-      "at": 1764000500000
+      "at": 1764000500000,
+      "commit": "3f1c2a9e0b7d4c5f8a6e2d1b0c9f8e7d6a5b4c3d"
     },
     "feedback": "Fix the type of the page size."
   },

@@ -6,8 +6,17 @@
 //! mock-agent --scenario <file> [--session-id <id> | --resume <id>] [--record <file>] [--read-only | --review]
 //! ```
 //!
-//! The prompt is read from stdin. The scenario is JSON: `{"steps": [...], "resumeSteps": [...]}`;
-//! `resumeSteps`, when present, replaces `steps` for a `--resume` invocation. Each step is one of:
+//! The prompt is read from stdin. The scenario is JSON:
+//!
+//! ```json
+//! { "rules": [ { "whenPrompt": "dev-2", "steps": [...], "resumeSteps": [...], "onceFile": "f" } ],
+//!   "steps": [...], "resumeSteps": [...] }
+//! ```
+//!
+//! The first rule whose `whenPrompt` text appears in the prompt is played; with no match, the
+//! top-level `steps` are. A rule with `onceFile` plays only while that file does not exist and
+//! creates it, so a step can fail or hang the first time and behave on a retry. `resumeSteps`, when
+//! present, replaces `steps` for a `--resume` invocation. Each step is one of:
 //!
 //! | Step | Effect |
 //! | --- | --- |
@@ -84,9 +93,26 @@ fn run() -> i32 {
             return 2;
         }
     };
-    let steps = match (resume.is_some(), scenario.get("resumeSteps")) {
+    let rule = scenario
+        .get("rules")
+        .and_then(Value::as_array)
+        .and_then(|rules| {
+            rules.iter().find(|r| {
+                let matches = r
+                    .get("whenPrompt")
+                    .and_then(Value::as_str)
+                    .is_some_and(|w| prompt.contains(w));
+                let once = r.get("onceFile").and_then(Value::as_str);
+                matches && once.is_none_or(|f| !std::path::Path::new(f).exists())
+            })
+        });
+    if let Some(f) = rule.and_then(|r| r.get("onceFile")).and_then(Value::as_str) {
+        let _ = std::fs::write(f, "used");
+    }
+    let source = rule.unwrap_or(&scenario);
+    let steps = match (resume.is_some(), source.get("resumeSteps")) {
         (true, Some(Value::Array(s))) => s.clone(),
-        _ => scenario
+        _ => source
             .get("steps")
             .and_then(Value::as_array)
             .cloned()

@@ -20,8 +20,9 @@ pub struct CheckCommand {
     pub command: String,
 }
 
+/// Each field falls back to its default on its own, so setting one timeout leaves the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct Timeouts {
     /// No output for this long ends a run.
     pub idle_minutes: u32,

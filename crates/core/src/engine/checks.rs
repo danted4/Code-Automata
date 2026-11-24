@@ -17,6 +17,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
@@ -146,47 +147,58 @@ async fn run_one(
         Ok(c) => c,
         Err(e) => return finish(false, None, false, format!("could not start: {e}")),
     };
-    let pid = child.id();
-    let (Some(mut out), Some(mut err)) = (child.stdout.take(), child.stderr.take()) else {
-        return finish(false, None, false, "no output pipes".into());
-    };
+    // Kills the command's whole process group however this function is left: normal exit, timeout,
+    // or the future being dropped (pause, shutdown).
+    let _group = GroupGuard(child.id());
+    let output = Arc::new(StdMutex::new(Vec::new()));
+    let readers = [
+        child
+            .stdout
+            .take()
+            .map(|p| tokio::spawn(read_into(p, output.clone()))),
+        child
+            .stderr
+            .take()
+            .map(|p| tokio::spawn(read_into(p, output.clone()))),
+    ];
 
-    // Read both pipes into one buffer while waiting, so a chatty command cannot block on a full
-    // pipe, and keep only the tail.
-    let collect = async {
-        let mut buf = Vec::new();
-        let (mut a, mut b) = ([0u8; 8192], [0u8; 8192]);
-        let (mut out_open, mut err_open) = (true, true);
-        while out_open || err_open {
-            tokio::select! {
-                n = out.read(&mut a), if out_open => match n {
-                    Ok(0) | Err(_) => out_open = false,
-                    Ok(n) => push_tail(&mut buf, &a[..n]),
-                },
-                n = err.read(&mut b), if err_open => match n {
-                    Ok(0) | Err(_) => err_open = false,
-                    Ok(n) => push_tail(&mut buf, &b[..n]),
-                },
-            }
-        }
-        let status = child.wait().await;
-        (buf, status)
+    // The check is over when the command exits, not when its pipes close: something it started
+    // (a daemon, a watcher) may hold them open indefinitely.
+    let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(status) => (status.ok().and_then(|s| s.code()), false),
+        Err(_) => (None, true),
     };
+    drop(_group); // stop anything left in the group, so the pipes close
+    for reader in readers.into_iter().flatten() {
+        let _ = tokio::time::timeout(DRAIN, reader).await;
+    }
+    let mut text = {
+        let buf = output.lock().unwrap_or_else(|p| p.into_inner());
+        String::from_utf8_lossy(&buf).into_owned()
+    };
+    if timed_out {
+        text.push_str(&format!("\n[timed out after {} s]", timeout.as_secs()));
+    }
+    finish(
+        exit_code == Some(0) && !timed_out,
+        exit_code,
+        timed_out,
+        text,
+    )
+}
 
-    match tokio::time::timeout(timeout, collect).await {
-        Ok((buf, status)) => {
-            let code = status.ok().and_then(|s| s.code());
-            let text = String::from_utf8_lossy(&buf).into_owned();
-            finish(code == Some(0), code, false, text)
-        }
-        Err(_) => {
-            kill_group(pid);
-            finish(
-                false,
-                None,
-                true,
-                format!("timed out after {} s", timeout.as_secs()),
-            )
+/// How long to keep reading after the command exits and its group is killed.
+const DRAIN: Duration = Duration::from_millis(500);
+
+async fn read_into<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, out: Arc<StdMutex<Vec<u8>>>) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => push_tail(
+                &mut out.lock().unwrap_or_else(|p| p.into_inner()),
+                &chunk[..n],
+            ),
         }
     }
 }
@@ -199,29 +211,32 @@ fn push_tail(buf: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-#[cfg(unix)]
-fn kill_group(pid: Option<u32>) {
-    if let Some(pid) = pid
-        && let Ok(raw) = i32::try_from(pid)
-    {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(raw),
-            nix::sys::signal::Signal::SIGKILL,
-        );
+/// SIGKILLs a process group when dropped.
+struct GroupGuard(Option<u32>);
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0
+            && let Ok(raw) = i32::try_from(pid)
+        {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(raw),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
     }
 }
 
-#[cfg(not(unix))]
-fn kill_group(_pid: Option<u32>) {}
-
-/// The task-file record of a set of check runs.
-pub fn summarize(runs: &[CheckRun]) -> Checks {
+/// The task-file record of a set of check runs against `commit`.
+pub fn summarize(runs: &[CheckRun], commit: &str) -> Checks {
     if runs.is_empty() {
         return Checks {
             passed: true,
             summary: "no checks configured".into(),
             details: None,
             at: now_ms(),
+            commit: commit.to_string(),
         };
     }
     let passed = runs.iter().all(|r| r.passed);
@@ -245,6 +260,7 @@ pub fn summarize(runs: &[CheckRun]) -> Checks {
         summary,
         details: (!details.is_empty()).then_some(details),
         at: now_ms(),
+        commit: commit.to_string(),
     }
 }
 
@@ -354,7 +370,7 @@ mod tests {
         assert!(runs[1].output.contains("broken"));
         assert!(!d.path().join("ran.txt").exists());
 
-        let summary = summarize(&runs);
+        let summary = summarize(&runs, "abc");
         assert!(!summary.passed);
         assert_eq!(summary.summary, "✓ ok, ✗ bad");
         assert!(summary.details.unwrap().contains("broken"));
@@ -375,9 +391,84 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    #[tokio::test]
+    async fn a_check_that_leaves_a_daemon_behind_still_passes_promptly() {
+        let d = tempfile::tempdir().unwrap();
+        let cmds = vec![CheckCommand {
+            name: "build".into(),
+            command: "echo built; (sleep 30 &) ; exit 0".into(),
+        }];
+        let started = Instant::now();
+        let runs = run_all(d.path(), &cmds, None, Duration::from_secs(10)).await;
+        assert!(runs[0].passed, "{:?}", runs[0]);
+        assert!(runs[0].output.contains("built"));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_check_keeps_its_output() {
+        let d = tempfile::tempdir().unwrap();
+        let cmds = vec![CheckCommand {
+            name: "slow".into(),
+            command: "echo compiling module 7; sleep 30".into(),
+        }];
+        let runs = run_all(d.path(), &cmds, None, Duration::from_millis(500)).await;
+        assert!(runs[0].timed_out);
+        assert!(
+            runs[0].output.contains("compiling module 7"),
+            "{:?}",
+            runs[0].output
+        );
+        assert!(runs[0].output.contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn dropping_a_running_check_kills_its_processes() {
+        let d = tempfile::tempdir().unwrap();
+        let pid_file = d.path().join("pid");
+        let cmds = vec![CheckCommand {
+            name: "long".into(),
+            command: format!("sleep 60 & echo $! > {}; wait", pid_file.display()),
+        }];
+        let path = d.path().to_path_buf();
+        let task =
+            tokio::spawn(async move { run_all(&path, &cmds, None, Duration::from_secs(60)).await });
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(t) = std::fs::read_to_string(&pid_file)
+                && let Ok(p) = t.trim().parse::<u32>()
+            {
+                pid = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let pid = pid.expect("no pid");
+        task.abort();
+        let _ = task.await;
+        let mut dead = false;
+        for _ in 0..40 {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !alive {
+                dead = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(dead, "the check's child outlived the dropped check");
+    }
+
     #[test]
     fn no_checks_is_a_pass() {
-        let s = summarize(&[]);
+        let s = summarize(&[], "abc");
         assert!(s.passed);
         assert_eq!(s.summary, "no checks configured");
     }

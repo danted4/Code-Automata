@@ -48,6 +48,7 @@ pub fn binary_name(provider: Provider) -> &'static str {
 pub struct Binaries {
     search_path: Option<OsString>,
     overrides: HashMap<Provider, PathBuf>,
+    tools: HashMap<String, PathBuf>,
 }
 
 impl Binaries {
@@ -56,6 +57,7 @@ impl Binaries {
         Binaries {
             search_path: std::env::var_os("PATH"),
             overrides: HashMap::new(),
+            tools: HashMap::new(),
         }
     }
 
@@ -86,6 +88,7 @@ impl Binaries {
         Binaries {
             search_path: path.or_else(|| std::env::var_os("PATH")),
             overrides: HashMap::new(),
+            tools: HashMap::new(),
         }
     }
 
@@ -93,6 +96,28 @@ impl Binaries {
     pub fn with_override(mut self, provider: Provider, path: impl Into<PathBuf>) -> Self {
         self.overrides.insert(provider, path.into());
         self
+    }
+
+    /// Use exactly this file for the tool `name` (for example a fake `gh` in tests).
+    pub fn with_tool(mut self, name: &str, path: impl Into<PathBuf>) -> Self {
+        self.tools.insert(name.to_string(), path.into());
+        self
+    }
+
+    /// Find a helper tool other than an agent CLI (`gh`), on the same search path.
+    pub fn locate_tool(&self, name: &str) -> Result<PathBuf> {
+        if let Some(path) = self.tools.get(name) {
+            return Ok(path.clone());
+        }
+        self.search_path
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join(name))
+            .find(|candidate| is_executable(candidate))
+            .ok_or_else(|| {
+                CoreError::Invalid(format!("`{name}` was not found on PATH; install it first"))
+            })
     }
 
     /// The `PATH` to give agent processes.

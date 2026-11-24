@@ -46,6 +46,17 @@ impl ProjectLock {
             use nix::fcntl::{Flock, FlockArg};
             let mut lock = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
                 Ok(lock) => lock,
+                // Only "would block" means another process holds it; anything else (a network
+                // share without locking, for example) is a real error.
+                Err((_, errno))
+                    if errno != nix::errno::Errno::EWOULDBLOCK
+                        && errno != nix::errno::Errno::EAGAIN =>
+                {
+                    return Err(CoreError::Io {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::from(errno),
+                    });
+                }
                 Err((file, _)) => {
                     let holder = std::io::read_to_string(&file)
                         .unwrap_or_default()

@@ -171,7 +171,9 @@ impl Outcome {
 pub struct Capabilities {
     /// `Access::ReadOnly` is enforced by the CLI, not just requested in the prompt.
     pub enforced_read_only: bool,
-    /// `Access::Review` (no editing tools, commands allowed) is enforced by the CLI.
+    /// `Access::Review` (no edits, commands allowed) is enforced by the CLI. No provider can: a
+    /// shell can always change files. The engine discards a review run's changes afterwards in
+    /// every case, so nothing depends on this being true.
     pub enforced_review: bool,
     /// `json_schema` is honoured and the answer arrives validated in `Outcome::structured`.
     pub structured_output: bool,
@@ -183,7 +185,8 @@ pub fn capabilities(provider: Provider) -> Capabilities {
     match provider {
         Provider::Claude => Capabilities {
             enforced_read_only: true,
-            enforced_review: true,
+            // Edit and Write are disallowed, but Bash can still change files (`sed -i`).
+            enforced_review: false,
             structured_output: true,
             resume: true,
         },

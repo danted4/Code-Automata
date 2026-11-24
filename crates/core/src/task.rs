@@ -147,6 +147,12 @@ pub struct Planning {
     /// The plan, as markdown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// The user's feedback on the plan, waiting for a revision run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// Wait for the user's approval even when plan approval is off (set by replanning).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +204,9 @@ pub struct Subtask {
     /// A finished QA subtask's verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<QaVerdict>,
+    /// Why the engine skipped it (a user's skip has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
 }
 
 /// What a QA reviewer concluded.
@@ -229,6 +238,7 @@ impl Subtask {
             handoff: None,
             rework_round: None,
             verdict: None,
+            skipped_reason: None,
         }
     }
 }
@@ -242,6 +252,8 @@ pub struct Checks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
     pub at: i64,
+    /// The commit the checks ran against. They are current while it is the last dev checkpoint.
+    pub commit: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -475,6 +487,14 @@ impl Task {
         any
     }
 
+    /// The commit the latest finished dev subtask was checkpointed at, or the base commit.
+    pub fn last_dev_checkpoint(&self) -> Option<&str> {
+        self.subtasks_of(SubtaskKind::Dev)
+            .filter_map(|s| s.checkpoint.as_deref())
+            .last()
+            .or(self.base_commit.as_deref())
+    }
+
     pub fn has_active_run(&self) -> bool {
         self.run.as_ref().is_some_and(|r| r.state.is_active())
     }
@@ -522,6 +542,12 @@ impl Task {
             {
                 return Err(Invalid(format!(
                     "subtask {:?} has a verdict but is not a finished QA subtask",
+                    s.id
+                )));
+            }
+            if s.skipped_reason.is_some() && s.status != SubtaskStatus::Skipped {
+                return Err(Invalid(format!(
+                    "subtask {:?} has a skip reason but is not skipped",
                     s.id
                 )));
             }

@@ -235,6 +235,14 @@ async fn probe(path: &Path) -> Probe {
     }
 }
 
+/// Does `path` hold a worktree on the task's branch?
+pub async fn is_task_worktree(path: &Path, task_id: &str) -> bool {
+    matches!(
+        probe(path).await,
+        Probe::Worktree { ref branch, .. } if *branch == Worktrees::branch_for(task_id)
+    )
+}
+
 /// Status of the worktree at `path`. Only a directory that is itself a git work tree root counts;
 /// otherwise git would walk up and report the main checkout.
 pub async fn status_at(path: &Path) -> WorktreeStatus {
@@ -640,6 +648,21 @@ impl WorkingDiff {
 
 pub async fn head(worktree: &Path) -> Result<String> {
     run_git(worktree, &["rev-parse", "HEAD"]).await
+}
+
+/// Throw away everything since the last checkpoint: tracked changes are reverted and untracked
+/// files removed. Ignored files (build output, `node_modules`) are kept. This is what makes
+/// read-only and review runs read-only whatever the provider allowed.
+pub async fn discard_changes(worktree: &Path) -> Result<()> {
+    run_git(worktree, &["reset", "--hard", "-q", "HEAD"]).await?;
+    run_git(worktree, &["clean", "-fdq"]).await?;
+    Ok(())
+}
+
+/// Where `branch` left the main checkout's history: used to recover a task's base commit when its
+/// worktree exists but the commit was never recorded (a crash right after creating it).
+pub async fn fork_point(repo: &Path, branch: &str) -> Result<String> {
+    run_git(repo, &["merge-base", "HEAD", branch]).await
 }
 
 /// `-c user.name/-c user.email` when the repository has no identity configured, so commits made by

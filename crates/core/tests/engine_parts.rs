@@ -183,3 +183,18 @@ fn validators_enforce_the_rules() {
         TriageVerdict::Broken
     );
 }
+
+#[tokio::test]
+async fn one_timeout_can_be_set_alone() {
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    std::fs::create_dir_all(project.state_dir()).unwrap();
+    std::fs::write(
+        Settings::path(&project),
+        r#"{"schema": 1, "timeouts": {"checkMinutes": 30}}"#,
+    )
+    .unwrap();
+    let s = Settings::load(&project).await.unwrap();
+    assert_eq!(s.timeouts.check_minutes, 30);
+    assert_eq!(s.timeouts.idle_minutes, 10);
+}

@@ -16,12 +16,35 @@ use super::settings::Settings;
 use crate::git::WorkingDiff;
 use crate::task::{Subtask, SubtaskKind, SubtaskStatus, Task};
 
-/// Replace `{{name}}` placeholders. Unknown placeholders are left as they are.
+/// Replace `{{name}}` placeholders in one pass over the template. Inserted values are never
+/// scanned again, so a `{{plan}}` inside a task description stays literal. Unknown placeholders are
+/// left as they are.
 pub fn render(template: &str, vars: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (name, value) in vars {
-        out = out.replace(&format!("{{{{{name}}}}}"), value);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        match after.find("}}") {
+            Some(close) => {
+                let name = &after[..close];
+                match vars.iter().find(|(n, _)| *n == name) {
+                    Some((_, value)) => out.push_str(value),
+                    None => {
+                        out.push_str("{{");
+                        out.push_str(name);
+                        out.push_str("}}");
+                    }
+                }
+                rest = &after[close + 2..];
+            }
+            None => {
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -377,6 +400,16 @@ mod tests {
     #[test]
     fn render_replaces_known_placeholders_only() {
         assert_eq!(render("a {{x}} {{y}}", &[("x", "1")]), "a 1 {{y}}");
+        assert_eq!(render("unclosed {{x", &[("x", "1")]), "unclosed {{x");
+    }
+
+    #[test]
+    fn inserted_values_are_not_rendered_again() {
+        let out = render(
+            "{{task}} / {{plan}}",
+            &[("task", "mentions {{plan}}"), ("plan", "THE PLAN")],
+        );
+        assert_eq!(out, "mentions {{plan}} / THE PLAN");
     }
 
     #[test]

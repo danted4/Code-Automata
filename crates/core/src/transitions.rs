@@ -82,13 +82,44 @@ pub fn check_move(task: &Task, to: Phase, mover: Mover) -> Result<()> {
 /// Check the move, then make it. A run that belongs to another phase is dropped: an active run
 /// already blocked a user move, so what is dropped is a paused, interrupted, failed or finished run
 /// the user chose to leave behind by moving the card (or, for the engine, the run it is replacing).
+///
+/// A user's backward move carries its meaning with it, so the engine's next step does not simply
+/// undo it:
+///
+/// * **Replan** (back to planning): the subtasks and review state are cleared, the plan is kept for
+///   revision, and the task waits for the user's approval even when plan approval is off. Work
+///   already committed stays on the branch; the new subtasks build on it.
+/// * **Rework** (back to in_progress) needs to know what to fix, so a bare move is refused; the
+///   engine's `request_rework(feedback)` adds a rework subtask instead.
 pub fn apply_move(task: &mut Task, to: Phase, mover: Mover) -> Result<()> {
     check_move(task, to, mover)?;
+    let from = task.phase;
+    if mover == Mover::User && from != to {
+        match to {
+            Phase::Planning => replan(task),
+            Phase::InProgress if from != Phase::Planning => {
+                return Err(CoreError::Transition {
+                    from,
+                    to,
+                    reason: "say what to fix: request a rework with feedback instead".into(),
+                });
+            }
+            _ => {}
+        }
+    }
     task.phase = to;
     if task.run.as_ref().is_some_and(|r| r.kind.phase() != to) {
         task.run = None;
     }
     Ok(())
+}
+
+fn replan(task: &mut Task) {
+    task.subtasks.clear();
+    task.review = crate::task::Review::default();
+    task.run = None;
+    task.planning.stage = crate::task::PlanningStage::PlanReady;
+    task.planning.hold = true;
 }
 
 /// Fields a UI edit may change. Everything else (phase, run, subtasks, planning, review, git)
