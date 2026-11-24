@@ -418,9 +418,10 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     assert_eq!(commits_since(&wt, &base), 3);
     assert!(t.subtasks.iter().filter(|s| s.checkpoint.is_some()).count() == 3);
 
-    // The repository's pre-push hook never runs for the PR push (it could be agent-written).
+    // The repository's pre-push hook runs for the PR push.
+    let hook_ran = env.path("pre-push-ran");
     let hook = env.repo.path.join(".git/hooks/pre-push");
-    std::fs::write(&hook, "#!/bin/sh\necho hook-ran >&2\nexit 1\n").unwrap();
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch {}\n", hook_ran.display())).unwrap();
     std::process::Command::new("chmod")
         .args(["+x", hook.to_str().unwrap()])
         .status()
@@ -428,6 +429,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
 
     let url = engine.create_pull_request(&task.id).await.unwrap();
     assert_eq!(url, "https://github.com/example/repo/pull/7");
+    assert!(hook_ran.exists(), "the pre-push hook did not run");
     assert_eq!(commits_since(&wt, &base), 1, "checkpoints squashed");
     let branch = format!("code-automata/{}", task.id);
     let pushed = git(
