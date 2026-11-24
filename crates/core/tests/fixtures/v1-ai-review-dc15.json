@@ -1,0 +1,48 @@
+{
+  "id": "task-1770292715135-40rv0",
+  "title": "Add theme switcher",
+  "description": "Light and dark themes",
+  "phase": "ai_review",
+  "status": "in_progress",
+  "subtasks": [
+    {
+      "id": "subtask-1",
+      "content": "Theme store",
+      "label": "Theme store",
+      "type": "dev",
+      "status": "completed"
+    },
+    {
+      "id": "subtask-rework-1",
+      "content": "Fix lint errors",
+      "label": "Rework (1/2)",
+      "type": "dev",
+      "status": "completed"
+    },
+    {
+      "id": "subtask-qa-1",
+      "content": "Check contrast",
+      "label": "Contrast",
+      "type": "qa",
+      "status": "completed"
+    },
+    {
+      "id": "subtask-qa-2",
+      "content": "Manual check of the toggle",
+      "label": "Manual toggle check",
+      "type": "qa",
+      "status": "pending"
+    }
+  ],
+  "planApproved": true,
+  "qaFailureFeedback": "typecheck failed: src/theme.ts(3,1)",
+  "reworkCount": 1,
+  "lastQAResult": {
+    "overall": "fail",
+    "summary": "typecheck failed",
+    "details": "src/theme.ts(3,1): error TS2304"
+  },
+  "createdAt": 1770292715135,
+  "updatedAt": 1770293000000,
+  "metadata": { "tags": ["ui"] }
+}

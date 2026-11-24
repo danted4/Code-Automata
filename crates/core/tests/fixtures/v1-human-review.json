@@ -1,0 +1,28 @@
+{
+  "id": "task-1770310000000-hr001",
+  "title": "Docs refresh",
+  "description": "Update README",
+  "phase": "human_review",
+  "status": "completed",
+  "subtasks": [
+    {
+      "id": "subtask-1",
+      "content": "Rewrite intro",
+      "label": "Intro",
+      "type": "dev",
+      "status": "completed"
+    },
+    {
+      "id": "subtask-qa-1",
+      "content": "Proofread",
+      "label": "Proofread",
+      "type": "qa",
+      "status": "completed"
+    }
+  ],
+  "planApproved": true,
+  "mergeRequestUrl": "https://github.com/example/repo/pull/12",
+  "createdAt": 1770310000000,
+  "updatedAt": 1770310500000,
+  "metadata": {}
+}
