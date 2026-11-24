@@ -595,3 +595,27 @@ async fn a_stale_index_lock_fails_at_once_with_its_path() {
     );
     assert!(err.to_string().contains("index.lock"), "{err}");
 }
+
+/// On Windows a run's leftover `git`, killed with its Job Object, leaves `index.lock` behind for
+/// good. Discarding a run's changes removes that dead lock and resets anyway.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_dead_runs_index_lock_does_not_block_the_discard() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-lock").await.unwrap();
+    let base = info.base_commit.clone().unwrap();
+    std::fs::write(info.path.join("leftover.txt"), "x").unwrap();
+    let lock = git(&info.path, &["rev-parse", "--git-path", "index.lock"]);
+    let lock = std::path::PathBuf::from(lock);
+    let lock = if lock.is_absolute() {
+        lock
+    } else {
+        info.path.join(lock)
+    };
+    std::fs::write(&lock, "").unwrap();
+
+    ca_core::git::discard_to(&info.path, &base).await.unwrap();
+    assert!(!lock.exists());
+    assert!(!info.path.join("leftover.txt").exists());
+}

@@ -840,7 +840,7 @@ pub async fn head(worktree: &Path) -> Result<String> {
 /// files removed. Ignored files (build output, `node_modules`) are kept. This is what makes
 /// read-only and review runs read-only whatever the provider allowed.
 pub async fn discard_changes(worktree: &Path) -> Result<()> {
-    run_git(worktree, &["reset", "--hard", "-q", "HEAD"]).await?;
+    reset_hard(worktree, "HEAD").await?;
     run_git(worktree, &["clean", "-fdq"]).await?;
     Ok(())
 }
@@ -848,9 +848,49 @@ pub async fn discard_changes(worktree: &Path) -> Result<()> {
 /// Like [`discard_changes`], and also drop any commits made after `commit` (an agent that ran
 /// `git commit` during a run that may not change anything).
 pub async fn discard_to(worktree: &Path, commit: &str) -> Result<()> {
-    run_git(worktree, &["reset", "--hard", "-q", commit]).await?;
+    reset_hard(worktree, commit).await?;
     run_git(worktree, &["clean", "-fdq"]).await?;
     Ok(())
+}
+
+/// `git reset --hard` in a task worktree after a run has ended.
+///
+/// On Windows a run's whole process tree dies with its Job Object, so a `git` the agent left
+/// running is killed mid-write and its `index.lock` stays behind for good; the usual retries
+/// (see [`git_output`]) wait for it in vain. If the reset still finds the worktree's index lock
+/// held, that lock is from the dead run: it is removed and the reset tried once more. Elsewhere a
+/// leftover process is still alive and releases its lock, so nothing is removed.
+async fn reset_hard(worktree: &Path, commit: &str) -> Result<()> {
+    let args = ["reset", "--hard", "-q", commit];
+    match run_git(worktree, &args).await {
+        Err(CoreError::Git { stderr, .. })
+            if cfg!(windows) && stderr.contains("index.lock") && stderr.contains("File exists") =>
+        {
+            let lock =
+                PathBuf::from(run_git(worktree, &["rev-parse", "--git-path", "index.lock"]).await?);
+            let lock = if lock.is_absolute() {
+                lock
+            } else {
+                worktree.join(lock)
+            };
+            log::warn!(
+                "removing {} left by a killed git, then resetting again",
+                lock.display()
+            );
+            match tokio::fs::remove_file(&lock).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(CoreError::Io {
+                        path: lock,
+                        source: e,
+                    });
+                }
+            }
+            run_git(worktree, &args).await.map(|_| ())
+        }
+        other => other.map(|_| ()),
+    }
 }
 
 /// Subject of the temporary commit that parks partial work (see [`park_changes`]).

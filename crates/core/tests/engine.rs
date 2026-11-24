@@ -1384,11 +1384,15 @@ async fn removing_and_restoring_a_done_worktree_guards_the_users_work() {
     std::fs::write(wt.join("leftover.txt"), "x").unwrap();
     engine.move_task(&id, Phase::HumanReview).await.unwrap();
     assert_eq!(git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
+    // Compared as paths: git prints forward slashes on Windows.
+    let resolved =
+        |p: &std::path::Path| ca_core::util::plain_path(std::fs::canonicalize(p).unwrap());
     assert_eq!(
-        git(&wt, &["rev-parse", "--show-toplevel"]),
-        ca_core::util::plain_path(std::fs::canonicalize(&wt).unwrap())
-            .to_string_lossy()
-            .to_string(),
+        resolved(std::path::Path::new(&git(
+            &wt,
+            &["rev-parse", "--show-toplevel"]
+        ))),
+        resolved(&wt),
         "the folder is the task's own worktree now"
     );
     assert!(!wt.join("leftover.txt").exists());
