@@ -1,0 +1,33 @@
+# Lint, typecheck, test and build the React UI (ui/).
+name: UI
+
+on:
+  push:
+    branches: [main, v3-tauri]
+    paths:
+      - 'ui/**'
+      - '.github/workflows/ui.yml'
+  pull_request:
+    paths:
+      - 'ui/**'
+      - '.github/workflows/ui.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - run: yarn format:check
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn test
+      - run: yarn build

@@ -1,0 +1,23 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+
+# Cache
+.cache
+
+# Lock files
+yarn.lock
+package-lock.json
+pnpm-lock.yaml
+
+# Generated
+*.min.js
+*.min.css
+
+# Public assets (don't format images/binary)
+public/*.png
+public/*.ico
+public/*.svg
+

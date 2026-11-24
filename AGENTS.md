@@ -4,103 +4,69 @@ Guidance for coding agents working in this repository.
 
 ## What this is
 
-Code-Automata is an **Electron desktop app** (Next.js 15 + React 19 UI) that runs AI coding tasks through a 5-phase Kanban workflow. Each task lives in an isolated git worktree. It is **not** a SaaS backend; persistence is JSON on disk under the **user-selected project**, not this repo’s cwd (except as a fallback).
+Code-Automata runs AI coding agents through a five-phase Kanban workflow, one git worktree per task, inside a project (a git repository) the user opens. Persistence is files on disk under that project's `.code-automata/`, never this repo's working directory.
 
-Current version: **2.2.4**. License: **AGPL-3.0-or-later**. Repo: [danted4/Code-Automata](https://github.com/danted4/Code-Automata).
+This branch (`v3-tauri`) is **3.0**, a rewrite in progress: a Rust core plus a React UI, later wrapped in a Tauri desktop app. 2.2.4 (Electron + Next.js) is on `main`. 3.0 owes it nothing: no migration, no compatibility, and its design decisions are not binding.
 
-## Commands
-
-Package manager is **yarn**.
-
-```bash
-yarn install
-yarn start          # Electron + Next.js (preferred)
-yarn next:dev       # UI only at http://localhost:3000
-yarn lint
-yarn format
-yarn typecheck
-yarn test           # Vitest
-yarn test:e2e       # Playwright
-```
-
-Packaged builds: `yarn build` (current platform), `yarn build:mac` / `build:linux` / `build:win`. Do not use `yarn build:all` on Apple Silicon without Rosetta (`yarn build:all:rosetta`). Releases are tag-driven GitHub Actions — see `docs/RELEASE.md`. Never `gh release upload` large DMG/ZIP; it can corrupt binaries.
-
-Husky + lint-staged run ESLint and Prettier on commit.
+License: **AGPL-3.0-or-later**. Repo: [danted4/Code-Automata](https://github.com/danted4/Code-Automata).
 
 ## Layout
 
 ```
-electron/           # Main process (main.js) + preload
-scripts/            # Icons, prepare-build, after-pack, dev launcher
-src/app/            # Next.js App Router (pages + API)
-src/app/api/        # REST + SSE
-src/components/     # UI (kanban, tasks, worktrees, theme)
-src/lib/            # Domain: tasks, git, cli, agents, prompts
-src/store/          # Zustand (project, tasks, theme)
-e2e/                # Playwright
-docs/               # Architecture and workflow — read before large changes
+Cargo.toml         Rust workspace
+crates/core/       ca_core: task store, phase table, run engine, agent processes, git
+  src/bin/         ca-engine (dev CLI), mock-agent (scripted agent for tests)
+  tests/           integration and acceptance tests
+ui/                React UI: Vite, React Router, Tailwind, Zustand
+  src/routes/      one file per page
+  src/components/  kanban, tasks, worktrees, theme, ui (shadcn-style)
+  src/lib/         api-client, native (desktop-only actions), themes, types
+docs/images/       screenshots and logos
 ```
 
-Path alias: `@/` → `src/`.
+Not built yet: the HTTP server between UI and core (Phase 4) and the Tauri shell `crates/app` (Phase 5). Until Phase 4, `yarn dev` answers every `/api` call with 503.
 
-## Architecture invariants
+## Commands
 
-**Project scoping.** The app operates on a git repo chosen at launch. Persist that path in `useProjectStore`. All API work that touches tasks/git/agents must go through `apiFetch` (sets `X-Project-Path`) or `buildStreamUrl` for EventSource (query `projectPath`). Server reads the path via `getProjectDir()` in `src/lib/project-dir.ts`. Do not assume `process.cwd()` is the user’s project.
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 
-**On-disk layout, 3.0 (`v3-tauri`, Rust core):** everything under `<repo root>/.code-automata/`, which the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs in the same directory; `worktrees/<id>/` is the worktree on branch `code-automata/<id>`. There is no aggregate file. Subtasks are `pending`, `done` or `skipped`. 3.0 reads nothing written by 2.2.x.
+cd ui
+yarn install
+yarn dev            # http://localhost:5173
+yarn lint
+yarn typecheck
+yarn test           # Vitest
+yarn build          # typecheck + vite build into ui/dist
+yarn format         # Prettier
+```
 
-**On-disk layout, 2.2.x (Electron app on `main`):**
+CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml`. Both fail on any warning.
 
-| Path                                      | Role                    |
-| ----------------------------------------- | ----------------------- |
-| `.code-automata/tasks/{taskId}.json`      | Task records            |
-| `.code-automata/worktrees/{taskId}/`      | Isolated worktree       |
-| `.code-automata/implementation_plan.json` | Compatibility aggregate |
+## Invariants
 
-Branch name: `code-automata/{taskId}`.
+**Project scoping.** Every UI request that touches tasks, git or agents goes through `apiFetch` (`ui/src/lib/api-client.ts`), which carries the open project's path. Never assume the process's working directory is the user's project.
 
-**Workflow.** Phases are fixed: `planning → in_progress → ai_review → human_review → done`. Backward moves: rework (`ai_review` / `human_review` → `in_progress`), replan (`in_progress` / `ai_review` / `human_review` → `planning`) and reopen (`done` → `human_review`). On `v3-tauri` the table in `crates/core/src/transitions.rs` is authoritative; 2.2.4's update route still wrongly forbids the rework moves. `in_progress` advances when **all** `dev` subtasks are `completed`; `ai_review` advances when **all** `qa` subtasks are `completed`. Do not invent extra phases or skip aggregation rules.
+**On-disk layout.** Everything lives under `<repo root>/.code-automata/`, which the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs beside it. `worktrees/<id>/` is the worktree on branch `code-automata/<id>`. There is no aggregate file.
 
-**CLI adapters.** Implement `CLIAdapter` (`src/lib/cli/base.ts`) and register in `CLIFactory`. Providers: `cursor`, `amp`, `mock`. UI order is Cursor → Amp → Mock. **Hide Mock** when `CODE_AUTOMATA_PACKAGED=1` or Electron is present (`src/app/api/cli/adapters/route.ts`). Packaged app never ships Mock as a user-facing backend.
+**Workflow.** The phases are fixed: `planning → in_progress → ai_review → human_review → done`. Allowed moves, including rework, replan and reopen, are the table in `crates/core/src/transitions.rs`. Do not add phases. Dragging a card only moves it; agents are started, paused and resumed by buttons.
 
-**Agent pool.** `AgentManager` caps concurrent sessions at **12**.
+**Providers.** Claude Code, Cursor, Amp, plus `mock` for tests (never offered to users in a packaged build). Provider code lives in `crates/core/src/agent/`.
 
-**Packaged vs dev.** Production Electron spawns Next.js standalone (`node server.js`) as a subprocess. The Next process is **not** Electron, so `process.versions.electron` is missing — use `CODE_AUTOMATA_PACKAGED`. Packaged GUI PATH is empty; CLI discovery (`agent`, `amp`, `gh`, `cursor`, `code`) and Node 18+ resolution live in `electron/main.js`. See `docs/PACKAGED_APP.md` before changing spawn, PATH, or env.
+**Desktop-only actions** (folder picker, open in editor, reveal in file manager) go through `ui/src/lib/native.ts`. It is `null` until the Tauri shell implements it, and the UI hides those actions then.
 
-**UI data flow.** Components → Zustand → `apiFetch` → App Router handlers → `src/lib/*` → filesystem/git. Keep business logic out of components; keep git/CLI details out of React.
-
-## Adding a CLI provider
-
-1. Implement `CLIAdapter` next to `amp.ts` / `cursor.ts` / `mock.ts`.
-2. Register in `CLIFactory.create` / `getAvailableProviders`.
-3. Add preflight if the tool needs a binary or API key (`src/lib/*/preflight.ts` + matching `/api/*/preflight` route).
-4. Keep Mock last and filtered in packaged builds.
+**UI data flow.** Components → Zustand stores → `apiFetch` → core. Keep business logic out of components.
 
 ## Testing
 
-- **Vitest**: unit tests colocated under `src/**/__tests__`.
-- **Playwright**: `e2e/*.spec.ts`. Prefer Mock adapter; do not hit live Amp/Cursor in CI/e2e.
-- After UI changes, run `yarn lint` and `yarn typecheck`. For Kanban/workflow/theme, run the relevant e2e spec.
+- Rust: unit tests beside the code; acceptance tests in `crates/core/tests/` run the whole engine on the mock agent. Live tests (`#[ignore]`) make real model calls.
+- UI: Vitest, colocated in `ui/src/**/__tests__`.
+- End-to-end: agent-browser scripts against the UI (from Phase 4). Not Playwright.
 
 ## Style
 
-- TypeScript, functional React, Tailwind + existing `src/components/ui` (shadcn-style).
-- Unused vars: prefix `_`. Avoid `any`; ESLint warns.
-- Format with Prettier (`yarn format`). Match surrounding file style; do not drive-by reformat.
-- Electron main/preload stay CommonJS (`require`) unless you convert the whole Electron layer.
-
-## Docs map
-
-| Doc                                   | When to read               |
-| ------------------------------------- | -------------------------- |
-| `docs/ARCHITECTURE.md`                | Modules, state machine     |
-| `docs/KANBAN_WORKFLOW.md`             | Phase UX                   |
-| `docs/API_ROUTES.md`                  | Endpoint contracts         |
-| `docs/CLI_ADAPTERS.md`                | Adapter contract           |
-| `docs/CURSOR_INTEGRATION.md`          | Cursor CLI                 |
-| `docs/DATA_FLOW.md`                   | Store ↔ API ↔ disk         |
-| `docs/WORKTREE.md`                    | Git isolation              |
-| `docs/PACKAGED_APP.md`                | DMG/AppImage/NSIS behavior |
-| `docs/RELEASE.md` / `CODE_SIGNING.md` | Shipping                   |
-
-Do not duplicate those docs here. Update them when you change the corresponding behavior.
+- Rust: edition 2024, no `unsafe`, Clippy clean.
+- TypeScript: functional React, Tailwind with the components in `ui/src/components/ui`. Prefix unused variables with `_`; avoid `any`.
+- Match the surrounding file; do not reformat unrelated code.

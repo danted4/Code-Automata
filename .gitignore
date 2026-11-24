@@ -1,50 +1,21 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Rust
+/target
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
-/.claude
+# UI
+node_modules/
+/ui/dist/
+*.tsbuildinfo
+
+# Code-Automata's own state when it runs on this repository
 /.code-automata
+
+# Local tooling and secrets
+/.claude
 .tmp
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-!/build/entitlements.mac.plist
-/dist-electron
-
-# misc
-.DS_Store
+.env
+.env*.local
 *.pem
-
-# debug
+.DS_Store
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# local env files
-.env*.local
-.env
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# playwright
-/test-results/
-/playwright-report/
-/playwright/.cache/
-/e2e/screenshots/
-
-# rust
-/target
