@@ -229,6 +229,7 @@ fn amp_model_wins_over_mode() {
 }
 
 /// A fake CLI whose answers to `--version` and the login check are given as shell snippets.
+#[cfg(unix)]
 fn fake_cli(dir: &Path, name: &str, version: &str, login: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(
@@ -236,11 +237,8 @@ fn fake_cli(dir: &Path, name: &str, version: &str, login: &str) -> PathBuf {
         format!("#!/bin/sh\ncase \"$1\" in\n  --version) {version} ;;\n  *) {login} ;;\nesac\n"),
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
 
@@ -275,6 +273,7 @@ async fn preflight_reads_claude_login_from_stdout_only() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // the fake CLI is a shell script
 async fn preflight_reads_cursor_and_amp_logins() {
     use ca_core::agent::preflight::check;
     let dir = tempfile::tempdir().unwrap();
