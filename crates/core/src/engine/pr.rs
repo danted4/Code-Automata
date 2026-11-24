@@ -4,8 +4,12 @@
 //! branch is pushed (with `--force-with-lease`, since squashing rewrites it). The repository's
 //! pre-push hook runs, with the login shell's PATH (user decision, 2026-11-25). The first time,
 //! `gh pr create` opens the PR against the main branch; afterwards (rework done after the PR was
-//! opened) only the squash and push happen. If `gh` fails after the push, the PR it may still have
-//! created is looked up with `gh pr view`, so a retry never trips over "already exists".
+//! opened) only the squash and push happen. If `gh` fails after the push, the PR it may still
+//! have created is looked up with `gh pr view`, so a retry never trips over "already exists".
+//!
+//! A replan keeps the PR: approving the new plan resets the worktree to the base commit, the new
+//! run commits fresh checkpoints, and the next update squashes those and force-pushes them over
+//! the old commit on the same branch.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -65,15 +69,15 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
     )
     .await?;
 
-    // What the pushed commit now holds, for the UI's "up to date" (a rework round adds one).
-    let pushed_checkpoints = task.dev_checkpoints();
+    // The newest work the pushed commit holds, for the UI's "up to date".
+    let pushed_checkpoint = task.newest_dev_checkpoint().map(str::to_string);
 
     if let Some(pr) = &task.pull_request {
         let url = pr.url.clone();
         inner
             .update(id, |t| {
                 if let Some(pr) = &mut t.pull_request {
-                    pr.pushed_checkpoints = pushed_checkpoints;
+                    pr.pushed_checkpoint = pushed_checkpoint;
                 }
                 Ok(())
             })
@@ -108,7 +112,7 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
         .update(id, |t| {
             t.pull_request = Some(PullRequest {
                 url: url.clone(),
-                pushed_checkpoints,
+                pushed_checkpoint,
             });
             Ok(())
         })

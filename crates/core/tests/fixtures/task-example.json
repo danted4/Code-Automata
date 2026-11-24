@@ -71,7 +71,7 @@
   "baseCommit": "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c",
   "pullRequest": {
     "url": "https://github.com/example/repo/pull/7",
-    "pushedCheckpoints": 1
+    "pushedCheckpoint": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
   },
   "run": {
     "id": "run-1764000700000-x9y8z7",

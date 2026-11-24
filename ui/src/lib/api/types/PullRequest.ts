@@ -2,8 +2,8 @@
 
 export type PullRequest = { url: string, 
 /**
- * How many dev subtasks had a checkpoint when the branch was last pushed to this PR. A rework
- * round after that adds one, and the PR lacks that work until it is updated (the UI says so).
- * 0 in task files from before this field.
+ * The newest dev checkpoint when the branch was last pushed to this PR. Any later dev work (a
+ * rework round, a retried subtask, a replan's new run) has a different newest checkpoint, and
+ * the PR lacks it until it is updated (the UI says so). None in task files from before it.
  */
-pushedCheckpoints: number, };
+pushedCheckpoint?: string | null, };

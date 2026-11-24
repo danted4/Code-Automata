@@ -447,9 +447,14 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         url,
         "asking again returns the same PR"
     );
-    let pr = |t: &ca_core::Task| t.pull_request.clone().unwrap().pushed_checkpoints;
+    // The PR records the newest checkpoint it holds; the UI calls it current while that is still
+    // the task's newest.
+    let current = |t: &ca_core::Task| {
+        let pushed = t.pull_request.clone().unwrap().pushed_checkpoint;
+        pushed.is_some() && pushed.as_deref() == t.newest_dev_checkpoint()
+    };
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
-    assert_eq!(pr(&t), 3, "the PR holds the three dev checkpoints");
+    assert!(current(&t), "the PR holds the newest checkpoint");
 
     // Rework after the PR is open: asking again pushes the new work to the same PR.
     engine
@@ -463,16 +468,11 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         t.review.feedback.is_none(),
         "a passing review must clear old findings"
     );
-    assert_eq!(
-        t.dev_checkpoints(),
-        4,
-        "the rework subtask added a checkpoint"
-    );
-    assert_eq!(pr(&t), 3, "not pushed yet: the PR lacks the rework");
+    assert!(!current(&t), "not pushed yet: the PR lacks the rework");
     std::fs::remove_file(env.path("gh-args")).unwrap();
     assert_eq!(engine.create_pull_request(&task.id).await.unwrap(), url);
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
-    assert_eq!(pr(&t), 4, "updated: the PR holds the rework too");
+    assert!(current(&t), "updated: the PR holds the rework too");
     assert_eq!(
         git(&remote, &["rev-parse", &branch]),
         git(&wt, &["rev-parse", "HEAD"])
@@ -484,6 +484,24 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         edited.contains("pr edit") && edited.contains("--body"),
         "{edited}"
     );
+
+    // Replan with the PR open: the new run's work is not in the PR, whatever its size, until the
+    // next update force-pushes it over the old commit.
+    engine.move_task(&task.id, Phase::Planning).await.unwrap();
+    engine.approve_plan(&task.id).await.unwrap();
+    engine.wait_idle(&task.id).await;
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::HumanReview);
+    assert!(t.pull_request.is_some(), "a replan keeps the PR");
+    assert!(!current(&t), "the replan's new work is not in the PR");
+    assert_eq!(engine.create_pull_request(&task.id).await.unwrap(), url);
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert!(current(&t), "updated after the replan");
+    assert_eq!(
+        git(&remote, &["rev-parse", &branch]),
+        git(&wt, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(commits_since(&wt, &base), 1);
 }
 
 #[cfg(unix)]

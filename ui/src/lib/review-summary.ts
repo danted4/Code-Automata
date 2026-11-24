@@ -100,15 +100,16 @@ export type PullRequestAction = {
   done: string;
 };
 
-/** Dev subtasks with a checkpoint commit: the work a squash puts in the pull request. */
-export function devCheckpoints(task: Task): number {
-  return (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoint).length;
+/** The newest dev checkpoint: the last work a squash puts in the pull request. */
+export function newestDevCheckpoint(task: Task): string | null {
+  const devs = (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoint);
+  return devs.length ? (devs[devs.length - 1].checkpoint ?? null) : null;
 }
 
 /**
- * Work done after the PR was last pushed (a rework round adds a dev checkpoint) is committed in
- * the worktree but not in the PR until it is pushed again. `createdUrl` is a PR just opened here,
- * before the task reload shows it.
+ * Work done after the PR was last pushed (a rework round, a retried subtask, a replan's new run)
+ * ends in a different newest checkpoint than the one the PR records, and is not in the PR until it
+ * is pushed again. `createdUrl` is a PR just opened here, before the task reload shows it.
  */
 export function pullRequestAction(task: Task, createdUrl: string | null): PullRequestAction {
   const branch = taskBranch(task.id);
@@ -125,8 +126,9 @@ export function pullRequestAction(task: Task, createdUrl: string | null): PullRe
       done: 'Pull request opened',
     };
   }
-  const unpushed = pr ? devCheckpoints(task) - pr.pushedCheckpoints : 0;
-  if (unpushed <= 0) {
+  const pushed = pr ? (pr.pushedCheckpoint ?? null) : null;
+  const current = pr ? pushed !== null && pushed === newestDevCheckpoint(task) : true;
+  if (current) {
     return {
       kind: 'current',
       url,
@@ -137,13 +139,12 @@ export function pullRequestAction(task: Task, createdUrl: string | null): PullRe
       done: '',
     };
   }
-  const what = unpushed === 1 ? '1 change' : `${unpushed} changes`;
   return {
     kind: 'update',
     url,
     label: 'Update pull request',
     busyLabel: 'Updating pull request…',
-    help: `${what} since the pull request was last pushed (a rework round) ${unpushed === 1 ? 'is' : 'are'} not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
+    help: `Work done since the pull request was last pushed (a rework round or a new plan) is not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
     progress: 'Squashing and pushing to the pull request. This can take a minute.',
     done: 'Pull request updated',
   };

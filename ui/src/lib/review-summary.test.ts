@@ -141,10 +141,10 @@ describe('pullRequestAction', () => {
     expect(a.help).toContain(taskBranch(task().id));
   });
 
-  it('is up to date when the PR holds every dev checkpoint', () => {
+  it('is up to date when the PR holds the newest dev checkpoint', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('d2', 'a2')],
-      pullRequest: { url, pushedCheckpoints: 2 },
+      pullRequest: { url, pushedCheckpoint: 'a2' },
     });
     const a = pullRequestAction(t, null);
     expect(a.kind).toBe('current');
@@ -155,12 +155,26 @@ describe('pullRequestAction', () => {
   it('offers the update after a rework round added a checkpoint', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('d2', 'a2'), dev('rework-1', 'a3')],
-      pullRequest: { url, pushedCheckpoints: 2 },
+      pullRequest: { url, pushedCheckpoint: 'a2' },
     });
     const a = pullRequestAction(t, null);
     expect(a.kind).toBe('update');
-    expect(a.help).toMatch(/^1 change since/);
+    expect(a.help).toMatch(/not in it yet/);
     expect(a.done).toBe('Pull request updated');
+  });
+
+  it('offers the update after a replan with as many subtasks as before', () => {
+    // Same count, different work: only the checkpoint tells them apart.
+    const t = task({
+      subtasks: [dev('d1', 'b1'), dev('d2', 'b2')],
+      pullRequest: { url, pushedCheckpoint: 'a2' },
+    });
+    expect(pullRequestAction(t, null).kind).toBe('update');
+  });
+
+  it('offers the update for a PR recorded before checkpoints were', () => {
+    const t = task({ subtasks: [dev('d1', 'a1')], pullRequest: { url } });
+    expect(pullRequestAction(t, null).kind).toBe('update');
   });
 
   it('counts a PR just opened here as up to date until the task reloads', () => {
