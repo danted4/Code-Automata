@@ -106,6 +106,7 @@ async fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     .await
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeInfo {
@@ -122,6 +123,7 @@ pub struct WorktreeInfo {
     pub is_dirty: Option<bool>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeStatus {
@@ -149,15 +151,19 @@ pub struct DeleteOptions {
 }
 
 /// Non-fatal problems from a delete (a branch that could not be removed, for example).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteReport {
     pub warnings: Vec<String>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskUsage {
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub total_bytes: u64,
+    #[cfg_attr(feature = "ts", ts(as = "BTreeMap<String, f64>"))]
     pub per_worktree: BTreeMap<String, u64>,
 }
 
@@ -617,6 +623,7 @@ fn dir_size(dir: &Path) -> u64 {
 // ---------------------------------------------------------------------------------------------
 
 /// Result of [`checkpoint_commit`].
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Checkpoint {
@@ -627,6 +634,7 @@ pub struct Checkpoint {
 }
 
 /// Uncommitted work in a worktree relative to its last checkpoint (HEAD).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkingDiff {

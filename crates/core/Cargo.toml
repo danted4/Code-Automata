@@ -23,7 +23,12 @@ path = "src/bin/ca_engine.rs"
 [lints]
 workspace = true
 
+[features]
+# TypeScript bindings for the UI (`cargo test -p code-automata-core --features ts` writes them).
+ts = ["dep:ts-rs"]
+
 [dependencies]
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl", "no-serde-warnings"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"

@@ -1,0 +1,40 @@
+[package]
+name = "code-automata-server"
+description = "HTTP server between the Code-Automata UI and its run engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ca_server"
+
+# The server on its own, for development and the UI's end-to-end tests. The desktop app embeds
+# the library instead.
+[[bin]]
+name = "ca-server"
+path = "src/bin/ca_server.rs"
+
+[lints]
+workspace = true
+
+[features]
+# TypeScript bindings for the UI (`cargo test -p code-automata-server --features ts`).
+ts = ["dep:ts-rs", "code-automata-core/ts"]
+
+[dependencies]
+code-automata-core = { path = "../core" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+getrandom = "0.4"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl", "no-serde-warnings"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

@@ -17,6 +17,8 @@ Cargo.toml         Rust workspace
 crates/core/       ca_core: task store, phase table, run engine, agent processes, git
   src/bin/         ca-engine (dev CLI), mock-agent (scripted agent for tests)
   tests/           integration and acceptance tests
+crates/server/     ca_server: HTTP API and event stream in front of the engine (axum)
+  src/bin/         ca-server (the server on its own: development, e2e)
 ui/                React UI: Vite, React Router, Tailwind, Zustand
   src/routes/      one file per page
   src/components/  kanban, tasks, worktrees, theme, ui (shadcn-style)
@@ -25,7 +27,7 @@ ui/                React UI: Vite, React Router, Tailwind, Zustand
 docs/images/       screenshots and logos
 ```
 
-Not built yet: the HTTP server between UI and core (Phase 4) and the Tauri shell `crates/app` (Phase 5). Until Phase 4 the UI still speaks the 2.2.x API (`/api/tasks/*`, `/api/agents/*`, 2.x task types), and `yarn dev` and `yarn preview` answer every `/api` call with 503. Phase 4 replaces those calls with the core's commands.
+Not built yet: the Tauri shell `crates/app` (Phase 5). The UI still speaks the 2.2.x API (`/api/tasks/*`, `/api/agents/*`, 2.x task types) until its Phase 4 rewrite, and `yarn dev` and `yarn preview` answer every `/api` call with 503 until then.
 
 ## Commands
 
@@ -33,6 +35,7 @@ Not built yet: the HTTP server between UI and core (Phase 4) and the Tauri shell
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+cargo run -p code-automata-server --bin ca-server -- --port 7878 --token dev --allow-mock
 
 cd ui
 yarn install

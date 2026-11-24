@@ -8,12 +8,14 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/**'
+      - 'ui/src/lib/api/types/**'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/**'
+      - 'ui/src/lib/api/types/**'
       - '.github/workflows/rust.yml'
 
 env:
@@ -41,3 +43,15 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast
+      # The UI's TypeScript types are generated from the Rust types and committed; they must match.
+      - name: TypeScript bindings are current
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rm -rf ui/src/lib/api/types
+          cargo test --workspace --locked --features ts export_bindings
+          changes="$(git status --porcelain ui/src/lib/api/types)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::Regenerate them: rm -rf ui/src/lib/api/types && cargo test --workspace --features ts export_bindings"
+            exit 1
+          fi

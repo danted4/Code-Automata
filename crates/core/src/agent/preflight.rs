@@ -13,6 +13,7 @@ use crate::task::{AgentConfig, Provider};
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preflight {

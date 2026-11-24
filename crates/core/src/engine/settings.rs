@@ -13,6 +13,7 @@ use crate::project::ProjectDir;
 pub const SETTINGS_SCHEMA: u32 = 1;
 
 /// One automated check: a shell command run in the task worktree.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckCommand {
@@ -22,6 +23,7 @@ pub struct CheckCommand {
 
 /// Each field falls back to its default on its own, so setting one timeout leaves the rest.
 /// Minutes may be fractional (`0.5` is 30 seconds).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct Timeouts {
@@ -67,6 +69,7 @@ fn minutes(m: f64) -> Duration {
 
 /// Replacements for the editable part of two prompts. The engine always appends its own output
 /// instructions, so a custom template cannot break parsing.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PromptOverrides {
@@ -76,6 +79,7 @@ pub struct PromptOverrides {
     pub subtasks: Option<String>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {

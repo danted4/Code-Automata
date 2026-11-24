@@ -25,6 +25,7 @@ use crate::util::{now_ms, random_base36, validate_task_id};
 pub const SCHEMA: u32 = 1;
 
 /// The Kanban column. Fixed order; see `transitions` for which moves are allowed.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -62,6 +63,7 @@ impl fmt::Display for Phase {
 }
 
 /// Which CLI agent runs the task.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
@@ -71,6 +73,7 @@ pub enum Provider {
     Mock,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentConfig {
@@ -99,6 +102,7 @@ impl AgentConfig {
 
 /// Where planning stands. While an agent is producing questions or a plan, the stage stays put and
 /// a `plan` run is active.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanningStage {
@@ -113,6 +117,7 @@ pub enum PlanningStage {
     Approved,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Answer {
@@ -123,6 +128,7 @@ pub struct Answer {
     pub note: Option<String>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Question {
@@ -136,6 +142,7 @@ pub struct Question {
     pub answer: Option<Answer>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Planning {
@@ -155,6 +162,7 @@ pub struct Planning {
     pub hold: bool,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubtaskKind {
@@ -162,6 +170,7 @@ pub enum SubtaskKind {
     Qa,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubtaskStatus {
@@ -177,6 +186,7 @@ impl SubtaskStatus {
     }
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Subtask {
@@ -191,6 +201,7 @@ pub struct Subtask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
     pub finished_at: Option<i64>,
     /// Commit made when it finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,6 +221,7 @@ pub struct Subtask {
 }
 
 /// What a QA reviewer concluded.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QaVerdict {
@@ -244,6 +256,7 @@ impl Subtask {
 }
 
 /// Result of the automated typecheck/build/lint after QA.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Checks {
@@ -251,11 +264,13 @@ pub struct Checks {
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub at: i64,
     /// The commit the checks ran against. They are current while it is the last dev checkpoint.
     pub commit: String,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Review {
@@ -275,6 +290,7 @@ impl Review {
     }
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PullRequest {
@@ -282,6 +298,7 @@ pub struct PullRequest {
 }
 
 /// What a run is doing. One run at a time per task.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunKind {
@@ -297,6 +314,7 @@ pub enum RunKind {
     Checks,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
@@ -347,6 +365,7 @@ impl RunState {
 }
 
 /// Durable record of the task's current or last run: the single answer to "where were we".
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
@@ -372,7 +391,9 @@ pub struct Run {
     /// The app process that owns the run; a different boot id means the owner died.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_id: Option<String>,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub started_at: i64,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -399,6 +420,7 @@ impl Run {
     }
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Task {
@@ -407,7 +429,9 @@ pub struct Task {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub created_at: i64,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub updated_at: i64,
 
     pub phase: Phase,

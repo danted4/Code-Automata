@@ -17,6 +17,7 @@ pub mod output;
 pub mod pr;
 pub mod prompts;
 pub mod reconcile;
+pub mod runlog;
 pub mod settings;
 pub mod step;
 
@@ -239,6 +240,64 @@ impl Engine {
             task_id: id.to_string(),
         });
         Ok(task)
+    }
+
+    /// The task's logged agent runs, oldest first.
+    pub async fn run_logs(&self, id: &str) -> Result<Vec<runlog::RunLogInfo>> {
+        self.inner.load(id).await?;
+        runlog::list(&self.inner.store.task_dir(id)?.join("runs")).await
+    }
+
+    /// One logged run's lines, by the name [`Engine::run_logs`] gave it.
+    pub async fn run_log(&self, id: &str, name: &str) -> Result<Vec<runlog::RunLogLine>> {
+        self.inner.load(id).await?;
+        runlog::read(&self.inner.store.task_dir(id)?.join("runs"), name).await
+    }
+
+    /// Every worktree under `.code-automata/worktrees/`, with its task's title, or none for an
+    /// orphan whose task is gone.
+    pub async fn worktrees(&self) -> Result<Vec<WorktreeEntry>> {
+        let list = self.inner.worktrees.list().await?;
+        let tasks = self.inner.store.list().await?;
+        Ok(list
+            .into_iter()
+            .map(|worktree| {
+                let task_title = tasks
+                    .tasks
+                    .iter()
+                    .find(|t| t.id == worktree.task_id)
+                    .map(|t| t.title.clone());
+                WorktreeEntry {
+                    worktree,
+                    task_title,
+                }
+            })
+            .collect())
+    }
+
+    /// Remove an orphaned worktree (its task is gone) and its local branch. A task's own worktree
+    /// goes only with the task, through [`Engine::delete_task`].
+    pub async fn delete_orphan_worktree(&self, task_id: &str) -> Result<crate::git::DeleteReport> {
+        if self.inner.store.load(task_id).await?.is_some() {
+            return Err(CoreError::Invalid(format!(
+                "task {task_id} uses this worktree; delete the task instead"
+            )));
+        }
+        self.inner
+            .worktrees
+            .delete(
+                task_id,
+                DeleteOptions {
+                    force: true,
+                    delete_branch: true,
+                    ..DeleteOptions::default()
+                },
+            )
+            .await
+    }
+
+    pub async fn worktree_usage(&self) -> Result<crate::git::DiskUsage> {
+        self.inner.worktrees.disk_usage().await
     }
 
     pub fn settings(&self) -> Settings {
@@ -643,6 +702,18 @@ impl Engine {
             self.wait_idle(id).await;
         }
     }
+}
+
+/// A worktree as the worktrees page shows it.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeEntry {
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub worktree: crate::git::WorktreeInfo,
+    /// The task's title; none when the task is gone (an orphan).
+    pub task_title: Option<String>,
 }
 
 /// How long a command waits for a driver that is between steps or on its way out.

@@ -21,3 +21,6 @@ public/*.png
 public/*.ico
 public/*.svg
 
+
+# Generated from Rust by ts-rs
+src/lib/api/types

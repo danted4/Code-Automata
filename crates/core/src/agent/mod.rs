@@ -19,7 +19,7 @@ pub mod stream_json;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use env::Binaries;
@@ -87,6 +87,7 @@ impl RunRequest {
 }
 
 /// How much an agent run may do.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
@@ -100,8 +101,13 @@ pub enum Access {
 }
 
 /// What the agent is doing, in provider-independent form.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum AgentEvent {
     /// The provider session id, as soon as it is known.
     Session {
@@ -132,8 +138,13 @@ pub enum AgentEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum OutcomeKind {
     /// The provider reported success.
     Completed,
@@ -147,7 +158,9 @@ pub enum OutcomeKind {
     Crashed { exit_code: Option<i32> },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Outcome {
     #[serde(flatten)]
     pub kind: OutcomeKind,
@@ -167,6 +180,7 @@ impl Outcome {
 }
 
 /// What a provider can guarantee.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Capabilities {
     /// `Access::ReadOnly` is enforced by the CLI, not just requested in the prompt.

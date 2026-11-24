@@ -31,13 +31,17 @@ use crate::util::{now_ms, unique_u64, validate_task_id};
 const TASK_FILE: &str = "task.json";
 
 /// A task directory that could not be read during [`TaskStore::list`].
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkippedFile {
     pub path: PathBuf,
     pub error: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskList {
     /// Newest first.
     pub tasks: Vec<Task>,

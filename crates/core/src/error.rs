@@ -41,6 +41,9 @@ pub enum CoreError {
     #[error("task {0} not found")]
     TaskNotFound(String),
 
+    #[error("{0} not found")]
+    NotFound(String),
+
     #[error("task {0} already exists")]
     TaskExists(String),
 

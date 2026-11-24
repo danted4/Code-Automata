@@ -16,6 +16,7 @@ use super::output::{
     TriageVerdict, read_output,
 };
 use super::reconcile::process_started;
+use super::runlog::{RunLogLine, RunLogWriter};
 use super::settings::Settings;
 use super::step::{AgentStep, Step, apply_finish_review, apply_rework, next_step};
 use super::{Control, EngineEvent, Halt, Inner, checks, prompts};
@@ -652,12 +653,12 @@ async fn execute(
     let inner = ctx.inner;
     let wt = inner.worktrees.path_for(ctx.id)?;
     let attempt_no = task.run.as_ref().map_or(1, |r| r.attempt);
-    let log = inner
+    let log_path = inner
         .store
         .task_dir(ctx.id)?
         .join("runs")
         .join(format!("{}-{attempt_no}-{label}.ndjson", ctx.run_id));
-    let mut req = RunRequest::new(task.agent.clone(), &wt, prompt, log);
+    let mut req = RunRequest::new(task.agent.clone(), &wt, prompt, log_path.clone());
     req.resume = session;
     req.access = ctx.access;
     req.json_schema = schema;
@@ -676,6 +677,19 @@ async fn execute(
     }
     // Where a run that may not change anything must leave the worktree.
     let head_before = git::head(&wt).await?;
+    let mut events_log = RunLogWriter::create(
+        &log_path,
+        RunLogLine::Start {
+            at: now_ms(),
+            run_id: ctx.run_id.clone(),
+            attempt: attempt_no,
+            label: label.to_string(),
+            kind: task.run.as_ref().map_or(RunKind::Dev, |r| r.kind),
+            subtask_id: task.run.as_ref().and_then(|r| r.subtask_id.clone()),
+            provider: task.agent.provider,
+        },
+    )
+    .await;
     let mut agent = agent::start(req, &inner.bins).await?;
     *ctx.control
         .stopper
@@ -714,6 +728,7 @@ async fn execute(
             AgentEvent::Finished { outcome: o } => outcome = Some(o.clone()),
             _ => {}
         }
+        events_log.event(&event).await;
         inner.emit(EngineEvent::Agent {
             task_id: ctx.id.to_string(),
             run_id: ctx.run_id.clone(),
