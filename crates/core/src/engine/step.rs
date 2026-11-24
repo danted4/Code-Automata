@@ -245,7 +245,10 @@ fn add_rework(task: &mut Task, feedback: String, settings: &Settings) -> Result<
 pub fn apply_finish_review(task: &mut Task) -> Result<()> {
     let checks_failed = task.review.checks.as_ref().is_some_and(|c| !c.passed);
     let qa_failed = failed_qa(task).next().is_some();
-    if checks_failed || qa_failed {
+    if !checks_failed && !qa_failed {
+        // Earlier rounds' findings are resolved; nothing is left for the reviewer.
+        task.review.feedback = None;
+    } else {
         let cause = if checks_failed {
             ReworkCause::Checks
         } else {
@@ -601,5 +604,32 @@ mod tests {
             "only from review"
         );
         t.validate().unwrap();
+    }
+
+    #[test]
+    fn a_passing_review_clears_old_findings() {
+        let s = settings();
+        let mut t = with_phase(base(), Phase::AiReview);
+        t.subtasks = vec![
+            done_dev("dev-1", "c1"),
+            sub("qa-1", SubtaskKind::Qa, SubtaskStatus::Done, Some(2)),
+        ];
+        t.subtasks[1].verdict = verdict(false);
+        t.review.checks = checks(true, "c1");
+        apply_rework(&mut t, ReworkCause::Qa, &s).unwrap();
+        assert!(t.review.feedback.is_some());
+        // The rework fixed it: everything passes on the next round.
+        t.phase = Phase::AiReview;
+        let rework = t.subtask_mut("rework-1").unwrap();
+        rework.status = SubtaskStatus::Done;
+        rework.finished_at = Some(3);
+        rework.checkpoint = Some("c2".into());
+        t.review.checks = checks(true, "c2");
+        let qa = t.subtask_mut("qa-1").unwrap();
+        qa.status = SubtaskStatus::Done;
+        qa.finished_at = Some(4);
+        qa.verdict = verdict(true);
+        apply_finish_review(&mut t).unwrap();
+        assert!(t.review.feedback.is_none());
     }
 }

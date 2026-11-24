@@ -5,6 +5,13 @@
 //! so they survive their parent. If the recorded pid is alive *and* started at the recorded time
 //! (so it is not a reused pid), its group is stopped. Then the run is marked `interrupted`, and
 //! the user's Resume continues it.
+//!
+//! Known gaps, both only after a crash:
+//!
+//! * A check command has no recorded pid, so one left running by a crashed engine is not stopped
+//!   here (it ends on its own or at the next check's timeout).
+//! * Between spawning an agent and writing its pid to the task file there is a moment in which a
+//!   crash leaves an agent this cannot find.
 
 use std::time::Duration;
 
@@ -16,6 +23,9 @@ use crate::task::RunState;
 pub async fn process_started(pid: u32) -> Option<String> {
     let out = tokio::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
+        // The date format follows the locale; the same pid must give the same text whatever
+        // locale the recording and the checking process ran under.
+        .env("LC_ALL", "C")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -26,9 +36,18 @@ pub async fn process_started(pid: u32) -> Option<String> {
     (out.status.success() && !text.is_empty()).then_some(text)
 }
 
-/// Mark every run left behind by another boot as interrupted. Returns the task ids changed.
-pub async fn reconcile(store: &TaskStore, boot_id: &str) -> Result<Vec<String>> {
-    let mut changed = Vec::new();
+#[derive(Debug, Default)]
+pub struct Report {
+    /// Tasks whose runs were marked interrupted.
+    pub interrupted: Vec<String>,
+    /// Tasks that could not be reconciled, with why; they are left as they were.
+    pub problems: Vec<String>,
+}
+
+/// Mark every run left behind by another boot as interrupted. A task that cannot be updated is
+/// reported and skipped, so one bad file cannot keep the project from opening.
+pub async fn reconcile(store: &TaskStore, boot_id: &str) -> Result<Report> {
+    let mut report = Report::default();
     for task in store.list().await?.tasks {
         let Some(run) = &task.run else { continue };
         if !run.state.is_active() || run.boot_id.as_deref() == Some(boot_id) {
@@ -37,7 +56,7 @@ pub async fn reconcile(store: &TaskStore, boot_id: &str) -> Result<Vec<String>> 
         if let (Some(pid), Some(started)) = (run.pid, &run.process_started) {
             stop_orphan(pid, started).await;
         }
-        store
+        let updated = store
             .update(&task.id, |t| {
                 if let Some(run) = t.run.as_mut()
                     && run.state.is_active()
@@ -48,10 +67,13 @@ pub async fn reconcile(store: &TaskStore, boot_id: &str) -> Result<Vec<String>> 
                 }
                 Ok(())
             })
-            .await?;
-        changed.push(task.id);
+            .await;
+        match updated {
+            Ok(_) => report.interrupted.push(task.id),
+            Err(e) => report.problems.push(format!("{}: {e}", task.id)),
+        }
     }
-    Ok(changed)
+    Ok(report)
 }
 
 /// Stop an orphaned agent's process group, but only if `pid` is still the process that was

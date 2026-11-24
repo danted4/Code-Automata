@@ -212,7 +212,7 @@ fn commits_since(wt: &Path, base: &str) -> usize {
 async fn run_to_end(engine: &Engine, id: &str) -> Task {
     engine.start(id).await.unwrap();
     engine.wait_idle(id).await;
-    engine.store().load(id).await.unwrap().unwrap()
+    engine.get_task(id).await.unwrap().unwrap()
 }
 
 fn hang_once(env: &Env, prompt: &str, before: Vec<Value>) -> Value {
@@ -276,7 +276,7 @@ async fn a_crash_mid_subtask_resumes_on_that_subtask_with_its_partial_work() {
         wait_dead(agent_pid).await,
         "reconcile did not stop the orphaned agent"
     );
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     let run = t.run.as_ref().unwrap();
     assert_eq!(run.state, RunState::Interrupted);
     assert_eq!(run.subtask_id.as_deref(), Some("dev-2"));
@@ -284,7 +284,7 @@ async fn a_crash_mid_subtask_resumes_on_that_subtask_with_its_partial_work() {
 
     engine.resume(&task.id).await.unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
     assert_eq!(env.prompts_with("(dev-1)").len(), 1, "dev-1 must not rerun");
     let resumed = env.prompts_with("You were interrupted");
@@ -322,16 +322,21 @@ async fn pause_stops_now_and_resume_continues_the_same_subtask() {
         .await
         .unwrap();
     engine.start(&task.id).await.unwrap();
-    let running = wait_for(engine.store(), &task.id, "dev-1 running", |t| {
-        t.run
-            .as_ref()
-            .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-1") && r.pid.is_some())
-    })
+    let running = wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "dev-1 running",
+        |t| {
+            t.run
+                .as_ref()
+                .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-1") && r.pid.is_some())
+        },
+    )
     .await;
     let pid = running.run.unwrap().pid.unwrap();
 
     engine.pause(&task.id).await.unwrap();
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     let run = t.run.as_ref().unwrap();
     assert_eq!(run.state, RunState::Paused);
     assert_eq!(run.subtask_id.as_deref(), Some("dev-1"));
@@ -344,7 +349,7 @@ async fn pause_stops_now_and_resume_continues_the_same_subtask() {
 
     engine.resume(&task.id).await.unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview);
     assert_eq!(env.prompts_with("You were interrupted")[0]["resume"], true);
 }
@@ -367,11 +372,19 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     let gh = env.path("gh");
+    // Like the real gh: `pr view` finds nothing until `pr create` has made the PR.
+    let made = env.path("pr-made");
     std::fs::write(
         &gh,
         format!(
-            "#!/bin/sh\necho \"$@\" > {}\necho https://github.com/example/repo/pull/7\n",
-            env.path("gh-args").display()
+            "#!/bin/sh\n\
+             case \"$1 $2\" in\n\
+             \"pr view\") if [ -f {made} ]; then echo https://github.com/example/repo/pull/7; else echo 'no pull requests found' >&2; exit 1; fi ;;\n\
+             \"pr create\") echo \"$@\" > {args}; touch {made}; echo https://github.com/example/repo/pull/7 ;;\n\
+             *) exit 2 ;;\n\
+             esac\n",
+            made = made.display(),
+            args = env.path("gh-args").display()
         ),
     )
     .unwrap();
@@ -422,6 +435,94 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         url,
         "asking again returns the same PR"
     );
+
+    // Rework after the PR is open: asking again pushes the new work to the same PR.
+    engine
+        .request_rework(&task.id, "Rename the endpoint")
+        .await
+        .unwrap();
+    engine.wait_idle(&task.id).await;
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::HumanReview);
+    assert!(
+        t.review.feedback.is_none(),
+        "a passing review must clear old findings"
+    );
+    std::fs::remove_file(env.path("gh-args")).unwrap();
+    assert_eq!(engine.create_pull_request(&task.id).await.unwrap(), url);
+    assert_eq!(
+        git(&remote, &["rev-parse", &branch]),
+        git(&wt, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(commits_since(&wt, &base), 1);
+    assert!(!env.path("gh-args").exists(), "no second `gh pr create`");
+}
+
+fn fake_gh(env: &Env, create: &str) -> PathBuf {
+    let gh = env.path("gh");
+    let made = env.path("pr-made");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n\
+             \"pr view\") if [ -f {made} ]; then echo https://github.com/example/repo/pull/9; else exit 1; fi ;;\n\
+             \"pr create\") touch {made}; {create} ;;\n\
+             esac\n",
+            made = made.display()
+        ),
+    )
+    .unwrap();
+    std::process::Command::new("chmod")
+        .args(["+x", gh.to_str().unwrap()])
+        .status()
+        .unwrap();
+    gh
+}
+
+async fn reviewed_task_with_remote(env: &Env, dev_writes: bool) -> (Engine, String) {
+    let remote = env.path("remote.git");
+    git(
+        env.files.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(
+        &env.repo.path,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    let extra = if dev_writes {
+        vec![]
+    } else {
+        vec![json!({ "whenPrompt": "(dev-1)", "steps": [dev_answer("dev-1")] })]
+    };
+    let agent = env.agent(1, extra);
+    let gh = env.path("gh");
+    let engine = Engine::open(env.project.clone(), env.bins().with_tool("gh", &gh))
+        .await
+        .unwrap();
+    let task = engine.create_task("PR", "", agent, false).await.unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview);
+    (engine, task.id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_task_that_changed_nothing_has_no_pull_request() {
+    let env = Env::new().await;
+    fake_gh(&env, "echo https://github.com/example/repo/pull/9");
+    let (engine, id) = reviewed_task_with_remote(&env, false).await;
+    let err = engine.create_pull_request(&id).await.unwrap_err();
+    assert!(err.to_string().contains("nothing to open"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pr_that_gh_made_but_failed_to_report_is_still_found() {
+    let env = Env::new().await;
+    fake_gh(&env, "echo 'timeout talking to GitHub' >&2; exit 1");
+    let (engine, id) = reviewed_task_with_remote(&env, true).await;
+    let url = engine.create_pull_request(&id).await.unwrap();
+    assert_eq!(url, "https://github.com/example/repo/pull/9");
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(t.pull_request.unwrap().url, url);
 }
 
 // 5 ------------------------------------------------------------------------------------------
@@ -451,7 +552,7 @@ async fn a_failed_subtask_stops_the_task_and_resume_reruns_only_it() {
 
     engine.resume(&task.id).await.unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview);
     assert_eq!(env.prompts_with("(dev-1)").len(), 1);
     assert_eq!(env.prompts_with("(dev-3)").len(), 1);
@@ -520,7 +621,7 @@ async fn planning_with_approval_asks_waits_revises_and_leaves_no_files() {
         .await
         .unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(
         t.planning.stage,
         PlanningStage::PlanReady,
@@ -536,13 +637,13 @@ async fn planning_with_approval_asks_waits_revises_and_leaves_no_files() {
 
     engine.revise_plan(&task.id, "more detail").await.unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert!(t.planning.plan.as_deref().unwrap().contains("REVISED"));
     assert_eq!(t.planning.stage, PlanningStage::PlanReady);
 
     engine.approve_plan(&task.id).await.unwrap();
     engine.wait_idle(&task.id).await;
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview);
 }
 
@@ -661,11 +762,16 @@ async fn skipping_the_paused_subtask_moves_on_to_the_next() {
     let engine = env.engine().await;
     let task = engine.create_task("Skip", "", agent, false).await.unwrap();
     engine.start(&task.id).await.unwrap();
-    wait_for(engine.store(), &task.id, "dev-2 running", |t| {
-        t.run
-            .as_ref()
-            .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-2") && r.pid.is_some())
-    })
+    wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "dev-2 running",
+        |t| {
+            t.run
+                .as_ref()
+                .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-2") && r.pid.is_some())
+        },
+    )
     .await;
     engine.pause(&task.id).await.unwrap();
     let t = engine.skip_subtask(&task.id, "dev-2").await.unwrap();
@@ -693,8 +799,7 @@ async fn a_worktree_moved_by_hand_fails_checks_once_instead_of_looping() {
     std::fs::write(wt.join("hand.txt"), "by hand").unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-qm", "by hand"]);
-    engine
-        .store()
+    TaskStore::new(engine.project())
         .update(&task.id, |t| {
             t.phase = Phase::AiReview;
             t.review.checks = None;
@@ -745,7 +850,7 @@ async fn paused_with_partial_work(env: &Env, verdict: &str) -> (Engine, String) 
     engine.start(&task.id).await.unwrap();
     let wt = env.worktree(&task.id);
     wait_for(
-        engine.store(),
+        &TaskStore::new(engine.project()),
         &task.id,
         "dev-1 running with partial work",
         |t| t.run.as_ref().is_some_and(|r| r.pid.is_some()) && wt.join("partial.txt").exists(),
@@ -761,7 +866,7 @@ async fn paused_with_partial_work(env: &Env, verdict: &str) -> (Engine, String) 
 async fn triage_done_checkpoints_the_partial_work_and_moves_on() {
     let env = Env::new().await;
     let (engine, id) = paused_with_partial_work(&env, "done").await;
-    let t = engine.store().load(&id).await.unwrap().unwrap();
+    let t = engine.get_task(&id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
     assert!(
         env.prompts_with("You were interrupted").is_empty(),
@@ -787,7 +892,7 @@ async fn triage_done_checkpoints_the_partial_work_and_moves_on() {
 async fn triage_broken_discards_the_partial_work_and_redoes_the_subtask() {
     let env = Env::new().await;
     let (engine, id) = paused_with_partial_work(&env, "broken").await;
-    let t = engine.store().load(&id).await.unwrap().unwrap();
+    let t = engine.get_task(&id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
     let wt = env.worktree(&id);
     assert!(
@@ -801,4 +906,226 @@ async fn triage_broken_discards_the_partial_work_and_redoes_the_subtask() {
     );
     assert_eq!(env.prompts_with("A developer was interrupted").len(), 1);
     assert!(env.prompts_with("You were interrupted").is_empty());
+}
+
+// Round-1 review regressions ----------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_session_resume_starts_fresh_next_time_and_the_agent_cannot_change_mid_step() {
+    let env = Env::new().await;
+    let agent = env.agent(
+        1,
+        vec![
+            hang_once(&env, "(dev-1)", vec![json!({ "write": { "path": "half.txt", "content": "h" } })]),
+            json!({ "whenPrompt": "You were interrupted", "onceFile": env.once("expired"), "steps": [
+                { "result": { "isError": true, "text": "session not found" } }
+            ]}),
+        ],
+    );
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Session", "", agent, false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "dev-1 running",
+        |t| {
+            t.run
+                .as_ref()
+                .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-1") && r.pid.is_some())
+        },
+    )
+    .await;
+    engine.pause(&task.id).await.unwrap();
+
+    let mut patch = serde_json::Map::new();
+    patch.insert("agent".into(), json!({ "provider": "cursor" }));
+    assert!(
+        engine.patch_task(&task.id, &patch).await.is_err(),
+        "switching agent under a halted step must be refused"
+    );
+
+    // Resume on the stored session fails...
+    engine.resume(&task.id).await.unwrap();
+    engine.wait_idle(&task.id).await;
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.run.as_ref().unwrap().state, RunState::Failed);
+    assert!(
+        t.run.as_ref().unwrap().session_id.is_none(),
+        "the dead session was kept: {:?}",
+        t.run
+    );
+    // ...so the next resume starts a fresh session that still sees the partial work.
+    engine.resume(&task.id).await.unwrap();
+    engine.wait_idle(&task.id).await;
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
+    let fresh: Vec<_> = env
+        .prompts_with("Resuming an interrupted attempt")
+        .into_iter()
+        .filter(|r| r["resume"] == false)
+        .collect();
+    assert_eq!(fresh.len(), 1);
+    assert!(fresh[0]["prompt"].as_str().unwrap().contains("half.txt"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pausing_during_checks_stops_them_promptly() {
+    let env = Env::new().await;
+    let flag = env.path("checked-once");
+    env.settings(|s| {
+        s.checks = Some(vec![CheckCommand {
+            name: "slow".into(),
+            command: format!(
+                "if [ -f {f} ]; then exit 0; fi; touch {f}; sleep 30",
+                f = flag.display()
+            ),
+        }]);
+    })
+    .await;
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Slow checks", "", env.agent(1, vec![]), false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "checks running",
+        |t| t.run.as_ref().is_some_and(|r| r.kind == RunKind::Checks),
+    )
+    .await;
+    let began = std::time::Instant::now();
+    engine.pause(&task.id).await.unwrap();
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "pause waited for the check: {:?}",
+        began.elapsed()
+    );
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.run.as_ref().unwrap().state, RunState::Paused);
+    engine.resume(&task.id).await.unwrap();
+    engine.wait_idle(&task.id).await;
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::HumanReview, "{t:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn skipping_a_halted_subtask_drops_its_partial_work() {
+    let env = Env::new().await;
+    let agent = env.agent(
+        2,
+        vec![hang_once(
+            &env,
+            "(dev-1)",
+            vec![json!({ "write": { "path": "abandoned.txt", "content": "x" } })],
+        )],
+    );
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Skip partial", "", agent, false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    let wt = env.worktree(&task.id);
+    wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "partial work written",
+        |_| wt.join("abandoned.txt").exists(),
+    )
+    .await;
+    engine.pause(&task.id).await.unwrap();
+    engine.skip_subtask(&task.id, "dev-1").await.unwrap();
+    assert!(!wt.join("abandoned.txt").exists());
+    let t = run_to_end(&engine, &task.id).await;
+    let files = git(
+        &wt,
+        &[
+            "show",
+            "--name-only",
+            "--format=",
+            t.subtask("dev-2").unwrap().checkpoint.as_deref().unwrap(),
+        ],
+    );
+    assert!(
+        !files.contains("abandoned.txt"),
+        "dev-1's partial work landed in dev-2: {files}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn answering_right_as_the_driver_stops_is_not_lost() {
+    for _ in 0..5 {
+        let env = Env::new().await;
+        let engine = env.engine().await;
+        let task = engine
+            .create_task("Race", "", env.agent(1, vec![]), true)
+            .await
+            .unwrap();
+        let mut events = engine.subscribe();
+        engine.start(&task.id).await.unwrap();
+        // Answer the moment the questions are written, while the driver is still leaving.
+        loop {
+            let _ = events.recv().await;
+            let t = engine.get_task(&task.id).await.unwrap().unwrap();
+            if t.planning.stage == PlanningStage::Questions {
+                break;
+            }
+        }
+        engine
+            .answer_questions(
+                &task.id,
+                vec![(
+                    "q1".into(),
+                    Answer {
+                        choice: Some("cursor".into()),
+                        note: None,
+                    },
+                )],
+            )
+            .await
+            .unwrap();
+        engine.wait_idle(&task.id).await;
+        let t = engine.get_task(&task.id).await.unwrap().unwrap();
+        assert_eq!(
+            t.planning.stage,
+            PlanningStage::PlanReady,
+            "the answer was dropped"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_bad_task_does_not_stop_the_project_opening() {
+    let env = Env::new().await;
+    let store = TaskStore::new(&env.project);
+    let task = store
+        .create(Task::new("Bad", "", env.agent(1, vec![])))
+        .await
+        .unwrap();
+    // Running under some other boot, and invalid: a finished dev subtask with no checkpoint.
+    let path = env.project.tasks_dir().join(&task.id).join("task.json");
+    let mut json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    json["phase"] = "in_progress".into();
+    json["subtasks"] = json!([
+        { "id": "dev-1", "kind": "dev", "title": "a", "detail": "a", "status": "done", "finishedAt": 1 },
+        { "id": "dev-2", "kind": "dev", "title": "b", "detail": "b", "status": "pending" },
+        { "id": "qa-1", "kind": "qa", "title": "q", "detail": "q", "status": "pending" }
+    ]);
+    json["run"] = json!({ "id": "run-x", "kind": "dev", "state": "running", "subtaskId": "dev-2",
+        "attempt": 1, "bootId": "boot-gone", "startedAt": 1, "updatedAt": 1 });
+    std::fs::write(&path, json.to_string()).unwrap();
+
+    let engine = env.engine().await;
+    assert_eq!(
+        engine.reconcile_problems().len(),
+        1,
+        "{:?}",
+        engine.reconcile_problems()
+    );
 }

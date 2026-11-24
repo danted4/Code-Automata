@@ -35,8 +35,7 @@ const DIFF_LIMIT: usize = 64 * 1024;
 pub(crate) async fn drive(inner: Arc<Inner>, id: &str, control: &Control) {
     loop {
         // Copied out: the channel's read guard must not be held across an await.
-        let halt = *control.halt.borrow();
-        if let Some(halt) = halt {
+        if let Some(halt) = control.halt_requested() {
             halt_queued_run(&inner, id, halt).await;
             break;
         }
@@ -69,7 +68,11 @@ pub(crate) async fn drive(inner: Arc<Inner>, id: &str, control: &Control) {
                 .update(id, |t| apply_move(t, phase, Mover::Engine))
                 .await
                 .map(drop),
-            Step::RunChecks => run_checks(&inner, id, &settings).await,
+            Step::RunChecks => match run_checks(&inner, id, &settings, control).await {
+                Ok(true) => Ok(()),
+                Ok(false) => break,
+                Err(e) => Err(e),
+            },
             Step::Rework(cause) => inner
                 .update(id, |t| apply_rework(t, cause, &settings).map(drop))
                 .await
@@ -111,13 +114,16 @@ fn halted_state(halt: Halt) -> RunState {
 }
 
 /// Make a failure visible: the current run (or a new one fitting the phase) becomes `failed`.
-async fn record_failure(inner: &Inner, id: &str, error: &str) {
+/// When no run can hold it, an `EngineEvent::Error` carries it instead.
+pub(crate) async fn record_failure(inner: &Inner, id: &str, error: &str) {
+    let mut recorded = false;
     let _ = inner
         .update(id, |t| {
             if let Some(run) = t.run.as_mut() {
                 run.state = RunState::Failed;
                 run.error = Some(error.to_string());
                 run.updated_at = now_ms();
+                recorded = true;
                 return Ok(());
             }
             let (kind, subtask) = match t.phase {
@@ -137,9 +143,16 @@ async fn record_failure(inner: &Inner, id: &str, error: &str) {
             let mut run = Run::new(kind, RunState::Failed, subtask);
             run.error = Some(error.to_string());
             t.run = Some(run);
+            recorded = true;
             Ok(())
         })
         .await;
+    if !recorded {
+        inner.emit(EngineEvent::Error {
+            task_id: id.to_string(),
+            message: error.to_string(),
+        });
+    }
 }
 
 async fn create_worktree(inner: &Inner, id: &str) -> Result<()> {
@@ -164,7 +177,13 @@ async fn create_worktree(inner: &Inner, id: &str) -> Result<()> {
         .map(drop)
 }
 
-async fn run_checks(inner: &Inner, id: &str, settings: &Settings) -> Result<()> {
+/// `Ok(false)` when a halt stopped the checks (the run is marked paused or interrupted).
+async fn run_checks(
+    inner: &Inner,
+    id: &str,
+    settings: &Settings,
+    control: &Control,
+) -> Result<bool> {
     let wt = inner.worktrees.path_for(id)?;
     // Checks are recorded against the last dev checkpoint, which next_step compares with. If HEAD
     // is somewhere else (a hand-made commit in the worktree), say so once instead of re-running
@@ -187,6 +206,7 @@ async fn run_checks(inner: &Inner, id: &str, settings: &Settings) -> Result<()> 
     }
     let mut run = Run::new(RunKind::Checks, RunState::Running, None);
     run.boot_id = Some(inner.boot_id.clone());
+    let run_id = run.id.clone();
     inner
         .update(id, |t| {
             t.run = Some(run);
@@ -197,13 +217,25 @@ async fn run_checks(inner: &Inner, id: &str, settings: &Settings) -> Result<()> 
         .checks
         .clone()
         .unwrap_or_else(|| checks::detect(&wt));
-    let runs = checks::run_all(
-        &wt,
-        &commands,
-        inner.bins.path_var(),
-        settings.timeouts.check(),
-    )
-    .await;
+    // A halt drops the running check, whose guard kills its process group.
+    let runs = tokio::select! {
+        runs = checks::run_all(&wt, &commands, inner.bins.path_var(), settings.timeouts.check()) => runs,
+        () = control.halted() => {
+            git::discard_to(&wt, &expected).await?;
+            let state = control.halt_requested().map_or(RunState::Interrupted, halted_state);
+            inner
+                .update(id, |t| {
+                    if let Some(r) = t.run.as_mut()
+                        && r.id == run_id
+                    {
+                        r.state = state;
+                    }
+                    Ok(())
+                })
+                .await?;
+            return Ok(false);
+        }
+    };
     // Checks must not leave files that a later checkpoint would commit (ignored build output stays).
     git::discard_to(&wt, &expected).await?;
     let summary = checks::summarize(&runs, &expected);
@@ -213,8 +245,8 @@ async fn run_checks(inner: &Inner, id: &str, settings: &Settings) -> Result<()> 
             t.run = None;
             Ok(())
         })
-        .await
-        .map(drop)
+        .await?;
+    Ok(true)
 }
 
 /// What one agent attempt produced.
@@ -231,6 +263,9 @@ struct Ctx<'a> {
     settings: &'a Settings,
     control: &'a Control,
     access: Access,
+    /// Store the agent's session id on the run (false for side runs such as triage, whose
+    /// conversation must never be resumed as the dev subtask's).
+    record_session: bool,
 }
 
 /// Run one agent step to its written result. `Ok(false)` means the task stopped (halted or
@@ -258,12 +293,20 @@ async fn run_agent(
     };
     run.state = RunState::Running;
     run.boot_id = Some(inner.boot_id.clone());
-    run.provider = Some(task.agent.provider);
     run.pid = None;
     run.process_started = None;
     run.error = None;
     run.updated_at = now_ms();
-    let session = run.session_id.clone();
+    // A session is only resumed by the provider that created it (the task's agent may have been
+    // changed while the run was halted).
+    let session = run
+        .session_id
+        .clone()
+        .filter(|_| run.provider.is_none_or(|p| p == task.agent.provider));
+    if session.is_none() {
+        run.session_id = None;
+    }
+    run.provider = Some(task.agent.provider);
     let ctx = Ctx {
         inner,
         id,
@@ -271,6 +314,7 @@ async fn run_agent(
         settings,
         control,
         access,
+        record_session: true,
     };
     let task = inner
         .update(id, |t| {
@@ -485,6 +529,7 @@ async fn triage(
         settings: ctx.settings,
         control: ctx.control,
         access: Access::Review,
+        record_session: false,
     };
     let wt = ctx.inner.worktrees.path_for(ctx.id)?;
     git::park_changes(&wt).await?;
@@ -506,7 +551,19 @@ async fn attempt<T: AgentOutput>(
 ) -> Result<Attempt<T>> {
     let caps = agent::capabilities(task.agent.provider);
     let schema = caps.structured_output.then(T::schema);
+    let resumed = session.is_some();
     let outcome = execute(ctx, task, prompt, session, schema.clone(), "run").await?;
+    if resumed
+        && ctx.record_session
+        && matches!(
+            outcome.kind,
+            OutcomeKind::AgentError { .. } | OutcomeKind::Crashed { .. }
+        )
+    {
+        // The stored session may be expired or unknown; the next resume starts a fresh one
+        // (with the diff) instead of failing the same way again.
+        update_run(ctx, |r| r.session_id = None).await?;
+    }
     if !handle_stop(ctx, &outcome).await? {
         return Ok(Attempt::Stopped);
     }
@@ -542,10 +599,10 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
     let message = match &outcome.kind {
         OutcomeKind::Completed => return Ok(true),
         OutcomeKind::Stopped => {
-            let state = match *ctx.control.halt.borrow() {
-                Some(halt) => halted_state(halt),
-                None => RunState::Interrupted,
-            };
+            let state = ctx
+                .control
+                .halt_requested()
+                .map_or(RunState::Interrupted, halted_state);
             set_run_state(ctx, state, None).await?;
             return Ok(false);
         }
@@ -608,13 +665,13 @@ async fn execute(
     req.tool_timeout = Some(ctx.settings.timeouts.tool());
     req.total_timeout = Some(ctx.settings.timeouts.total());
 
-    let _permit = inner
-        .agents
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| CoreError::Invalid("the engine is shutting down".into()))?;
-    if ctx.control.halt.borrow().is_some() {
+    // Waiting for a free agent slot gives way to a pause or shutdown.
+    let _permit = tokio::select! {
+        permit = inner.agents.clone().acquire_owned() => permit
+            .map_err(|_| CoreError::Invalid("the engine is shutting down".into()))?,
+        () = ctx.control.halted() => return Ok(stopped_outcome()),
+    };
+    if ctx.control.halt_requested().is_some() {
         return Ok(stopped_outcome());
     }
     // Where a run that may not change anything must leave the worktree.
@@ -625,7 +682,7 @@ async fn execute(
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(agent.stopper());
     // A halt that arrived between the check above and registering the stopper.
-    if ctx.control.halt.borrow().is_some() {
+    if ctx.control.halt_requested().is_some() {
         agent.stopper().stop();
     }
 
@@ -634,7 +691,10 @@ async fn execute(
         Some(p) => process_started(p).await,
         None => None,
     };
-    let known_session = agent.session_id().map(String::from);
+    let known_session = agent
+        .session_id()
+        .map(String::from)
+        .filter(|_| ctx.record_session);
     update_run(ctx, |r| {
         r.pid = pid;
         r.process_started = started;
@@ -647,7 +707,7 @@ async fn execute(
     let mut outcome = None;
     while let Some(event) = agent.next_event().await {
         match &event {
-            AgentEvent::Session { id } => {
+            AgentEvent::Session { id } if ctx.record_session => {
                 let id = id.clone();
                 update_run(ctx, |r| r.session_id = Some(id)).await?;
             }

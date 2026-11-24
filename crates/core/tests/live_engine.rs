@@ -48,7 +48,7 @@ async fn live_claude_takes_a_task_from_plan_to_human_review() {
         .await
         .expect("the task did not finish in 20 minutes");
 
-    let t = engine.store().load(&task.id).await.unwrap().unwrap();
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
     println!(
         "phase {:?}, subtasks {:?}, run {:?}",
         t.phase,

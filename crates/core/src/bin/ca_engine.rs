@@ -54,6 +54,7 @@ async fn run() -> i32 {
         while let Ok(event) = events.recv().await {
             match event {
                 EngineEvent::TaskChanged { task_id } => println!("task-changed {task_id}"),
+                EngineEvent::Error { task_id, message } => println!("error {task_id} {message}"),
                 EngineEvent::Agent { run_id, event, .. } => {
                     println!(
                         "agent {run_id} {}",
@@ -80,7 +81,7 @@ async fn run() -> i32 {
     engine.wait_idle(task_id).await;
     printer.abort();
 
-    match engine.store().load(task_id).await {
+    match engine.get_task(task_id).await {
         Ok(Some(task)) => {
             let run = task
                 .run
