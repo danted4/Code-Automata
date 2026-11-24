@@ -1,16 +1,27 @@
-//! Task schema v2.
+//! The task file, schema 1.
 //!
-//! Serialises to the same camelCase JSON as `src/lib/tasks/schema.ts`, so the existing UI can read a v2
-//! file. v2 adds `schemaVersion`, a `run` record and a few fields; `status` and `assignedAgent` become
-//! derived from the run and are recomputed on every save. Keys this code does not know are kept in
-//! `extra` and written back unchanged.
+//! One file per task at `.code-automata/tasks/<id>/task.json`. Every piece of state lives in exactly
+//! one place:
+//!
+//! * `phase` is the Kanban column and nothing else;
+//! * `run` says whether an agent is working, paused, interrupted or failed, and on which subtask;
+//! * a subtask is `pending`, `done` or `skipped` ("running" is `run.subtaskId`);
+//! * `planning.stage` says where planning stands ("generating" is a `plan` run).
+//!
+//! Nothing is derived or duplicated, so nothing can disagree. Files are strict: unknown keys and any
+//! other schema version are refused rather than guessed at.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub const SCHEMA_VERSION: u32 = 2;
+use crate::error::{CoreError, Result};
+use crate::util::{now_ms, random_base36, validate_task_id};
+
+/// Version of the task file format. Files with any other value are refused.
+pub const SCHEMA: u32 = 1;
 
 /// The Kanban column. Fixed order; see `transitions` for which moves are allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -49,154 +60,203 @@ impl fmt::Display for Phase {
     }
 }
 
-/// Task-level `status` as the 2.2.4 UI understands it. Derived from the run in v2 (see
-/// [`Task::derived_status`]). Subtasks also use this enum for their own status, which is not derived.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Blocked,
-    Planning,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanningStatus {
-    NotStarted,
-    GeneratingQuestions,
-    WaitingForAnswers,
-    GeneratingPlan,
-    PlanReady,
-    PlanApproved,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// Which CLI agent runs the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum SubtaskType {
-    /// 2.2.4 always wrote `type`; a file without it is treated as a dev subtask.
+pub enum Provider {
+    Claude,
+    Cursor,
+    Amp,
+    Mock,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentConfig {
+    pub provider: Provider,
+    /// Provider model id; `None` uses the provider's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Provider mode, such as Amp's `low`; `None` uses the provider's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Anything else a provider takes, passed through to its adapter.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub options: Map<String, Value>,
+}
+
+impl AgentConfig {
+    pub fn new(provider: Provider) -> Self {
+        AgentConfig {
+            provider,
+            model: None,
+            mode: None,
+            options: Map::new(),
+        }
+    }
+}
+
+/// Where planning stands. While an agent is producing questions or a plan, the stage stays put and
+/// a `plan` run is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningStage {
     #[default]
+    NotStarted,
+    /// Questions are waiting for the user's answers.
+    Questions,
+    /// A plan is written and waiting for approval.
+    PlanReady,
+    Approved,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Answer {
+    /// The option picked, if the question offered options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Question {
+    pub id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Planning {
+    #[serde(default)]
+    pub stage: PlanningStage,
+    /// In the order they are asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<Question>,
+    /// The plan, as markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtaskKind {
     Dev,
     Qa,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtaskStatus {
+    Pending,
+    Done,
+    /// Skipped by the user. Counts as finished for moving on, but is not reported as done.
+    Skipped,
+}
+
+impl SubtaskStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, SubtaskStatus::Done | SubtaskStatus::Skipped)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Subtask {
     pub id: String,
-    pub content: String,
-    pub label: String,
-    pub status: TaskStatus,
-    #[serde(rename = "type", default)]
-    pub kind: SubtaskType,
+    pub kind: SubtaskKind,
+    /// Short label for the card.
+    pub title: String,
+    /// What the agent is asked to do.
+    pub detail: String,
+    pub status: SubtaskStatus,
+    /// Present-tense label shown while it runs ("Running tests").
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_form: Option<String>,
+    pub progress_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<i64>,
-    /// v2: commit recorded when this subtask completed.
+    pub finished_at: Option<i64>,
+    /// Commit made when it finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checkpoint_commit: Option<String>,
-    /// v2: the agent's handoff note for the subtasks after this one.
+    pub checkpoint: Option<String>,
+    /// The agent's note for the subtasks after this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningAnswer {
-    #[serde(default)]
-    pub selected_option: String,
-    #[serde(default)]
-    pub additional_text: String,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+impl Subtask {
+    pub fn new(
+        id: impl Into<String>,
+        kind: SubtaskKind,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Subtask {
+            id: id.into(),
+            kind,
+            title: title.into(),
+            detail: detail.into(),
+            status: SubtaskStatus::Pending,
+            progress_label: None,
+            finished_at: None,
+            checkpoint: None,
+            handoff: None,
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningQuestion {
-    pub id: String,
-    pub question: String,
-    #[serde(default)]
-    pub options: Vec<String>,
-    #[serde(default)]
-    pub answer: PlanningAnswer,
-    #[serde(default)]
-    pub required: bool,
-    #[serde(default)]
-    pub order: i64,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanningDataStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningData {
-    #[serde(default)]
-    pub questions: Vec<PlanningQuestion>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generated_at: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answered_at: Option<i64>,
-    #[serde(default)]
-    pub status: PlanningDataStatus,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Complexity {
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_complexity: Option<Complexity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub is_test_data: Option<bool>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-/// Outcome of the automated checks after QA (from the `d-c-1_5` branch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum QaOverall {
-    Pass,
-    Fail,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QaResult {
-    pub overall: QaOverall,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+/// Result of the automated typecheck/build/lint after QA.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Checks {
+    pub passed: bool,
+    pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Review {
+    /// Rework rounds so far; capped by the engine.
+    #[serde(default)]
+    pub rework_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Checks>,
+    /// What the next rework round has to fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+}
+
+impl Review {
+    pub fn is_empty(&self) -> bool {
+        *self == Review::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitInfo {
+    pub branch: String,
+    pub worktree: PathBuf,
+    /// Commit the branch started from; checkpoints are squashed back onto it.
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PullRequest {
+    pub url: String,
 }
 
 /// What a run is doing. One run at a time per task.
@@ -244,9 +304,9 @@ impl RunState {
     }
 }
 
-/// Durable record of the task's current run. This is the single source of truth for "where were we".
+/// Durable record of the task's current or last run: the single answer to "where were we".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
     pub id: String,
     pub kind: RunKind,
@@ -256,32 +316,31 @@ pub struct Run {
     pub subtask_id: Option<String>,
     /// 1 for the first try of the current step; incremented on retry and resume.
     pub attempt: u32,
+    /// The provider that ran it (the task's agent config can change afterwards).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
+    pub provider: Option<Provider>,
     /// Provider conversation id, used to resume the same session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
-    /// Identifies the app process that owns the run; a different boot id means the owner died.
+    /// The app process that owns the run; a different boot id means the owner died.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_id: Option<String>,
     pub started_at: i64,
     pub updated_at: i64,
     /// Commit the current step started from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_checkpoint: Option<String>,
+    pub checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub error: Option<String>,
 }
 
 impl Run {
     pub fn new(kind: RunKind, state: RunState, subtask_id: Option<String>) -> Self {
-        let now = crate::util::now_ms();
+        let now = now_ms();
         Run {
-            id: format!("run-{now}-{}", crate::util::random_base36(6)),
+            id: format!("run-{now}-{}", random_base36(6)),
             kind,
             state,
             subtask_id,
@@ -292,140 +351,71 @@ impl Run {
             boot_id: None,
             started_at: now,
             updated_at: now,
-            last_checkpoint: None,
-            last_error: None,
-            extra: Map::new(),
+            checkpoint: None,
+            error: None,
         }
     }
 }
 
-fn v1() -> u32 {
-    1
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Task {
-    /// Missing in 2.2.4 files, which deserialise as version 1.
-    #[serde(default = "v1")]
-    pub schema_version: u32,
+    pub schema: u32,
     pub id: String,
     pub title: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    pub phase: Phase,
-    /// Derived on save from `run` and `phase`; never set it directly.
-    pub status: TaskStatus,
-    #[serde(default)]
-    pub subtasks: Vec<Subtask>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cli_tool: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cli_config: Option<Map<String, Value>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requires_human_review: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_approved: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locked: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub planning_status: Option<PlanningStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub planning_data: Option<PlanningData>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub planning_logs_path: Option<String>,
-
-    /// Derived on save: the active run's id, so the 2.2.4 UI still shows "agent working".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assigned_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch_name: Option<String>,
-    /// v2: commit the task branch started from; checkpoint commits are squashed back onto it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_commit: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qa_failure_feedback: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rework_count: Option<u32>,
-    /// `d-c-1_5` spelled this key `lastQAResult`, which camelCase would not produce.
-    #[serde(
-        rename = "lastQAResult",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub last_qa_result: Option<QaResult>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub github_issue: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gitlab_issue: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_request_url: Option<String>,
-
     pub created_at: i64,
     pub updated_at: i64,
-    #[serde(default)]
-    pub metadata: TaskMetadata,
 
-    /// v2: the current or most recent run.
+    pub phase: Phase,
+    pub agent: AgentConfig,
+    /// Stop for the user's answers and plan approval; otherwise planning runs straight through.
+    #[serde(default)]
+    pub require_plan_approval: bool,
+    #[serde(default)]
+    pub planning: Planning,
+    /// Dev and QA subtasks, in execution order within each kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtasks: Vec<Subtask>,
+    #[serde(default, skip_serializing_if = "Review::is_empty")]
+    pub review: Review,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Run>,
-
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
 }
 
 impl Task {
-    /// A new task in planning with no run, as `POST /api/tasks/create` built it.
-    pub fn new(id: String, title: String, description: String) -> Self {
-        let now = crate::util::now_ms();
-        let mut task = Task {
-            schema_version: SCHEMA_VERSION,
-            planning_logs_path: Some(format!(".code-automata/tasks/{id}/planning-logs.txt")),
-            branch_name: Some(format!("code-automata/{id}")),
-            title: if title.trim().is_empty() {
-                id.clone()
-            } else {
-                title
-            },
+    /// A new task in planning, with no run and no worktree yet. A blank title becomes the id.
+    pub fn new(title: &str, description: &str, agent: AgentConfig) -> Self {
+        let now = now_ms();
+        let id = format!("task-{now}-{}", random_base36(5));
+        let title = if title.trim().is_empty() {
+            id.clone()
+        } else {
+            title.trim().to_string()
+        };
+        Task {
+            schema: SCHEMA,
             id,
-            description,
-            phase: Phase::Planning,
-            status: TaskStatus::Pending,
-            subtasks: Vec::new(),
-            cli_tool: None,
-            cli_config: None,
-            requires_human_review: Some(false),
-            plan_approved: Some(false),
-            locked: Some(false),
-            planning_status: Some(PlanningStatus::NotStarted),
-            planning_data: None,
-            plan_content: None,
-            assigned_agent: None,
-            worktree_path: None,
-            base_commit: None,
-            qa_failure_feedback: None,
-            rework_count: None,
-            last_qa_result: None,
-            github_issue: None,
-            gitlab_issue: None,
-            merge_request_url: None,
+            title,
+            description: description.to_string(),
             created_at: now,
             updated_at: now,
-            metadata: TaskMetadata::default(),
+            phase: Phase::Planning,
+            agent,
+            require_plan_approval: false,
+            planning: Planning::default(),
+            subtasks: Vec::new(),
+            review: Review::default(),
+            git: None,
+            pull_request: None,
             run: None,
-            extra: Map::new(),
-        };
-        task.normalize();
-        task
+        }
     }
 
     pub fn subtask(&self, id: &str) -> Option<&Subtask> {
@@ -436,16 +426,16 @@ impl Task {
         self.subtasks.iter_mut().find(|s| s.id == id)
     }
 
-    pub fn subtasks_of(&self, kind: SubtaskType) -> impl Iterator<Item = &Subtask> {
+    pub fn subtasks_of(&self, kind: SubtaskKind) -> impl Iterator<Item = &Subtask> {
         self.subtasks.iter().filter(move |s| s.kind == kind)
     }
 
-    /// True when the task has at least one subtask of `kind` and all of them are completed.
-    pub fn all_completed(&self, kind: SubtaskType) -> bool {
+    /// True when the task has at least one subtask of `kind` and every one is done or skipped.
+    pub fn all_finished(&self, kind: SubtaskKind) -> bool {
         let mut any = false;
         for s in self.subtasks_of(kind) {
             any = true;
-            if s.status != TaskStatus::Completed {
+            if !s.status.is_finished() {
                 return false;
             }
         }
@@ -456,43 +446,16 @@ impl Task {
         self.run.as_ref().is_some_and(|r| r.state.is_active())
     }
 
-    /// The 2.2.4-compatible `status`, computed from the run and the phase.
-    pub fn derived_status(&self) -> TaskStatus {
-        if let Some(run) = &self.run {
-            match run.state {
-                RunState::Queued | RunState::Running => {
-                    return if self.phase == Phase::Planning {
-                        TaskStatus::Planning
-                    } else {
-                        TaskStatus::InProgress
-                    };
-                }
-                RunState::Failed => return TaskStatus::Blocked,
-                RunState::Paused | RunState::Interrupted => return TaskStatus::Pending,
-                RunState::Done => {}
-            }
-        }
-        match self.phase {
-            Phase::HumanReview | Phase::Done => TaskStatus::Completed,
-            Phase::Planning | Phase::InProgress | Phase::AiReview => TaskStatus::Pending,
-        }
-    }
-
-    /// Recompute the derived fields. The store calls this before every write.
-    pub fn normalize(&mut self) {
-        self.schema_version = SCHEMA_VERSION;
-        self.status = self.derived_status();
-        self.assigned_agent = self
-            .run
-            .as_ref()
-            .filter(|r| r.state.is_active())
-            .map(|r| r.id.clone());
-    }
-
     /// Structural checks run before every write.
-    pub fn validate(&self) -> crate::error::Result<()> {
-        use crate::error::CoreError::Invalid;
-        crate::util::validate_task_id(&self.id)?;
+    pub fn validate(&self) -> Result<()> {
+        use CoreError::Invalid;
+        validate_task_id(&self.id)?;
+        if self.schema != SCHEMA {
+            return Err(Invalid(format!("schema must be {SCHEMA}")));
+        }
+        if self.title.trim().is_empty() {
+            return Err(Invalid("the title is empty".into()));
+        }
         let mut seen = std::collections::HashSet::new();
         for s in &self.subtasks {
             if s.id.trim().is_empty() {
@@ -500,6 +463,12 @@ impl Task {
             }
             if !seen.insert(s.id.as_str()) {
                 return Err(Invalid(format!("duplicate subtask id {:?}", s.id)));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for q in &self.planning.questions {
+            if !seen.insert(q.id.as_str()) {
+                return Err(Invalid(format!("duplicate question id {:?}", q.id)));
             }
         }
         if let Some(run) = &self.run

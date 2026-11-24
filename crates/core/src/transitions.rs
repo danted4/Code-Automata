@@ -1,14 +1,14 @@
 //! The one phase table, and the whitelist of fields a UI edit may change.
 //!
-//! Both the engine and the HTTP layer go through [`check_move`], so the rules cannot drift apart the
-//! way the 2.2.4 update route and `AGENTS.md` did (the route forbade rework moves the docs allow).
+//! Both the engine and the HTTP layer go through [`check_move`], so the rules live in one place.
 
 use serde_json::{Map, Value};
 
 use crate::error::{CoreError, Result};
-use crate::task::{Phase, SubtaskType, Task};
+use crate::task::{Phase, PlanningStage, SubtaskKind, Task};
 
-/// Who is asking for the move. Only the user is stopped by `locked`.
+/// Who is asking for the move. The user cannot move a task while its agent is working; the engine
+/// moves it as part of the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mover {
     User,
@@ -55,44 +55,33 @@ pub fn check_move(task: &Task, to: Phase, mover: Mover) -> Result<()> {
     if !is_edge(from, to) {
         return deny("that move is not part of the workflow");
     }
-    if mover == Mover::User && task.locked == Some(true) {
-        return deny("the task is locked");
-    }
     if mover == Mover::User && task.has_active_run() {
         return deny("an agent is working on it; pause it first");
     }
 
     match (from, to) {
         (Phase::Planning, Phase::InProgress) => {
-            if task.plan_approved != Some(true) {
+            if task.planning.stage != PlanningStage::Approved {
                 return deny("the plan has not been approved");
             }
-            if task.subtasks_of(SubtaskType::Dev).next().is_none() {
+            if task.subtasks_of(SubtaskKind::Dev).next().is_none() {
                 return deny("there are no dev subtasks yet");
             }
         }
-        (Phase::InProgress, Phase::AiReview) if !task.all_completed(SubtaskType::Dev) => {
-            return deny("not every dev subtask is completed");
+        (Phase::InProgress, Phase::AiReview) if !task.all_finished(SubtaskKind::Dev) => {
+            return deny("not every dev subtask is done or skipped");
         }
-        (Phase::AiReview, Phase::HumanReview) if !task.all_completed(SubtaskType::Qa) => {
-            return deny("not every QA subtask is completed");
+        (Phase::AiReview, Phase::HumanReview) if !task.all_finished(SubtaskKind::Qa) => {
+            return deny("not every QA subtask is done or skipped");
         }
         _ => {}
     }
     Ok(())
 }
 
-/// Fields a UI edit may change. Everything else (phase, status, run, subtask status, planning state)
+/// Fields a UI edit may change. Everything else (phase, run, subtasks, planning, review, git)
 /// changes only through the engine or [`check_move`].
-pub const EDITABLE_FIELDS: &[&str] = &[
-    "title",
-    "description",
-    "cliTool",
-    "cliConfig",
-    "requiresHumanReview",
-    "locked",
-    "metadata",
-];
+pub const EDITABLE_FIELDS: &[&str] = &["title", "description", "agent", "requirePlanApproval"];
 
 /// Apply a camelCase JSON patch to `task`, rejecting any key outside [`EDITABLE_FIELDS`] and any value
 /// of the wrong type. On error `task` is unchanged.

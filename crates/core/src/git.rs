@@ -1,17 +1,15 @@
-//! Git worktrees and checkpoints, shelling out to `git`.
+//! Git worktrees and checkpoints.
 //!
-//! Ported from `src/lib/git/worktree.ts`. Differences from 2.2.4:
+//! Shells out to `git` rather than linking libgit2, so behaviour matches the git the user has.
 //!
-//! * arguments are passed as an array, never interpolated into a shell string;
-//! * git runs with `LC_ALL=C` so its messages can be matched, and network calls have a timeout;
-//! * a worktree's status is read only if the directory really is a worktree root (2.2.4 ran
-//!   `git status` in any directory under `.code-automata/worktrees/`, so a stray folder reported the
-//!   main checkout's status);
-//! * delete refuses to remove anything outside the worktrees directory, and without `force` never
-//!   removes a worktree git itself would not remove;
-//! * main-branch detection checks exact refs (2.2.4 matched any branch name containing "main");
-//! * new: the base commit of each task branch, checkpoint commits, the diff since the last
-//!   checkpoint, and squashing checkpoints for the pull request.
+//! * Arguments are passed as an array, never through a shell.
+//! * git runs with `LC_ALL=C` so its messages can be matched, and network calls have a timeout.
+//! * A worktree's status is read only if the directory really is a worktree root; otherwise git
+//!   would walk up and report the main checkout.
+//! * Delete never removes anything outside the worktrees directory, and without `force` never
+//!   removes a worktree git itself would not remove.
+//! * Each task branch records the commit it started from; finished subtasks are checkpoint
+//!   commits, squashed into one commit for the pull request.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -290,7 +288,7 @@ impl Worktrees {
 
     /// `origin`'s default branch, else a local `main` or `master`, else `main`.
     pub async fn main_branch(&self) -> String {
-        let repo = self.project.repo_root();
+        let repo = self.project.root();
         if let Ok(full) = run_git(
             repo,
             &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -310,10 +308,10 @@ impl Worktrees {
     }
 
     /// Create `.code-automata/worktrees/<id>` on a new branch `code-automata/<id>`, starting from the
-    /// main checkout's current HEAD (as 2.2.4 did). The start commit is returned as `base_commit`.
+    /// main checkout's current HEAD. The start commit is returned as `base_commit`.
     pub async fn create(&self, task_id: &str) -> Result<WorktreeInfo> {
         let path = self.path_for(task_id)?;
-        let repo = self.project.repo_root();
+        let repo = self.project.root();
         let branch = Self::branch_for(task_id);
         let add = ["worktree", "add"];
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
@@ -370,7 +368,7 @@ impl Worktrees {
         let computed = self.path_for(task_id)?;
         let path = opts.path_override.clone().unwrap_or(computed);
         self.ensure_inside_base(&path).await?;
-        let repo = self.project.repo_root();
+        let repo = self.project.root();
         let remove = ["worktree", "remove"];
 
         match probe(&path).await {
@@ -446,7 +444,7 @@ impl Worktrees {
 
     /// Worktrees git knows about whose directory sits directly in `.code-automata/worktrees/`.
     pub async fn list(&self) -> Result<Vec<WorktreeInfo>> {
-        let repo = self.project.repo_root();
+        let repo = self.project.root();
         let raw = run_git_raw(repo, &["worktree", "list", "--porcelain", "-z"]).await?;
         let main_branch = self.main_branch().await;
         let base = tokio::fs::canonicalize(self.base_path())
@@ -670,7 +668,7 @@ async fn run_with_identity(worktree: &Path, args: &[&str]) -> Result<String> {
 
 /// Commit everything in the worktree as the checkpoint for a finished subtask.
 ///
-/// Hooks are skipped (`--no-verify`, as 2.2.4's PR commit did: worktrees usually lack
+/// Hooks are skipped (`--no-verify`: worktrees usually lack the tools hooks need, such as
 /// `node_modules`) and signing is skipped (`--no-gpg-sign`: a passphrase prompt would hang a
 /// non-interactive run). Checkpoints are squashed before the pull request, so neither reaches the
 /// final history.

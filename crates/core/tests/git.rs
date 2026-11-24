@@ -32,14 +32,13 @@ async fn project_dir_rejects_bad_paths() {
 }
 
 #[tokio::test]
-async fn project_dir_in_a_subfolder_keeps_tasks_there_and_worktrees_at_the_repo_root() {
+async fn a_subfolder_opens_its_repository() {
     let repo = TempRepo::new();
     let sub = repo.path.join("packages").join("app");
     std::fs::create_dir_all(&sub).unwrap();
     let project = ProjectDir::open(&sub).await.unwrap();
-    assert_eq!(project.root(), sub);
-    assert_eq!(project.repo_root(), repo.path);
-    assert!(project.tasks_dir().starts_with(&sub));
+    assert_eq!(project.root(), repo.path);
+    assert!(project.tasks_dir().starts_with(&repo.path));
     assert!(project.worktrees_dir().starts_with(&repo.path));
 }
 

@@ -59,33 +59,28 @@ pub fn fixture_json(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(fixture_path(name)).unwrap()).unwrap()
 }
 
-/// Copy a fixture into the project's tasks directory under its own id. Returns the task id.
-pub fn install_fixture(project: &ProjectDir, name: &str) -> String {
-    let json = fixture_json(name);
-    let id = json["id"].as_str().unwrap().to_string();
-    std::fs::create_dir_all(project.tasks_dir()).unwrap();
-    std::fs::copy(
-        fixture_path(name),
-        project.tasks_dir().join(format!("{id}.json")),
-    )
-    .unwrap();
-    id
+pub fn task_file(project: &ProjectDir, id: &str) -> PathBuf {
+    project.tasks_dir().join(id).join("task.json")
+}
+
+/// Write raw JSON as a task file under `id`.
+pub fn write_task_json(project: &ProjectDir, id: &str, json: &Value) {
+    let path = task_file(project, id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string_pretty(json).unwrap()).unwrap();
 }
 
 pub fn read_task_json(project: &ProjectDir, id: &str) -> Value {
-    serde_json::from_str(
-        &std::fs::read_to_string(project.tasks_dir().join(format!("{id}.json"))).unwrap(),
-    )
-    .unwrap()
+    serde_json::from_str(&std::fs::read_to_string(task_file(project, id)).unwrap()).unwrap()
 }
 
-pub async fn store_with(fixtures: &[&str]) -> (TempRepo, ProjectDir, TaskStore, Vec<String>) {
+/// A temp repo with its store, and the example task installed. Returns the example's id.
+pub async fn store_with_example() -> (TempRepo, ProjectDir, TaskStore, String) {
     let repo = TempRepo::new();
     let project = repo.project().await;
-    let ids = fixtures
-        .iter()
-        .map(|f| install_fixture(&project, f))
-        .collect();
+    let json = fixture_json("task-example.json");
+    let id = json["id"].as_str().unwrap().to_string();
+    write_task_json(&project, &id, &json);
     let store = TaskStore::new(&project);
-    (repo, project, store, ids)
+    (repo, project, store, id)
 }

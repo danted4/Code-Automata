@@ -2,16 +2,13 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, Result};
 
-/// The project the user opened. Can only be built from an absolute, existing directory inside a git
-/// repository; there is no fallback to the current directory (2.2.4's `getProjectDir` silently used
-/// `process.cwd()` and so could act on the wrong repository).
+/// The project the user opened: always the root of a git repository. Picking a folder inside a
+/// repository opens that repository. There is no fallback to the current directory.
 ///
-/// `root` is the folder the user picked; task files live under it, as in 2.2.4. `repo_root` is the
-/// top of its git repository; worktrees live under that, also as in 2.2.4.
+/// Everything Code-Automata stores lives under `<root>/.code-automata/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDir {
     root: PathBuf,
-    repo_root: PathBuf,
 }
 
 impl ProjectDir {
@@ -31,25 +28,18 @@ impl ProjectDir {
         if !meta.is_dir() {
             return Err(invalid("the path is not a directory"));
         }
-        let root = tokio::fs::canonicalize(path)
-            .await
-            .map_err(|_| invalid("the path cannot be resolved"))?;
-        let top = crate::git::run_git(&root, &["rev-parse", "--show-toplevel"])
+        let top = crate::git::run_git(path, &["rev-parse", "--show-toplevel"])
             .await
             .map_err(|_| invalid("the directory is not inside a git repository"))?;
-        let repo_root = tokio::fs::canonicalize(&top)
+        let root = tokio::fs::canonicalize(&top)
             .await
             .map_err(|_| invalid("the git repository root cannot be resolved"))?;
-
-        Ok(ProjectDir { root, repo_root })
+        Ok(ProjectDir { root })
     }
 
+    /// The repository root.
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    pub fn repo_root(&self) -> &Path {
-        &self.repo_root
     }
 
     /// `<root>/.code-automata`
@@ -57,13 +47,13 @@ impl ProjectDir {
         self.root.join(".code-automata")
     }
 
-    /// `<root>/.code-automata/tasks`
+    /// `<root>/.code-automata/tasks`: one directory per task.
     pub fn tasks_dir(&self) -> PathBuf {
         self.state_dir().join("tasks")
     }
 
-    /// `<repo_root>/.code-automata/worktrees`
+    /// `<root>/.code-automata/worktrees`
     pub fn worktrees_dir(&self) -> PathBuf {
-        self.repo_root.join(".code-automata").join("worktrees")
+        self.state_dir().join("worktrees")
     }
 }

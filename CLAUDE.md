@@ -28,13 +28,14 @@ cargo test                                    # all crates
 cargo test --test git worktree_lifecycle      # one integration test
 ```
 
-`crates/core` (`ca_core`) holds the task store, phase table and git layer:
+`crates/core` (`ca_core`) holds the task store, phase table and git layer. The 3.0 app shares nothing with 2.2.x on disk: no migration, no compatibility, and 2.2.x design decisions are not binding.
 
+- One directory per task: `.code-automata/tasks/<id>/task.json` plus that task's logs. `tests/fixtures/task-example.json` shows every field.
+- Each piece of state lives in one place: `phase` is the column, `run` says whether an agent is working, paused, interrupted or failed and on which subtask, a subtask is only `pending`, `done` or `skipped`. Do not add derived or duplicated fields.
+- Task files are strict: unknown keys and any `schema` other than 1 are refused.
 - `TaskStore::update` is the only write path: per-task lock, then atomic temp-file-and-rename. Reads never write.
-- `status` and `assignedAgent` are derived from the `run` record on every save; never set them by hand.
-- v1 (2.2.x) task files are migrated in memory on load (`migrate.rs`). A task that was mid-run becomes an `interrupted` run on its first unfinished subtask.
 - Phase moves go through `transitions::check_move`; UI edits through `apply_patch`, which accepts only `EDITABLE_FIELDS`.
-- Integration tests under `crates/core/tests/` run against throwaway git repos and the hand-written v1 fixtures in `tests/fixtures/`.
+- A project is always a git repository root; picking a subfolder opens its repository.
 
 ## How a task actually runs
 

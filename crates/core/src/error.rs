@@ -19,12 +19,10 @@ pub enum CoreError {
         source: serde_json::Error,
     },
 
-    #[error(
-        "{path} was written by a newer Code-Automata (task schema {found}, this build reads up to {supported})"
-    )]
-    NewerSchema {
+    #[error("{path} uses task schema {found}; this build reads schema {supported} only")]
+    UnsupportedSchema {
         path: PathBuf,
-        found: u32,
+        found: String,
         supported: u32,
     },
 
