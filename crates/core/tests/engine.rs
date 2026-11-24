@@ -1409,3 +1409,50 @@ async fn removing_and_restoring_a_done_worktree_guards_the_users_work() {
     engine.move_task(&id, Phase::HumanReview).await.unwrap();
     assert!(wt.exists());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reopening_never_removes_a_worktree_that_may_hold_the_users_work() {
+    let env = Env::new().await;
+    let agent = env.agent(1, vec![]);
+    let engine = Engine::open(env.project.clone(), env.bins()).await.unwrap();
+    let id = engine
+        .create_task("Kept", "", agent, false)
+        .await
+        .unwrap()
+        .id;
+    assert_eq!(run_to_end(&engine, &id).await.phase, Phase::HumanReview);
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    let wt = env.worktree(&id);
+    let branch = format!("code-automata/{id}");
+
+    // The user switched the done task's worktree to another branch and has work in it.
+    git(&wt, &["checkout", "-q", "-b", "my-experiment"]);
+    std::fs::write(wt.join("my-work.txt"), "mine").unwrap();
+    let err = engine.move_task(&id, Phase::HumanReview).await.unwrap_err();
+    assert!(
+        err.to_string().contains("is on my-experiment") && err.to_string().contains(&branch),
+        "{err}"
+    );
+    assert!(wt.join("my-work.txt").exists(), "the user's work is kept");
+    assert_eq!(
+        engine.get_task(&id).await.unwrap().unwrap().phase,
+        Phase::Done
+    );
+    git(&wt, &["checkout", "-q", &branch]);
+    std::fs::remove_file(wt.join("my-work.txt")).unwrap();
+    engine.move_task(&id, Phase::HumanReview).await.unwrap();
+
+    // A worktree git cannot read (its admin entry gone, a `.git` file pointing nowhere).
+    engine.move_task(&id, Phase::Done).await.unwrap();
+    engine.delete_worktree(&id, false).await.unwrap();
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(wt.join(".git"), "gitdir: /nonexistent/worktrees/x\n").unwrap();
+    std::fs::write(wt.join("my-work.txt"), "mine").unwrap();
+    let err = engine.move_task(&id, Phase::HumanReview).await.unwrap_err();
+    assert!(err.to_string().contains("could not be read"), "{err}");
+    assert!(wt.join("my-work.txt").exists(), "the user's work is kept");
+    assert_eq!(
+        engine.get_task(&id).await.unwrap().unwrap().phase,
+        Phase::Done
+    );
+}

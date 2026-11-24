@@ -311,19 +311,38 @@ async fn probe(path: &Path) -> Probe {
     }
 }
 
-/// Where `branch` is checked out (main checkout or any worktree), if anywhere.
+/// Where `branch` is checked out (main checkout or any worktree), if anywhere, in the form
+/// [`comparable`] gives.
 async fn checked_out_at(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
     let list = run_git(repo, &["worktree", "list", "--porcelain"]).await?;
     let want = format!("branch refs/heads/{branch}");
     let mut current: Option<PathBuf> = None;
     for line in list.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            current = Some(crate::util::plain_path(PathBuf::from(p)));
+            current = Some(PathBuf::from(p));
         } else if line == want {
-            return Ok(current);
+            return Ok(match current {
+                Some(p) => Some(comparable(&p).await),
+                None => None,
+            });
         }
     }
     Ok(None)
+}
+
+/// `path` with symlinks resolved (macOS's /var is /private/var), so two spellings of one place
+/// compare equal. A path that no longer exists is resolved through its parent.
+async fn comparable(path: &Path) -> PathBuf {
+    if let Ok(p) = crate::util::canonicalize(path).await {
+        return crate::util::plain_path(p);
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => match crate::util::canonicalize(parent).await {
+            Ok(p) => crate::util::plain_path(p).join(name),
+            Err(_) => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
 }
 
 /// Does `path` hold a worktree on the task's branch?
@@ -460,19 +479,37 @@ impl Worktrees {
     }
 
     /// Bring back the worktree of a task whose worktree was removed (a done task's), on its
-    /// existing branch `code-automata/<id>`, which holds the work. Nothing to do if the task's
-    /// worktree is there.
+    /// existing branch `code-automata/<id>`, which holds the work. What is at the path decides:
     ///
-    /// A folder at the path that is not that worktree (what a removal that failed partway leaves,
-    /// with no `.git`) is cleared first: git commands run in it would walk up to the main checkout
-    /// and act on the user's own repository.
+    /// * the task's worktree on its branch: nothing to do;
+    /// * nothing, or a folder that is not a worktree (what a removal that failed partway leaves,
+    ///   with no `.git`; git run in it would walk up to the main checkout): it is cleared and the
+    ///   worktree added;
+    /// * a worktree on another branch (the user switched it) or one git cannot read: refused, and
+    ///   left alone, since it may hold the user's uncommitted work.
     pub async fn restore(&self, task_id: &str) -> Result<()> {
         let path = self.path_for(task_id)?;
-        if is_task_worktree(&path, task_id).await {
-            return Ok(());
-        }
-        let repo = self.project.root();
         let branch = Self::branch_for(task_id);
+        let leftover = match probe(&path).await {
+            Probe::Worktree { branch: on, .. } if on == branch => return Ok(()),
+            Probe::Worktree { branch: on, .. } => {
+                return Err(CoreError::Invalid(format!(
+                    "the task's worktree {} is on {on}; switch it back to {branch}, then reopen \
+                     the task",
+                    path.display()
+                )));
+            }
+            Probe::Unreadable { error, .. } => {
+                return Err(CoreError::Invalid(format!(
+                    "the task's worktree {} could not be read ({error}); fix or remove it, then \
+                     reopen the task",
+                    path.display()
+                )));
+            }
+            Probe::NotWorktree => true,
+            Probe::Missing => false,
+        };
+        let repo = self.project.root();
         if !branch_exists(repo, &branch).await? {
             return Err(CoreError::Invalid(format!(
                 "the task's branch {branch} is gone, so its worktree cannot be brought back"
@@ -481,7 +518,7 @@ impl Worktrees {
         // Drop git's record of a removed folder first, so only a real checkout counts below.
         run_git(repo, &["worktree", "prune"]).await?;
         if let Some(elsewhere) = checked_out_at(repo, &branch).await?
-            && elsewhere != path
+            && elsewhere != comparable(&path).await
         {
             return Err(CoreError::Invalid(format!(
                 "the task's branch {branch} is checked out in {}; switch that checkout to \
@@ -489,9 +526,9 @@ impl Worktrees {
                 elsewhere.display()
             )));
         }
-        if tokio::fs::symlink_metadata(&path).await.is_ok() {
-            // Not a worktree of this task: a leftover folder (or file) in Code-Automata's own
-            // worktrees directory.
+        if leftover {
+            // Not a worktree at all: a leftover folder (or file) in Code-Automata's own worktrees
+            // directory. remove_dir_all does not follow symlinks.
             let meta = tokio::fs::symlink_metadata(&path)
                 .await
                 .map_err(io_at(&path))?;
@@ -502,9 +539,8 @@ impl Worktrees {
             } else {
                 tokio::fs::remove_file(&path).await.map_err(io_at(&path))?;
             }
+            run_git(repo, &["worktree", "prune"]).await?;
         }
-        // A leftover folder just cleared may still be recorded; drop that record too.
-        run_git(repo, &["worktree", "prune"]).await?;
         let base = self.base_path();
         tokio::fs::create_dir_all(&base)
             .await
