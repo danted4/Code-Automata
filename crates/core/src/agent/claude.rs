@@ -1,0 +1,79 @@
+//! Claude Code (`claude -p`).
+//!
+//! `claude -p --output-format stream-json --verbose`, with the prompt on stdin.
+//!
+//! * **Sessions.** We choose the session id (`--session-id <uuid>`), so it is known before the
+//!   process starts; resume is `--resume <id>`.
+//! * **Settings.** Only project settings load (`--setting-sources project`) and no MCP servers
+//!   (`--strict-mcp-config`), so the user's personal hooks, plugins and account connectors stay
+//!   out of task agents. Login is unaffected: it is read from the keychain, not from settings.
+//! * **Read-only.** Built-in tools are cut to `Read,Grep,Glob`.
+//! * **Permissions.** Otherwise `--permission-mode auto`; a task can override it with
+//!   `options.permissionMode`.
+//! * **Structured output.** `--json-schema`; the validated answer arrives as `structured_output`
+//!   on the `result` event.
+//! * **Billing.** `ANTHROPIC_API_KEY` is removed from the environment so runs use the CLI login
+//!   (a subscription), unless the task sets `options.useApiKeyFromEnv`.
+
+use super::{CommandSpec, RunRequest, option_bool, option_str};
+use crate::error::{CoreError, Result};
+use crate::task::Provider;
+use crate::util::uuid_v4;
+
+pub const READ_ONLY_TOOLS: &str = "Read,Grep,Glob";
+
+pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> {
+    let mut args: Vec<String> = [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--setting-sources",
+        "project",
+        "--strict-mcp-config",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    let session_id = match &req.resume {
+        Some(id) => {
+            args.extend(["--resume".into(), id.clone()]);
+            id.clone()
+        }
+        None => {
+            let id = uuid_v4();
+            args.extend(["--session-id".into(), id.clone()]);
+            id
+        }
+    };
+    if let Some(model) = &req.agent.model {
+        args.extend(["--model".into(), model.clone()]);
+    }
+    if let Some(turns) = req.max_turns {
+        args.extend(["--max-turns".into(), turns.to_string()]);
+    }
+    let permission_mode = option_str(&req.agent, "permissionMode").unwrap_or("auto");
+    args.extend(["--permission-mode".into(), permission_mode.to_string()]);
+    if req.read_only {
+        args.extend(["--tools".into(), READ_ONLY_TOOLS.into()]);
+    }
+    if let Some(schema) = &req.json_schema {
+        let text = serde_json::to_string(schema)
+            .map_err(|e| CoreError::Invalid(format!("JSON schema does not serialise: {e}")))?;
+        args.extend(["--json-schema".into(), text]);
+    }
+
+    let mut env_remove = Vec::new();
+    if !option_bool(&req.agent, "useApiKeyFromEnv") {
+        env_remove.push("ANTHROPIC_API_KEY".to_string());
+    }
+    Ok(CommandSpec {
+        program: bins.locate(Provider::Claude)?,
+        args,
+        env_remove,
+        env_set: Vec::new(),
+        stdin: req.prompt.clone(),
+        session_id: Some(session_id),
+    })
+}

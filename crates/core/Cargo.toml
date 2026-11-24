@@ -10,6 +10,11 @@ rust-version.workspace = true
 [lib]
 name = "ca_core"
 
+# Scripted stand-in for an agent CLI, used by tests and dev builds; never shipped.
+[[bin]]
+name = "mock-agent"
+path = "src/bin/mock_agent.rs"
+
 [lints]
 workspace = true
 
@@ -17,7 +22,10 @@ workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["signal", "process"] }
 
 [dev-dependencies]
 tempfile = "3"

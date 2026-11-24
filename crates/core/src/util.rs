@@ -37,6 +37,28 @@ pub(crate) fn random_base36(len: usize) -> String {
     out
 }
 
+/// A random version-4 UUID string, for session ids the caller chooses (Claude's `--session-id`).
+pub fn uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    for chunk in bytes.chunks_mut(8) {
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(unique_u64());
+        hasher.write_i64(now_ms());
+        chunk.copy_from_slice(&hasher.finish().to_le_bytes());
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    let h: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 /// Task ids become file and directory names, so they are restricted to a safe alphabet.
 pub fn validate_task_id(id: &str) -> Result<()> {
     let ok = !id.is_empty()
@@ -71,6 +93,15 @@ mod tests {
         ] {
             assert!(validate_task_id(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn uuid_shape() {
+        let u = uuid_v4();
+        assert_eq!(u.len(), 36);
+        assert_eq!(&u[14..15], "4");
+        assert!(matches!(&u[19..20], "8" | "9" | "a" | "b"));
+        assert_ne!(uuid_v4(), uuid_v4());
     }
 
     #[test]

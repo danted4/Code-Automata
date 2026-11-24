@@ -1,6 +1,7 @@
 //! Code-Automata core: the task store, phase rules and git integration that the Tauri app and its
 //! loopback HTTP server are built on. No UI, HTTP or Tauri dependency lives here.
 
+pub mod agent;
 pub mod error;
 pub mod git;
 pub mod project;

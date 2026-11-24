@@ -1,0 +1,9 @@
+{"type": "system", "subtype": "init", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "model": "Grok 4.6 Medium", "cwd": "/tmp/repo", "permissionMode": "default", "apiKeySource": "login"}
+{"type": "user", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "message": {"role": "user", "content": [{"type": "text", "text": "Do these steps in order, one tool call each: 1) create file one.txt containing the word alpha. 2) run the shell command 'sleep 25'. 3) create file two.txt containing the word beta. 4) reply DONE."}]}}
+{"type": "thinking", "subtype": "delta", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "text": "The"}
+{"type": "thinking", "subtype": "delta", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "text": " user"}
+{"type": "thinking", "subtype": "delta", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "text": " wants"}
+{"type": "thinking", "subtype": "completed", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643"}
+{"type": "assistant", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "message": {"role": "assistant", "content": [{"type": "text", "text": "Creating `one.txt` with the word alpha."}]}, "model_call_id": "259f8770-76d9-4488-8ea9-0cf2269652f4-0-raf8", "timestamp_ms": 1795507578866}
+{"type": "tool_call", "subtype": "started", "call_id": "call-6266f8a7-fd3b-46d3-a575-cb4fcc7581cc-0\nfc_19f5a49f-218f-4afc-916f-87908e34155c_0", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "tool_call": {"editToolCall": {"args": {"path": "/tmp/repo/one.txt"}}}}
+{"type": "tool_call", "subtype": "completed", "call_id": "call-6266f8a7-fd3b-46d3-a575-cb4fcc7581cc-0\nfc_19f5a49f-218f-4afc-916f-87908e34155c_0", "session_id": "697e09e5-e2c9-4d25-b398-7d72049ab643", "tool_call": {"editToolCall": {"args": {"path": "/tmp/repo/one.txt"}}}}
