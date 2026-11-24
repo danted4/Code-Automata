@@ -23,5 +23,9 @@ export default tseslint.config(
       '@typescript-eslint/no-empty-object-type': 'warn',
     },
   },
+  {
+    files: ['e2e/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
   prettier
 );

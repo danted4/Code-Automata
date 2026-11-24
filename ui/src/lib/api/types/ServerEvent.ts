@@ -5,4 +5,4 @@ import type { Task } from "./Task";
 /**
  * One message on the event stream. Each SSE `data:` line is one of these as JSON.
  */
-export type ServerEvent = { "type": "hello" } | { "type": "task", taskId: string, task: Task | null, } | { "type": "reload", taskId: string, } | { "type": "agent", taskId: string, runId: string, event: AgentEvent, } | { "type": "error", taskId: string, message: string, } | { "type": "lagged", missed: number, };
+export type ServerEvent = { "type": "hello" } | { "type": "task", taskId: string, task: Task | null, } | { "type": "reload", taskId: string, } | { "type": "agent", taskId: string, runId: string, seq: number, event: AgentEvent, } | { "type": "error", taskId: string, message: string, } | { "type": "lagged", missed: number, };

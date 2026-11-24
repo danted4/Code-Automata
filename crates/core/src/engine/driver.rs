@@ -740,10 +740,11 @@ async fn execute(
             AgentEvent::Finished { outcome: o } => outcome = Some(o.clone()),
             _ => {}
         }
-        events_log.event(&event).await;
+        let seq = events_log.event(&event).await;
         inner.emit(EngineEvent::Agent {
             task_id: ctx.id.to_string(),
             run_id: ctx.run_id.clone(),
+            seq,
             event,
         });
     }

@@ -11,4 +11,8 @@ export type RunLogLine = { "line": "start", at: number, runId: string, attempt: 
  * `run` for the step itself, `triage` for the check before resuming an interrupted
  * subtask; either with `-repair` for a turn that fixes an unreadable answer.
  */
-label: string, kind: RunKind, subtaskId?: string | null, provider: Provider, } | { "line": "event", at: number, event: AgentEvent, } | { "line": "abandoned", at: number, reason: string, };
+label: string, kind: RunKind, subtaskId?: string | null, provider: Provider, } | { "line": "event", at: number, 
+/**
+ * 1-based position among this log's events; the live event carries the same number.
+ */
+seq: number, event: AgentEvent, } | { "line": "abandoned", at: number, reason: string, };

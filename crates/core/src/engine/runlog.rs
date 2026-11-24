@@ -43,6 +43,9 @@ pub enum RunLogLine {
     Event {
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
         at: i64,
+        /// 1-based position among this log's events; the live event carries the same number.
+        #[cfg_attr(feature = "ts", ts(as = "f64"))]
+        seq: u64,
         event: AgentEvent,
     },
     /// The agent never started. Always the last line.
@@ -81,6 +84,8 @@ pub struct RunLogInfo {
 /// Appends a run's events to its log.
 pub(crate) struct RunLogWriter {
     file: Option<File>,
+    /// Events written so far.
+    seq: u64,
 }
 
 impl RunLogWriter {
@@ -97,17 +102,21 @@ impl RunLogWriter {
                 .await
                 .ok(),
         };
-        let mut writer = RunLogWriter { file };
+        let mut writer = RunLogWriter { file, seq: 0 };
         writer.write(&start).await;
         writer
     }
 
-    pub async fn event(&mut self, event: &AgentEvent) {
+    /// Log the event and return its number, counted even when the file cannot be written.
+    pub async fn event(&mut self, event: &AgentEvent) -> u64 {
+        self.seq += 1;
         let line = RunLogLine::Event {
             at: now_ms(),
+            seq: self.seq,
             event: event.clone(),
         };
         self.write(&line).await;
+        self.seq
     }
 
     /// The agent could not be started: end the log with why.

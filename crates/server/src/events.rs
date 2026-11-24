@@ -34,10 +34,13 @@ pub enum ServerEvent {
     },
     /// The task changed but could not be read just now: fetch it again.
     Reload { task_id: String },
-    /// An agent working on the task did something.
+    /// An agent working on the task did something. `seq` is the event's number in its run log,
+    /// so a client that replayed the log can skip what it already has.
     Agent {
         task_id: String,
         run_id: String,
+        #[cfg_attr(feature = "ts", ts(as = "f64"))]
+        seq: u64,
         event: AgentEvent,
     },
     /// The task's driver stopped on an error with no run to record it on.
@@ -90,10 +93,12 @@ async fn convert(engine: &Engine, event: EngineEvent) -> ServerEvent {
         EngineEvent::Agent {
             task_id,
             run_id,
+            seq,
             event,
         } => ServerEvent::Agent {
             task_id,
             run_id,
+            seq,
             event,
         },
         EngineEvent::Error { task_id, message } => ServerEvent::Error { task_id, message },

@@ -1,0 +1,56 @@
+# The whole app in a browser: the built UI, ca-server and the mock agent, driven by agent-browser.
+name: E2E
+
+on:
+  push:
+    branches: [main, v3-tauri]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'ui/**'
+      - '.github/workflows/e2e.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'ui/**'
+      - '.github/workflows/e2e.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build ca-server and mock-agent
+        run: cargo build --locked --bins
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+      - name: Build the UI
+        working-directory: ui
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+      - name: Install agent-browser and Chrome
+        run: |
+          npm install -g agent-browser@0.39.1
+          agent-browser install --with-deps
+      - name: Run the scenarios
+        working-directory: ui
+        run: yarn e2e
+      - name: Screenshots of failed scenarios
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: ui/e2e/artifacts/
+          if-no-files-found: ignore

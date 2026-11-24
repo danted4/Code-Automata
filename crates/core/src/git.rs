@@ -37,11 +37,37 @@ pub(crate) async fn git_output(
     args: &[&str],
     timeout: Option<Duration>,
 ) -> Result<Output> {
+    let mut attempt = 0;
+    loop {
+        let out = git_output_once(cwd, args, timeout).await?;
+        // Another git process (an editor's git integration, say) holding the index lock for a
+        // moment: wait and try again rather than fail the task's step.
+        if !out.status.success() && attempt < INDEX_LOCK_RETRIES && index_locked(&out.stderr) {
+            attempt += 1;
+            tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
+            continue;
+        }
+        return Ok(out);
+    }
+}
+
+/// About 2 s in all.
+const INDEX_LOCK_RETRIES: u32 = 6;
+
+fn index_locked(stderr: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stderr);
+    text.contains("index.lock") && text.contains("File exists")
+}
+
+async fn git_output_once(cwd: &Path, args: &[&str], timeout: Option<Duration>) -> Result<Output> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
+        // Read-only commands (status, diff) must not refresh and lock the index: that lock would
+        // make a write the engine runs at the same moment fail.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .kill_on_drop(true);
     let run = cmd.output();

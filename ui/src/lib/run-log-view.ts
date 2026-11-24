@@ -16,7 +16,9 @@ import { isWorking } from '@/lib/task-view';
 export type RunRowState =
   | { kind: 'running' }
   | { kind: 'completed' }
-  /** Ended with an outcome other than completed (agent error, timeout, crash, stop). */
+  /** Stopped on purpose: a pause, or the app closing. Not a failure; Resume continues. */
+  | { kind: 'stopped' }
+  /** Ended with an outcome other than completed or stopped (agent error, timeout, crash). */
   | { kind: 'failed'; reason: string }
   /** The agent never started. */
   | { kind: 'not_started'; reason: string }
@@ -73,6 +75,7 @@ export function liveRunName(runs: RunLogInfo[], task: Task | undefined): string 
 
 export function runRowState(info: RunLogInfo, liveName: string | null): RunRowState {
   if (info.outcome) {
+    if (info.outcome.kind === 'stopped') return { kind: 'stopped' };
     const problem = outcomeProblem(info.outcome);
     return problem ? { kind: 'failed', reason: problem } : { kind: 'completed' };
   }
@@ -87,6 +90,8 @@ export function runStateLabel(state: RunRowState): string {
       return 'Running';
     case 'completed':
       return 'Completed';
+    case 'stopped':
+      return 'Stopped';
     case 'failed':
       return state.reason;
     case 'not_started':
@@ -209,16 +214,10 @@ export function logEnded(lines: RunLogLine[]): boolean {
 }
 
 /**
- * Live events that arrived while the log was being replayed, minus those the replay already has.
- * The replay ends somewhere inside the buffered events: drop the longest run of buffered events
- * that matches the end of the replay, keep the rest.
+ * Live events that arrived while the log was being replayed, minus those the replay already has:
+ * the ones numbered after the replay's last event.
  */
-export function unseenLive(lines: RunLogLine[], buffered: AgentEvent[]): AgentEvent[] {
-  const replayed = lines.flatMap((l) => (l.line === 'event' ? [JSON.stringify(l.event)] : []));
-  const live = buffered.map((e) => JSON.stringify(e));
-  for (let k = Math.min(replayed.length, live.length); k > 0; k--) {
-    const tail = replayed.slice(replayed.length - k);
-    if (tail.every((e, i) => e === live[i])) return buffered.slice(k);
-  }
-  return buffered;
+export function unseenLive<T extends { seq: number }>(lines: RunLogLine[], held: T[]): T[] {
+  const last = lines.reduce((max, l) => (l.line === 'event' ? Math.max(max, l.seq) : max), 0);
+  return held.filter((e) => e.seq > last);
 }

@@ -15,7 +15,7 @@ _"Ever since the first MVP was shipped, Code-Automata™ has started modifying i
 ---
 
 > [!IMPORTANT]
-> This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. There is no runnable desktop app on this branch yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
+> This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. The app runs in a browser against the Rust server today; the desktop app (Tauri) and installers are not built yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
 
 ## What it is
 
@@ -39,25 +39,30 @@ Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-co
 | Path | What |
 | --- | --- |
 | `crates/core` | The Rust core (`ca_core`): task store, run engine, agent processes, git and worktrees |
-| `ui/` | The React UI (Vite, React Router, Tailwind) |
+| `crates/server` | The HTTP API and event stream the UI talks to (`ca_server`), and the `ca-server` binary |
+| `ui/` | The React UI (Vite, React Router, Tailwind), with its end-to-end scenarios in `ui/e2e/` |
 | `docs/images/` | Screenshots and logos |
 
-The Tauri shell (`crates/app`) and the HTTP server between the UI and the core are not built yet.
+The Tauri shell (`crates/app`) is not built yet.
 
 ## Development
 
-Requirements: Rust 1.89 or newer, Node 22 and Yarn 1, and Git.
+Requirements: Rust 1.89 or newer, Node 22 and Yarn 1, and Git. Agents: Claude Code, Cursor's `agent` CLI or Amp, logged in.
 
 ```bash
-# Rust core
+# Rust
 cargo test
 cargo clippy --all-targets -- -D warnings
 
-# UI
-cd ui
-yarn install
-yarn dev          # http://localhost:5173 (API calls fail until the HTTP server exists)
-yarn lint && yarn typecheck && yarn test && yarn build
+# Run the app in a browser
+cargo run -p code-automata-server --bin ca-server -- --port 7878 --token dev
+cd ui && yarn install && yarn dev        # http://localhost:5173
+
+# UI checks
+cd ui && yarn lint && yarn typecheck && yarn test && yarn build
+
+# End-to-end scenarios (agent-browser, mock agent)
+cargo build && cd ui && yarn build && yarn e2e
 ```
 
 ## License

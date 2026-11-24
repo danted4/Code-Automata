@@ -8,6 +8,10 @@
  * Responses and events can arrive out of order (a list read before a change can land after the
  * change's event), so the store keeps whichever copy of a task is newest: the server raises
  * `updatedAt` on every write. A task deleted since a list was read is not brought back by it.
+ *
+ * Assumption: the server and this page share a clock (`mergeList` compares a task's `updatedAt`
+ * with `Date.now()` taken before the list request). True for the local server and the desktop
+ * app; a remote server would need the list response to carry the server's read time instead.
  */
 
 import { create } from 'zustand';

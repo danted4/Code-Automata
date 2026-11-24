@@ -12,7 +12,7 @@ import { Loader2 } from 'lucide-react';
 import { api, errorMessage } from '@/lib/api';
 import type { AgentEvent } from '@/lib/api/types/AgentEvent';
 import type { RunLogInfo } from '@/lib/api/types/RunLogInfo';
-import { onAgentEvent } from '@/lib/agent-events';
+import { onAgentEvent, type LiveAgentEvent } from '@/lib/agent-events';
 import {
   eventRow,
   liveRunName,
@@ -38,6 +38,7 @@ function stateColor(state: RunRowState): string {
       return 'var(--color-success)';
     case 'failed':
       return 'var(--color-error)';
+    case 'stopped':
     case 'not_started':
       return 'var(--color-warning)';
     case 'ended':
@@ -205,7 +206,7 @@ function RunEvents({
     let stop: (() => void) | null = null;
     // Follow first and hold what arrives during the replay's round trip; once the replay is in,
     // add only the held events it does not already contain.
-    let held: AgentEvent[] | null = live ? [] : null;
+    let held: LiveAgentEvent[] | null = live ? [] : null;
     let ended = false;
     const show = (event: AgentEvent) => {
       const row = eventRow(event);
@@ -216,7 +217,7 @@ function RunEvents({
         if (ended || e.runId !== runId) return;
         // The same run may write another log next (a repair turn): stop at this one's end.
         if (e.event.type === 'finished') ended = true;
-        if (held) held.push(e.event);
+        if (held) held.push(e);
         else show(e.event);
       });
     }
@@ -232,7 +233,7 @@ function RunEvents({
           ended = true;
           return;
         }
-        unseenLive(lines, pending).forEach(show);
+        unseenLive(lines, pending).forEach((e) => show(e.event));
       })
       .catch((e) => {
         if (!cancelled) setError(errorMessage(e));

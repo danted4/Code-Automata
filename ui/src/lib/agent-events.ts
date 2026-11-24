@@ -5,7 +5,14 @@
 
 import type { AgentEvent } from '@/lib/api/types/AgentEvent';
 
-export type LiveAgentEvent = { taskId: string; runId: string; event: AgentEvent; at: number };
+/** `seq` is the event's number in its run log, as on the replayed log line. */
+export type LiveAgentEvent = {
+  taskId: string;
+  runId: string;
+  seq: number;
+  event: AgentEvent;
+  at: number;
+};
 
 type Listener = (e: LiveAgentEvent) => void;
 

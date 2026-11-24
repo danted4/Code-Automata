@@ -47,9 +47,10 @@ yarn typecheck
 yarn test           # Vitest
 yarn build          # typecheck + vite build into ui/dist
 yarn format         # Prettier
+yarn e2e            # after `cargo build` and `yarn build`: ten agent-browser scenarios
 ```
 
-CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml`. Both fail on any warning.
+CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows), `ui.yml` and `e2e.yml`. They fail on any warning.
 
 ## Invariants
 
@@ -69,7 +70,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml`. Both fai
 
 - Rust: unit tests beside the code; acceptance tests in `crates/core/tests/` run the whole engine on the mock agent. Live tests (`#[ignore]`) make real model calls.
 - UI: Vitest, colocated in `ui/src/**/__tests__`.
-- End-to-end: agent-browser scripts against the UI (from Phase 4). Not Playwright.
+- End-to-end: `ui/e2e/app.e2e.mjs` (Node's test runner) drives Chrome with agent-browser against the built UI, a real `ca-server` and the mock agent; one server and throwaway repository per scenario. Not Playwright. CI: `.github/workflows/e2e.yml`.
 
 ## Style
 

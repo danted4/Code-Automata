@@ -116,7 +116,9 @@ describe('liveRunName and runRowState', () => {
   it('is nothing when the newest log already ended', () => {
     const ended = [info({ name: 'x', outcome: outcome({ kind: 'stopped' }) })];
     expect(liveRunName(ended, task({}))).toBeNull();
-    expect(runRowState(ended[0], null)).toEqual({ kind: 'failed', reason: 'Stopped' });
+    // A pause is not a failure.
+    expect(runRowState(ended[0], null)).toEqual({ kind: 'stopped' });
+    expect(runStateLabel({ kind: 'stopped' })).toBe('Stopped');
     const abandoned = [info({ name: 'y', abandoned: 'agent binary not found' })];
     expect(liveRunName(abandoned, task({}))).toBeNull();
     expect(runStateLabel(runRowState(abandoned[0], null))).toBe(
@@ -189,10 +191,10 @@ describe('eventRow and logRows', () => {
         kind: 'dev',
         provider: 'claude',
       },
-      { line: 'event', at: 1, event: { type: 'session', id: 's' } },
-      { line: 'event', at: 2, event: { type: 'text', text: 'Hello' } },
-      { line: 'event', at: 3, event: { type: 'thinking', text: 'Hmm' } },
-      { line: 'event', at: 4, event: { type: 'stderr', line: 'warn' } },
+      { line: 'event', at: 1, seq: 1, event: { type: 'session', id: 's' } },
+      { line: 'event', at: 2, seq: 2, event: { type: 'text', text: 'Hello' } },
+      { line: 'event', at: 3, seq: 3, event: { type: 'thinking', text: 'Hmm' } },
+      { line: 'event', at: 4, seq: 4, event: { type: 'stderr', line: 'warn' } },
     ];
     expect(logRows(lines)).toEqual([
       { type: 'text', text: 'Hello' },
@@ -208,16 +210,26 @@ describe('eventRow and logRows', () => {
 
 describe('unseenLive', () => {
   const text = (t: string) => ({ type: 'text' as const, text: t });
-  const line = (t: string): RunLogLine => ({ line: 'event', at: 0, event: text(t) });
+  const line = (seq: number, t: string): RunLogLine => ({
+    line: 'event',
+    at: 0,
+    seq,
+    event: text(t),
+  });
+  const live = (seq: number, t: string) => ({ seq, event: text(t) });
 
-  it('drops buffered events the replay already has', () => {
-    const lines = [line('a'), line('b'), line('c')];
-    expect(unseenLive(lines, [text('b'), text('c'), text('d')])).toEqual([text('d')]);
-    expect(unseenLive(lines, [text('c')])).toEqual([]);
+  it('keeps only events numbered after the replay', () => {
+    const lines = [line(1, 'a'), line(2, 'b'), line(3, 'c')];
+    expect(unseenLive(lines, [live(2, 'b'), live(3, 'c'), live(4, 'd')])).toEqual([live(4, 'd')]);
+    expect(unseenLive(lines, [live(3, 'c')])).toEqual([]);
   });
 
-  it('keeps everything when the replay ended before the buffer began', () => {
-    expect(unseenLive([line('a')], [text('b'), text('c')])).toEqual([text('b'), text('c')]);
-    expect(unseenLive([], [text('x')])).toEqual([text('x')]);
+  it('keeps a new event that looks exactly like the last replayed one', () => {
+    const lines = [line(1, 'same')];
+    expect(unseenLive(lines, [live(2, 'same')])).toEqual([live(2, 'same')]);
+  });
+
+  it('keeps everything when nothing was replayed', () => {
+    expect(unseenLive([], [live(1, 'x')])).toEqual([live(1, 'x')]);
   });
 });

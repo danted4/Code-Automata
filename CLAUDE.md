@@ -60,3 +60,10 @@ cd ui && yarn vitest run -t "name of the test"                            # by t
 - Task dialogs are opened through `store/task-view-store.ts` and rendered once by the board (`kanban/task-dialogs.tsx`), not inside the card: a card is recreated when its task changes column, which would close a dialog it held.
 - Dragging only moves (`POST /api/tasks/:id/move`); nothing starts an agent but a button.
 - To try the UI by hand: run `ca-server --allow-mock --mock-scenario <file>` on a scratch repository and `yarn dev`; a mock task created in the dialog plays that scenario (see `crates/core/src/bin/mock_agent.rs` for the step format).
+
+## End-to-end (`ui/e2e/`)
+
+- `harness.mjs` starts `vite preview` once and a fresh `ca-server --allow-mock --mock-scenario <file>` per scenario on port 7878, each with a new repository; `rules(devs, extra)` builds the mock scenario (put `extra` rules first to fail, hang or slow one step; `once()` plays a rule only the first time).
+- Drive the page through `data-testid`s and DOM clicks (`click`, `cardAction`): agent-browser's pointer clicks can land on a card that is moving between columns. Never trigger a browser dialog (`confirm`, `alert`); confirmations are inline.
+- A failed scenario leaves a screenshot in `ui/e2e/artifacts/` (CI uploads it).
+- Git runs with `GIT_OPTIONAL_LOCKS=0` and retries a write that hit a held `index.lock`: the e2e suite found the UI's worktree status reads colliding with the engine's resets.

@@ -50,6 +50,8 @@ pub enum EngineEvent {
     Agent {
         task_id: String,
         run_id: String,
+        /// The event's number in its run log (1-based), the same as the log line's `seq`.
+        seq: u64,
         event: AgentEvent,
     },
     /// The task's driver stopped on an error that has no run to record it on (for example an

@@ -551,3 +551,26 @@ async fn a_task_worktree_cannot_be_opened_as_a_project() {
     let err = ProjectDir::open(info.path.join(".")).await.unwrap_err();
     assert!(err.to_string().contains("task worktree"), "{err}");
 }
+
+/// Another git process (an editor polling `git status`, say) can hold the index lock for a
+/// moment. A write the engine runs meanwhile waits for it instead of failing the task.
+#[tokio::test]
+async fn a_write_waits_out_a_briefly_held_index_lock() {
+    let repo = TempRepo::new();
+    std::fs::write(repo.path.join("README.md"), "changed\n").unwrap();
+    let lock = repo.path.join(".git").join("index.lock");
+    std::fs::write(&lock, "").unwrap();
+    let release = {
+        let lock = lock.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            std::fs::remove_file(lock).unwrap();
+        })
+    };
+    ca_core::git::discard_changes(&repo.path).await.unwrap();
+    release.await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.path.join("README.md")).unwrap(),
+        "# test\n"
+    );
+}

@@ -14,7 +14,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "node --test --test-concurrency=1 --test-timeout=240000 e2e/app.e2e.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

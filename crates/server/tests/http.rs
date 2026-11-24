@@ -427,6 +427,12 @@ async fn a_task_runs_from_creation_to_human_review_and_its_runs_replay() {
     let lines = lines.as_array().unwrap();
     assert_eq!(lines[0]["line"], "start");
     assert_eq!(lines[0]["subtaskId"], "dev-1");
+    // Events are numbered 1, 2, ... in their log; live events carry the same numbers.
+    let seqs: Vec<u64> = lines[1..]
+        .iter()
+        .map(|l| l["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
     let last = lines.last().unwrap();
     assert_eq!(last["line"], "event");
     assert_eq!(last["event"]["type"], "finished");
@@ -711,6 +717,7 @@ async fn the_event_stream_says_hello_then_carries_task_changes_and_agent_output(
                     saw_review |= m["task"]["phase"] == "human_review";
                 }
                 Some("agent") => {
+                    assert!(m["seq"].as_u64().is_some_and(|n| n >= 1), "{m}");
                     saw_agent |= m["event"]["type"] == "text" || m["event"]["type"] == "finished"
                 }
                 _ => {}
