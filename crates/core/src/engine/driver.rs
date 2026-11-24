@@ -267,6 +267,10 @@ struct Ctx<'a> {
     /// Store the agent's session id on the run (false for side runs such as triage, whose
     /// conversation must never be resumed as the dev subtask's).
     record_session: bool,
+    /// Names this context's run logs: `run` for the step itself, `triage` for the check before a
+    /// resume. A repair turn adds `-repair`. Side runs share the step's run id, so the label is
+    /// what keeps their logs apart.
+    log_label: &'static str,
 }
 
 /// Run one agent step to its written result. `Ok(false)` means the task stopped (halted or
@@ -316,6 +320,7 @@ async fn run_agent(
         control,
         access,
         record_session: true,
+        log_label: "run",
     };
     let task = inner
         .update(id, |t| {
@@ -531,6 +536,7 @@ async fn triage(
         control: ctx.control,
         access: Access::Review,
         record_session: false,
+        log_label: "triage",
     };
     let wt = ctx.inner.worktrees.path_for(ctx.id)?;
     git::park_changes(&wt).await?;
@@ -553,7 +559,7 @@ async fn attempt<T: AgentOutput>(
     let caps = agent::capabilities(task.agent.provider);
     let schema = caps.structured_output.then(T::schema);
     let resumed = session.is_some();
-    let outcome = execute(ctx, task, prompt, session, schema.clone(), "run").await?;
+    let outcome = execute(ctx, task, prompt, session, schema.clone(), ctx.log_label).await?;
     if resumed
         && ctx.record_session
         && matches!(
@@ -580,7 +586,7 @@ async fn attempt<T: AgentOutput>(
         prompts::repair::<T>(&error),
         session,
         schema,
-        "repair",
+        &format!("{}-repair", ctx.log_label),
     )
     .await?;
     if !handle_stop(ctx, &repaired).await? {
@@ -690,7 +696,13 @@ async fn execute(
         },
     )
     .await;
-    let mut agent = agent::start(req, &inner.bins).await?;
+    let mut agent = match agent::start(req, &inner.bins).await {
+        Ok(agent) => agent,
+        Err(e) => {
+            events_log.abandon(&e.to_string()).await;
+            return Err(e);
+        }
+    };
     *ctx.control
         .stopper
         .lock()

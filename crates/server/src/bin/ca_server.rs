@@ -5,7 +5,7 @@
 //! ```
 //!
 //! Prints `listening on http://127.0.0.1:<port>` and `token <token>`, one per line, once it
-//! accepts connections. Ctrl-C stops it; running tasks are left `interrupted`.
+//! accepts connections. Ctrl-C (or SIGTERM on Unix) stops it; running tasks are left `interrupted`.
 //!
 //! With `--allow-mock`, the mock agent is offered. It is found through `CODE_AUTOMATA_MOCK_AGENT`,
 //! else next to this binary (`cargo build` puts `mock-agent` there).
@@ -109,9 +109,30 @@ async fn run(args: Args) -> Result<(), String> {
 
     println!("listening on http://127.0.0.1:{port}");
     println!("token {token}");
-    serve(listener, state, async {
+    serve(listener, state, stop_signal())
+        .await
+        .map_err(|e| format!("server error: {e}"))
+}
+
+/// Ctrl-C, or SIGTERM on Unix (what `kill` and process managers send).
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
         let _ = tokio::signal::ctrl_c().await;
-    })
-    .await
-    .map_err(|e| format!("server error: {e}"))
+    }
 }

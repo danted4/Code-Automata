@@ -7,7 +7,7 @@ use axum::http::request::Parts;
 use ca_core::ProjectDir;
 use ca_core::agent::Binaries;
 use ca_core::engine::Engine;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, OnceCell, watch};
 
 use crate::error::ApiError;
 
@@ -26,10 +26,9 @@ pub struct Config {
 
 pub struct AppState {
     pub(crate) config: Config,
-    /// Open engines by repository root.
-    engines: Mutex<HashMap<PathBuf, Arc<Engine>>>,
-    /// The path a request named, to the repository root it opened (saves a `git` call per request).
-    roots: Mutex<HashMap<PathBuf, PathBuf>>,
+    /// Engines by repository root. Each slot opens once; the map lock is held only to find the
+    /// slot, so opening one project never holds up requests for another.
+    engines: Mutex<HashMap<PathBuf, Arc<OnceCell<Arc<Engine>>>>>,
     closing: watch::Sender<bool>,
 }
 
@@ -38,12 +37,15 @@ impl AppState {
         Arc::new(AppState {
             config,
             engines: Mutex::new(HashMap::new()),
-            roots: Mutex::new(HashMap::new()),
             closing: watch::channel(false).0,
         })
     }
 
     /// The engine for the repository at or above `path`, opening it on first use.
+    ///
+    /// A request that names a repository root already open (what the UI sends once a project is
+    /// open) costs one map lookup. Any other path is resolved with `git` every time, so a
+    /// repository created later inside a folder is seen at once.
     pub async fn engine(&self, path: &Path) -> Result<Arc<Engine>, ApiError> {
         if *self.closing.borrow() {
             return Err(ApiError::new(
@@ -52,28 +54,43 @@ impl AppState {
                 "the app is closing",
             ));
         }
-        let known_root = self.roots.lock().await.get(path).cloned();
-        let root = match known_root {
-            Some(root) => root,
-            None => {
-                let project = ProjectDir::open(path).await?;
-                let root = project.root().to_path_buf();
-                self.roots
-                    .lock()
-                    .await
-                    .insert(path.to_path_buf(), root.clone());
-                root
-            }
-        };
-        // Held across the open, so two first requests for one project cannot both open it.
-        let mut engines = self.engines.lock().await;
-        if let Some(engine) = engines.get(&root) {
-            return Ok(engine.clone());
+        if !path.is_absolute() {
+            return Err(ApiError::bad_request("the project path must be absolute"));
         }
-        let project = ProjectDir::open(&root).await?;
-        let engine = Arc::new(Engine::open(project, self.config.bins.clone()).await?);
-        engines.insert(root, engine.clone());
-        Ok(engine)
+        let open = self
+            .engines
+            .lock()
+            .await
+            .get(path)
+            .and_then(|slot| slot.get().cloned());
+        if let Some(engine) = open {
+            return Ok(engine);
+        }
+        let project = ProjectDir::open(path).await?;
+        let root = project.root().to_path_buf();
+        let slot = self
+            .engines
+            .lock()
+            .await
+            .entry(root)
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone();
+        // Two first requests for one project: one opens it, the other waits for that. A failed
+        // open leaves the slot empty for the next request to try again.
+        let bins = self.config.bins.clone();
+        let engine = slot
+            .get_or_try_init(|| async move { Engine::open(project, bins).await.map(Arc::new) })
+            .await?;
+        if *self.closing.borrow() {
+            // Opened while the server began to close, after shutdown_engines took its list.
+            engine.shutdown().await;
+            return Err(ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "closing",
+                "the app is closing",
+            ));
+        }
+        Ok(engine.clone())
     }
 
     /// Fires once the server starts shutting down.
@@ -89,7 +106,13 @@ impl AppState {
     /// Stop every engine; running tasks become `interrupted`.
     pub async fn shutdown_engines(&self) {
         self.begin_shutdown();
-        let engines: Vec<Arc<Engine>> = self.engines.lock().await.values().cloned().collect();
+        let engines: Vec<Arc<Engine>> = self
+            .engines
+            .lock()
+            .await
+            .values()
+            .filter_map(|slot| slot.get().cloned())
+            .collect();
         for engine in engines {
             engine.shutdown().await;
         }

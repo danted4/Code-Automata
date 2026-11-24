@@ -32,7 +32,8 @@ pub enum RunLogLine {
         at: i64,
         run_id: String,
         attempt: u32,
-        /// `run` for the step itself, `repair` for a turn that fixes unparseable output.
+        /// `run` for the step itself, `triage` for the check before resuming an interrupted
+        /// subtask; either with `-repair` for a turn that fixes an unreadable answer.
         label: String,
         kind: RunKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,6 +44,12 @@ pub enum RunLogLine {
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
         at: i64,
         event: AgentEvent,
+    },
+    /// The agent never started. Always the last line.
+    Abandoned {
+        #[cfg_attr(feature = "ts", ts(as = "f64"))]
+        at: i64,
+        reason: String,
     },
 }
 
@@ -62,9 +69,13 @@ pub struct RunLogInfo {
     pub provider: Provider,
     #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub started_at: i64,
-    /// Present once the run has finished.
+    /// How the agent's run ended. Absent while it runs, and also when the log stops without an
+    /// ending because the app quit or crashed mid-run; the task's `run` tells the two apart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<crate::agent::Outcome>,
+    /// Why the agent never started, when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandoned: Option<String>,
 }
 
 /// Appends a run's events to its log.
@@ -95,6 +106,15 @@ impl RunLogWriter {
         let line = RunLogLine::Event {
             at: now_ms(),
             event: event.clone(),
+        };
+        self.write(&line).await;
+    }
+
+    /// The agent could not be started: end the log with why.
+    pub async fn abandon(&mut self, reason: &str) {
+        let line = RunLogLine::Abandoned {
+            at: now_ms(),
+            reason: reason.to_string(),
         };
         self.write(&line).await;
     }
@@ -167,6 +187,10 @@ async fn summarize(path: &Path, name: &str) -> Result<Option<RunLogInfo>> {
         } => Some(outcome.clone()),
         _ => None,
     });
+    let abandoned = lines.iter().rev().find_map(|l| match l {
+        RunLogLine::Abandoned { reason, .. } => Some(reason.clone()),
+        _ => None,
+    });
     Ok(Some(RunLogInfo {
         name: name.to_string(),
         run_id,
@@ -177,6 +201,7 @@ async fn summarize(path: &Path, name: &str) -> Result<Option<RunLogInfo>> {
         provider,
         started_at: at,
         outcome,
+        abandoned,
     }))
 }
 

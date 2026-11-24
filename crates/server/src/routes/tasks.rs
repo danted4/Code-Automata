@@ -41,17 +41,16 @@ pub async fn create(
     Body(req): Body<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     check_provider(&state, req.agent.provider)?;
-    let task = engine
-        .create_task(
-            &req.title,
-            &req.description,
-            req.agent,
-            req.require_plan_approval,
-        )
-        .await?;
-    if req.start {
-        engine.start(&task.id).await?;
-    }
+    let (title, description, approval) = (&req.title, &req.description, req.require_plan_approval);
+    let task = if req.start {
+        engine
+            .create_and_start(title, description, req.agent, approval)
+            .await?
+    } else {
+        engine
+            .create_task(title, description, req.agent, approval)
+            .await?
+    };
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -76,8 +75,11 @@ pub async fn delete(
     Project(engine): Project,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if engine.get_task(&id).await?.is_none() {
-        return Err(ApiError::not_found(format!("task {id} not found")));
+    // A task file that cannot be read can still be deleted; only a missing one is a 404.
+    match engine.get_task(&id).await {
+        Ok(None) => return Err(ApiError::not_found(format!("task {id} not found"))),
+        Err(e @ ca_core::CoreError::InvalidTaskId(_)) => return Err(e.into()),
+        Ok(Some(_)) | Err(_) => {}
     }
     engine.delete_task(&id).await?;
     Ok(StatusCode::NO_CONTENT)

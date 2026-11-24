@@ -27,11 +27,13 @@ pub enum ServerEvent {
     /// First message of every stream, a reconnect included: load the task list now, since
     /// anything before it was missed.
     Hello,
-    /// The task changed. `task` is its new state, or absent when it was deleted.
+    /// The task changed. `task` is its new state, or null when the task was deleted.
     Task {
         task_id: String,
         task: Option<Box<Task>>,
     },
+    /// The task changed but could not be read just now: fetch it again.
+    Reload { task_id: String },
     /// An agent working on the task did something.
     Agent {
         task_id: String,
@@ -55,7 +57,7 @@ pub async fn stream(
     let mut engine_events = engine.subscribe();
     let mut closing = state.closing();
     tokio::spawn(async move {
-        if !send(&tx, &ServerEvent::Hello).await {
+        if !send(&tx, &mut closing, &ServerEvent::Hello).await {
             return;
         }
         loop {
@@ -68,8 +70,8 @@ pub async fn stream(
                 Err(RecvError::Lagged(missed)) => ServerEvent::Lagged { missed },
                 Err(RecvError::Closed) => return,
             };
-            if !send(&tx, &message).await {
-                return; // the client went away
+            if !send(&tx, &mut closing, &message).await {
+                return; // the client went away, or the server is closing
             }
         }
     });
@@ -78,12 +80,13 @@ pub async fn stream(
 
 async fn convert(engine: &Engine, event: EngineEvent) -> ServerEvent {
     match event {
-        EngineEvent::TaskChanged { task_id } => {
-            // A task that cannot be read right now is reported as changed with no state; the
-            // client reloads it.
-            let task = engine.get_task(&task_id).await.ok().flatten().map(Box::new);
-            ServerEvent::Task { task_id, task }
-        }
+        EngineEvent::TaskChanged { task_id } => match engine.get_task(&task_id).await {
+            Ok(task) => ServerEvent::Task {
+                task_id,
+                task: task.map(Box::new),
+            },
+            Err(_) => ServerEvent::Reload { task_id },
+        },
         EngineEvent::Agent {
             task_id,
             run_id,
@@ -97,10 +100,18 @@ async fn convert(engine: &Engine, event: EngineEvent) -> ServerEvent {
     }
 }
 
-/// False when the client is gone.
-async fn send(tx: &mpsc::Sender<Result<Event, Infallible>>, message: &ServerEvent) -> bool {
+/// False when the client is gone or the server is closing. A client that stops reading fills
+/// the channel; the send then waits, so it also gives way to shutdown.
+async fn send(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    closing: &mut tokio::sync::watch::Receiver<bool>,
+    message: &ServerEvent,
+) -> bool {
     let event = Event::default()
         .json_data(message)
         .unwrap_or_else(|_| Event::default().data("{}"));
-    tx.send(Ok(event)).await.is_ok()
+    tokio::select! {
+        sent = tx.send(Ok(event)) => sent.is_ok(),
+        _ = closing.wait_for(|c| *c) => false,
+    }
 }

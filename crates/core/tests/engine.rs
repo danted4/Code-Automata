@@ -877,6 +877,33 @@ async fn paused_with_partial_work(env: &Env, verdict: &str) -> (Engine, String) 
     (engine, task.id)
 }
 
+/// Triage shares the resumed step's run id and attempt; its log must still be its own, so the
+/// run list shows each agent run with its own start and outcome.
+#[tokio::test(flavor = "multi_thread")]
+async fn triage_logs_apart_from_the_resumed_dev_run() {
+    let env = Env::new().await;
+    let (engine, id) = paused_with_partial_work(&env, "partial").await;
+    let runs = engine.run_logs(&id).await.unwrap();
+    let triage: Vec<_> = runs.iter().filter(|r| r.label == "triage").collect();
+    assert_eq!(triage.len(), 1, "{runs:?}");
+    assert_eq!(triage[0].subtask_id.as_deref(), Some("dev-1"));
+    let resumed = runs
+        .iter()
+        .find(|r| {
+            r.label == "run" && r.run_id == triage[0].run_id && r.attempt == triage[0].attempt
+        })
+        .expect("the resumed dev run has its own log");
+    assert_ne!(resumed.name, triage[0].name);
+    for run in &runs {
+        let lines = engine.run_log(&id, &run.name).await.unwrap();
+        let starts = lines
+            .iter()
+            .filter(|l| matches!(l, ca_core::engine::runlog::RunLogLine::Start { .. }))
+            .count();
+        assert_eq!(starts, 1, "{}: {lines:?}", run.name);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn triage_done_checkpoints_the_partial_work_and_moves_on() {
     let env = Env::new().await;

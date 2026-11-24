@@ -254,11 +254,16 @@ impl Engine {
         runlog::read(&self.inner.store.task_dir(id)?.join("runs"), name).await
     }
 
-    /// Every worktree under `.code-automata/worktrees/`, with its task's title, or none for an
-    /// orphan whose task is gone.
+    /// Every worktree under `.code-automata/worktrees/`, with its task's title. A worktree whose
+    /// task file exists but cannot be read is not an orphan.
     pub async fn worktrees(&self) -> Result<Vec<WorktreeEntry>> {
         let list = self.inner.worktrees.list().await?;
         let tasks = self.inner.store.list().await?;
+        let unreadable: Vec<String> = tasks
+            .skipped
+            .iter()
+            .filter_map(|s| s.path.parent()?.file_name()?.to_str().map(String::from))
+            .collect();
         Ok(list
             .into_iter()
             .map(|worktree| {
@@ -267,21 +272,35 @@ impl Engine {
                     .iter()
                     .find(|t| t.id == worktree.task_id)
                     .map(|t| t.title.clone());
+                let orphan = task_title.is_none() && !unreadable.contains(&worktree.task_id);
                 WorktreeEntry {
                     worktree,
                     task_title,
+                    orphan,
                 }
             })
             .collect())
     }
 
-    /// Remove an orphaned worktree (its task is gone) and its local branch. A task's own worktree
-    /// goes only with the task, through [`Engine::delete_task`].
+    /// Remove an orphaned worktree (its task is gone) and its local branch. A task's own worktree,
+    /// readable or not, goes only with the task, through [`Engine::delete_task`].
     pub async fn delete_orphan_worktree(&self, task_id: &str) -> Result<crate::git::DeleteReport> {
-        if self.inner.store.load(task_id).await?.is_some() {
-            return Err(CoreError::Invalid(format!(
-                "task {task_id} uses this worktree; delete the task instead"
-            )));
+        match self.inner.store.load(task_id).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return Err(CoreError::Invalid(format!(
+                    "task {task_id} uses this worktree; delete the task instead"
+                )));
+            }
+            Err(CoreError::InvalidTaskId(id)) => return Err(CoreError::InvalidTaskId(id)),
+            Err(e) => {
+                return Err(CoreError::Invalid(format!(
+                    "task {task_id} uses this worktree but cannot be read ({e}); delete the task instead"
+                )));
+            }
+        }
+        if !self.inner.worktrees.status(task_id).await?.exists {
+            return Err(CoreError::NotFound(format!("worktree {task_id}")));
         }
         self.inner
             .worktrees
@@ -336,6 +355,22 @@ impl Engine {
         self.inner.emit(EngineEvent::TaskChanged {
             task_id: task.id.clone(),
         });
+        Ok(task)
+    }
+
+    /// Create a task and start its planning at once. Returns the task as created.
+    pub async fn create_and_start(
+        &self,
+        title: &str,
+        description: &str,
+        agent: AgentConfig,
+        require_plan_approval: bool,
+    ) -> Result<Task> {
+        let task = self
+            .create_task(title, description, agent, require_plan_approval)
+            .await?;
+        // A new task has no run to resume, so starting it cannot be refused.
+        self.spawn_driver(&task.id);
         Ok(task)
     }
 
@@ -712,8 +747,10 @@ pub struct WorktreeEntry {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
     pub worktree: crate::git::WorktreeInfo,
-    /// The task's title; none when the task is gone (an orphan).
+    /// The task's title; none when the task is gone or cannot be read.
     pub task_title: Option<String>,
+    /// No task file at all: the worktree can be deleted on its own.
+    pub orphan: bool,
 }
 
 /// How long a command waits for a driver that is between steps or on its way out.

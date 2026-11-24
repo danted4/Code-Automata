@@ -5,9 +5,13 @@
  */
 export type WorktreeEntry = { 
 /**
- * The task's title; none when the task is gone (an orphan).
+ * The task's title; none when the task is gone or cannot be read.
  */
-taskTitle: string | null, taskId: string, path: string, 
+taskTitle: string | null, 
+/**
+ * No task file at all: the worktree can be deleted on its own.
+ */
+orphan: boolean, taskId: string, path: string, 
 /**
  * `None` for a worktree on a detached HEAD.
  */

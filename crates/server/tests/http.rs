@@ -90,11 +90,18 @@ struct Harness {
 
 impl Harness {
     fn new(allow_mock: bool) -> Harness {
+        Self::with_bins(
+            allow_mock,
+            Binaries::from_env().with_override(Provider::Mock, mock_agent()),
+        )
+    }
+
+    fn with_bins(allow_mock: bool, bins: Binaries) -> Harness {
         let state = AppState::new(Config {
             token: TOKEN.into(),
             port: PORT,
             allow_mock,
-            bins: Binaries::from_env().with_override(Provider::Mock, mock_agent()),
+            bins,
         });
         Harness {
             app: ca_server::router(state.clone()),
@@ -847,4 +854,191 @@ async fn stopping_the_server_leaves_running_tasks_interrupted() {
 
     let (status, body) = h.call("GET", "/api/tasks", &repo.path, None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relative_project_path_is_refused() {
+    let h = Harness::new(true);
+    let (status, body) = h
+        .call("GET", "/api/tasks", Path::new("some/relative/dir"), None)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_never_starts_ends_its_log_with_why() {
+    let h = Harness::with_bins(
+        true,
+        Binaries::from_env().with_override(Provider::Claude, "/nonexistent/claude-cli"),
+    );
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    let id = h
+        .create(p, "No CLI", json!({ "provider": "claude" }), false)
+        .await;
+    let task = h
+        .wait_for(p, &id, "a failed run", |t| run_state(t) == Some("failed"))
+        .await;
+    assert!(task["run"]["error"].is_string(), "{task}");
+    let runs = h.ok("GET", &format!("/api/tasks/{id}/runs"), p, None).await;
+    let runs = runs.as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0]["outcome"].is_null());
+    assert!(
+        runs[0]["abandoned"].as_str().is_some_and(|r| !r.is_empty()),
+        "{runs:?}"
+    );
+    let name = runs[0]["name"].as_str().unwrap();
+    let lines = h
+        .ok("GET", &format!("/api/tasks/{id}/runs/{name}"), p, None)
+        .await;
+    assert_eq!(
+        lines.as_array().unwrap().last().unwrap()["line"],
+        "abandoned"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_task_keeps_its_worktree_and_can_still_be_deleted() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    let id = h.create(p, "Soon broken", h.agent(1, vec![]), false).await;
+    h.wait_for(p, &id, "human review", |t| {
+        phase(t) == "human_review" && t["run"].is_null()
+    })
+    .await;
+
+    let (status, _) = h
+        .call("DELETE", "/api/worktrees/no-such-worktree", p, None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let file = p
+        .join(".code-automata")
+        .join("tasks")
+        .join(&id)
+        .join("task.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let list = h.ok("GET", "/api/worktrees", p, None).await;
+    let entry = &list.as_array().unwrap()[0];
+    assert_eq!(entry["taskId"], json!(id));
+    assert_eq!(entry["orphan"], false, "{entry}");
+    let (status, body) = h
+        .call("DELETE", &format!("/api/worktrees/{id}"), p, None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let tasks = h.ok("GET", "/api/tasks", p, None).await;
+    assert_eq!(tasks["skipped"].as_array().unwrap().len(), 1);
+    let (status, body) = h.call("DELETE", &format!("/api/tasks/{id}"), p, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert!(!file.exists());
+    let list = h.ok("GET", "/api/worktrees", p, None).await;
+    assert_eq!(list, json!([]));
+}
+
+/// One request to a running `ca-server` over plain HTTP/1.1.
+#[cfg(unix)]
+fn raw_http(
+    port: u16,
+    method: &str,
+    path: &str,
+    project: &Path,
+    body: Option<Value>,
+) -> (u16, Value) {
+    use std::io::{Read, Write};
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let project = percent_encoding::utf8_percent_encode(
+        project.to_str().unwrap(),
+        percent_encoding::NON_ALPHANUMERIC,
+    );
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {TOKEN}\r\n\
+         X-Project-Path: {project}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let status = response[9..12].parse().unwrap();
+    let json = response
+        .split_once("\r\n\r\n")
+        .and_then(|(_, b)| serde_json::from_str(b).ok())
+        .unwrap_or(Value::Null);
+    (status, json)
+}
+
+/// SIGTERM, as a process manager sends it, stops the server the same way Ctrl-C does: engines
+/// shut down, runs are left interrupted and the agent is gone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigterm_stops_the_server_and_leaves_runs_interrupted() {
+    use std::io::BufRead;
+    let h = Harness::new(true); // only for its scenario helpers
+    let repo = Repo::new().await;
+    let hang =
+        json!({ "whenPrompt": "(dev-1)", "steps": [{ "text": "working" }, { "hang": true }] });
+    let agent = h.agent(1, vec![hang]);
+
+    let mut server = std::process::Command::new(env!("CARGO_BIN_EXE_ca-server"))
+        .args(["--port", "0", "--token", TOKEN, "--allow-mock"])
+        .env("CODE_AUTOMATA_MOCK_AGENT", mock_agent())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    std::io::BufReader::new(server.stdout.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    let port: u16 = first.trim().rsplit(':').next().unwrap().parse().unwrap();
+
+    let p = repo.path.clone();
+    let (status, task) = raw_http(
+        port,
+        "POST",
+        "/api/tasks",
+        &p,
+        Some(json!({ "title": "Term", "agent": agent })),
+    );
+    assert_eq!(status, 201, "{task}");
+    let id = task["id"].as_str().unwrap().to_string();
+    let mut agent_pid = None;
+    for _ in 0..400 {
+        let (_, t) = raw_http(port, "GET", &format!("/api/tasks/{id}"), &p, None);
+        if t["run"]["subtaskId"] == "dev-1" && t["run"]["pid"].is_number() {
+            agent_pid = t["run"]["pid"].as_u64();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let agent_pid = agent_pid.expect("dev-1 never started");
+
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &server.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let exit = tokio::task::spawn_blocking(move || server.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(exit.success(), "{exit:?}");
+
+    let task = ca_core::TaskStore::new(&ProjectDir::open(&p).await.unwrap())
+        .load(&id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.run.unwrap().state, ca_core::RunState::Interrupted);
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &agent_pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "the agent outlived the server");
 }

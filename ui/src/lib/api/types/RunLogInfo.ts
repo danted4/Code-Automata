@@ -12,6 +12,11 @@ export type RunLogInfo = {
  */
 name: string, runId: string, attempt: number, label: string, kind: RunKind, subtaskId?: string | null, provider: Provider, startedAt: number, 
 /**
- * Present once the run has finished.
+ * How the agent's run ended. Absent while it runs, and also when the log stops without an
+ * ending because the app quit or crashed mid-run; the task's `run` tells the two apart.
  */
-outcome?: Outcome | null, };
+outcome?: Outcome | null, 
+/**
+ * Why the agent never started, when it did not.
+ */
+abandoned?: string | null, };
