@@ -9,6 +9,7 @@ on:
       - 'Cargo.lock'
       - 'crates/**'
       - 'ui/src/lib/api/types/**'
+      - 'ui/package.json'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
@@ -43,6 +44,15 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked --no-fail-fast
+      - name: Versions agree (Cargo.toml and ui/package.json)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo_v="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          ui_v="$(node -p 'require("./ui/package.json").version')"
+          if [ "$cargo_v" != "$ui_v" ]; then
+            echo "::error::Cargo.toml says $cargo_v, ui/package.json says $ui_v"
+            exit 1
+          fi
       # The UI's TypeScript types are generated from the Rust types and committed; they must match.
       - name: TypeScript bindings are current
         if: matrix.os == 'ubuntu-latest'

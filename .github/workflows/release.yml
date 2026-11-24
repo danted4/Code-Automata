@@ -1,0 +1,284 @@
+# Build the desktop app's installers and publish them as a DRAFT release.
+#
+# * Push a tag `vX.Y.Z` matching the workspace version (Cargo.toml) and ui/package.json, or run
+#   the workflow by hand with that tag. The draft is published by hand after checking it.
+# * Run by hand without a tag: a dry run. Everything is built, signed when the updater key is
+#   set, and uploaded as workflow artifacts (installers, latest.json, checksums); no release.
+#
+# Installers: one universal macOS DMG (plus the .app.tar.gz the updater uses), a per-user NSIS
+# installer for Windows, an AppImage and a deb for Linux (built on Ubuntu 22.04 for its older
+# glibc). Nothing is code-signed; updates are signed with TAURI_SIGNING_PRIVATE_KEY and checked
+# against the public key in crates/app/tauri.conf.json.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v3.0.0). Leave empty for a dry run (artifacts only).'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      ref: ${{ steps.v.outputs.ref }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - name: Which tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag && format('refs/tags/{0}', steps.tag.outputs.tag) || github.ref }}
+      - name: Versions agree
+        id: v
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, tomllib
+          cargo = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          ui = json.load(open("ui/package.json"))["version"]
+          tag = os.environ["TAG"]
+          errors = []
+          if cargo != ui:
+              errors.append(f"Cargo.toml says {cargo}, ui/package.json says {ui}")
+          if tag and tag != f"v{cargo}":
+              errors.append(f"tag {tag} does not match the version {cargo}")
+          for e in errors:
+              print(f"::error::{e}")
+          if errors:
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"version={cargo}\n")
+              out.write(f"tag={tag}\n")
+              out.write(f"release={'true' if tag else 'false'}\n")
+              out.write(f"ref={'refs/tags/' + tag if tag else os.environ['GITHUB_REF']}\n")
+          print(f"version {cargo}, {'release ' + tag if tag else 'dry run'}")
+          PY
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-latest
+            args: --target universal-apple-darwin
+            bundle: target/universal-apple-darwin/release/bundle
+          - platform: windows
+            os: windows-latest
+            args: ''
+            bundle: target/release/bundle
+          - platform: linux
+            os: ubuntu-22.04
+            args: ''
+            bundle: target/release/bundle
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - name: Webview development files (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.platform }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+      - run: yarn install --frozen-lockfile
+        working-directory: ui
+      - name: Build the installers
+        working-directory: crates/app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE: ${{ needs.version.outputs.release }}
+        run: |
+          config=()
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            if [ "$RELEASE" = "true" ]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set; a release must ship signed updates"
+              exit 1
+            fi
+            echo "::warning::No updater key: building without update files (dry run only)"
+            config=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+          fi
+          ../../ui/node_modules/.bin/tauri build ${{ matrix.args }} "${config[@]}"
+      - name: Collect under release names
+        env:
+          V: ${{ needs.version.outputs.version }}
+          B: ${{ matrix.bundle }}
+        run: |
+          mkdir -p dist
+          # copy <glob> <name>: the one file matching, and its updater signature if there is one.
+          copy() {
+            local found=()
+            for f in $1; do [ -e "$f" ] && found+=("$f"); done
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::expected one file for $1, found ${#found[@]}: ${found[*]}"
+              exit 1
+            fi
+            cp "${found[0]}" "dist/$2"
+            if [ -e "${found[0]}.sig" ]; then cp "${found[0]}.sig" "dist/$2.sig"; fi
+          }
+          case "${{ matrix.platform }}" in
+            macos)
+              copy "$B/dmg/*.dmg" "Code-Automata-$V-macos-universal.dmg"
+              if compgen -G "$B/macos/*.app.tar.gz" > /dev/null; then
+                copy "$B/macos/*.app.tar.gz" "Code-Automata-$V-macos-universal.app.tar.gz"
+              fi
+              ;;
+            windows)
+              copy "$B/nsis/*-setup.exe" "Code-Automata-$V-windows-x64-setup.exe"
+              ;;
+            linux)
+              copy "$B/appimage/*.AppImage" "Code-Automata-$V-linux-x86_64.AppImage"
+              copy "$B/deb/*.deb" "Code-Automata-$V-linux-amd64.deb"
+              ;;
+          esac
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  # latest.json (what installed apps check) and checksums, for a dry run too.
+  manifest:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist
+          merge-multiple: true
+      - name: latest.json and checksums
+        env:
+          V: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os
+          v, repo = os.environ["V"], os.environ["REPO"]
+          tag = os.environ["TAG"] or f"v{v}"
+          base = f"https://github.com/{repo}/releases/download/{tag}/"
+          def entry(name):
+              sig = open(f"dist/{name}.sig").read().strip()
+              return {"signature": sig, "url": base + name}
+          files = {
+              # The updater looks for "<os>-<arch>-<installer>", then "<os>-<arch>".
+              f"Code-Automata-{v}-macos-universal.app.tar.gz": ["darwin-aarch64", "darwin-x86_64"],
+              f"Code-Automata-{v}-windows-x64-setup.exe": ["windows-x86_64", "windows-x86_64-nsis"],
+              f"Code-Automata-{v}-linux-x86_64.AppImage": ["linux-x86_64", "linux-x86_64-appimage"],
+              f"Code-Automata-{v}-linux-amd64.deb": ["linux-x86_64-deb"],
+          }
+          platforms = {}
+          for name, keys in files.items():
+              if os.path.exists(f"dist/{name}.sig"):
+                  for key in keys:
+                      platforms[key] = entry(name)
+              else:
+                  print(f"::warning::no update signature for {name}")
+          if platforms:
+              manifest = {
+                  "version": v,
+                  "notes": f"Code-Automata {v}: see the release notes on GitHub.",
+                  "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "platforms": platforms,
+              }
+              json.dump(manifest, open("dist/latest.json", "w"), indent=2)
+              print(json.dumps(manifest, indent=2))
+          PY
+          cd dist
+          sha256sum $(ls | grep -v '\.sig$') > checksums.sha256
+          cat checksums.sha256
+          {
+            echo "## Installers"
+            echo '```'
+            ls -l
+            echo '```'
+            echo "## Checksums"
+            echo '```'
+            cat checksums.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*
+
+  release:
+    needs: [version, manifest]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
+      - name: Release notes from CHANGELOG.md
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          v = os.environ["V"]
+          notes = ""
+          if os.path.exists("CHANGELOG.md"):
+              text = open("CHANGELOG.md").read()
+              m = re.search(rf"^## {re.escape(v)}\b.*?$(.*?)(?=^## |^---$|\Z)", text, re.M | re.S)
+              if m:
+                  notes = m.group(1).strip()
+          if not notes:
+              notes = f"Code-Automata {v}."
+          notes += "\n\nInstallers are not code-signed: see the README for opening them the first time. Verify downloads against checksums.sha256."
+          open("notes.md", "w").write(notes + "\n")
+          PY
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          pre=()
+          case "$V" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$TAG" --draft --verify-tag "${pre[@]}" \
+            --title "Code-Automata $V" --notes-file notes.md dist/*

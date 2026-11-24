@@ -5,8 +5,14 @@
   "build": {
     "frontendDist": "../../ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": { "script": "yarn dev", "cwd": "../../ui" },
-    "beforeBuildCommand": { "script": "yarn build", "cwd": "../../ui" }
+    "beforeDevCommand": {
+      "script": "yarn dev",
+      "cwd": "../../ui"
+    },
+    "beforeBuildCommand": {
+      "script": "yarn build",
+      "cwd": "../../ui"
+    }
   },
   "app": {
     "windows": [],
@@ -20,12 +26,20 @@
         "font-src": "'self' data:",
         "script-src": "'self'"
       },
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "appimage",
+      "deb"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "AI coding agents on a Kanban board, one git worktree per task",
     "copyright": "AGPL-3.0-or-later",
@@ -35,6 +49,34 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "git"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5RTlDMTY3MkQ0Q0ZCMTEKUldRUiswd3RaOEhwMmFwdHozUVZVNmZtSER0Qkt5L0g4bDkxaHh3bzZVdkdlWlpXbERDVVlDN2YK",
+      "endpoints": [
+        "https://github.com/danted4/Code-Automata/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

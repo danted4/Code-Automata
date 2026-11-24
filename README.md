@@ -17,6 +17,28 @@ _"Ever since the first MVP was shipped, Code-Automata™ has started modifying i
 > [!IMPORTANT]
 > This branch is **Code-Automata 3.0**, a rewrite in progress: a Rust core and a Tauri desktop app replace the Electron app. The desktop app builds from source; installers are not released yet. The last released version, 2.2.4, is on [`main`](https://github.com/danted4/Code-Automata/tree/main) and on the [releases page](https://github.com/danted4/Code-Automata/releases).
 
+## Install
+
+3.0 is not released yet; until then build it from source (below). Installers will be on the [releases page](https://github.com/danted4/Code-Automata/releases):
+
+| Platform | File |
+| --- | --- |
+| macOS 11 or newer (Apple Silicon and Intel) | `Code-Automata-<version>-macos-universal.dmg` |
+| Windows 10 or 11 | `Code-Automata-<version>-windows-x64-setup.exe` (installs for your user, no admin) |
+| Linux | `Code-Automata-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` |
+
+You also need Git and at least one agent CLI, logged in: Claude Code, Cursor's `agent` or Amp.
+
+The installers are not code-signed, so the first launch needs one extra step:
+
+- **macOS:** open the DMG and drag Code-Automata to Applications. The first time you open it, macOS refuses because it cannot verify the developer. Open System Settings → Privacy & Security and click **Open Anyway**.
+- **Windows:** SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
+- **Linux:** `chmod +x Code-Automata-*.AppImage` and run it, or `sudo apt install ./Code-Automata-*.deb`.
+
+Check a download against `checksums.sha256` from the same release: `shasum -a 256 -c checksums.sha256 --ignore-missing`.
+
+The app checks for a new version once at launch and asks before installing it. Updating restarts the app; tasks that were running stop where they are and continue with Resume.
+
 ## What it is
 
 Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-column Kanban workflow. Each task gets its own git worktree and branch inside the project you open.

@@ -9,6 +9,8 @@
 //!   other Tauri permission.
 //! * Quitting while tasks run asks first, then stops every engine, leaving those runs
 //!   `interrupted` for Resume.
+//! * A release build checks GitHub Releases for an update once after launch and offers it
+//!   (`update.rs`).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,6 +19,7 @@ mod native;
 mod paths;
 mod server;
 mod smoke;
+mod update;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -29,9 +32,9 @@ use crate::server::Server;
 
 /// The quit sequence runs once; `done` lets the final exit through.
 #[derive(Default)]
-struct Quit {
-    running: AtomicBool,
-    done: AtomicBool,
+pub(crate) struct Quit {
+    pub(crate) running: AtomicBool,
+    pub(crate) done: AtomicBool,
     code: AtomicI32,
 }
 
@@ -62,6 +65,7 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Quit::default())
         .invoke_handler(tauri::generate_handler![
             native::pick_folder,
@@ -104,6 +108,7 @@ fn main() {
                     NewWindowResponse::Deny
                 })
                 .build()?;
+            update::check_later(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

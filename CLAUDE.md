@@ -10,7 +10,7 @@ AGENTS.md (imported above) holds the layout, commands and invariants. What follo
 
 ```bash
 cargo test --test git worktree_lifecycle                          # one Rust integration test
-cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings   # Windows lint from macOS
+cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings   # Windows lint from macOS (core and server; the app needs a Windows C toolchain, CI lints it there)
 cd ui && yarn vitest run src/lib/themes/__tests__/theme-config.test.ts   # one UI test file
 cd ui && yarn vitest run -t "name of the test"                            # by test name
 ```
@@ -59,6 +59,7 @@ cd ui && yarn vitest run -t "name of the test"                            # by t
 - The page may call only the commands listed in `build.rs` and allowed in `capabilities/main.json`; a new command goes in both, in `generate_handler!`, and in `ui/src/lib/native.ts`. Paths from the page must pass `paths::inside_open_project` (an existing folder inside a project the server has open).
 - Navigation stays on the app's pages; `http(s)` links open in the default browser.
 - `CODE_AUTOMATA_SMOKE=1` (`smoke.rs`) checks the webview → server → webview path on a scratch repository, prints `smoke: passed` and exits; `app.yml` runs it on all three OSes. Debug builds offer the mock agent when `CODE_AUTOMATA_MOCK_AGENT` (and optionally `CODE_AUTOMATA_MOCK_SCENARIO`) is set; release builds never do.
+- Updates (`update.rs`): release builds check `latest.json` of the newest GitHub release 5 s after launch and ask; installing stops the server like a quit, then restarts. The public key is in `tauri.conf.json`; the private key is the `TAURI_SIGNING_PRIVATE_KEY` secret (kept outside the repo). Losing it means installed apps can no longer verify updates.
 - Log file: `tauri-plugin-log` in the OS log folder (`~/Library/Logs/com.code-automata.desktop/code-automata.log` on macOS): start, port, the resolved `PATH`, engine errors, quit.
 
 ## UI (`ui/`)
