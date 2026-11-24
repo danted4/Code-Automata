@@ -65,7 +65,19 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
     )
     .await?;
 
+    // What the pushed commit now holds, for the UI's "up to date" (a rework round adds one).
+    let pushed_checkpoints = task.dev_checkpoints();
+
     if let Some(pr) = &task.pull_request {
+        let url = pr.url.clone();
+        inner
+            .update(id, |t| {
+                if let Some(pr) = &mut t.pull_request {
+                    pr.pushed_checkpoints = pushed_checkpoints;
+                }
+                Ok(())
+            })
+            .await?;
         // Already open: the push updated the code; bring the description up to date too.
         if let Err(e) = gh_output(
             inner,
@@ -82,7 +94,7 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
                 ),
             });
         }
-        return Ok(pr.url.clone());
+        return Ok(url);
     }
     let url = match existing_pr(inner, &gh, &wt, &branch).await {
         Some(url) => url,
@@ -94,7 +106,10 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
     };
     inner
         .update(id, |t| {
-            t.pull_request = Some(PullRequest { url: url.clone() });
+            t.pull_request = Some(PullRequest {
+                url: url.clone(),
+                pushed_checkpoints,
+            });
             Ok(())
         })
         .await?;

@@ -125,18 +125,46 @@ describe('helpers', () => {
 });
 
 describe('pullRequestAction', () => {
+  const dev = (id: string, checkpoint: string | null): Subtask =>
+    ({
+      id,
+      kind: 'dev',
+      status: checkpoint ? 'done' : 'pending',
+      checkpoint,
+    }) as unknown as Subtask;
+  const url = 'https://github.com/o/r/pull/1';
+
   it('creates a pull request when there is none', () => {
-    const a = pullRequestAction(null, 'code-automata/t1');
+    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), null);
     expect(a.kind).toBe('create');
     expect(a.label).toBe('Create pull request');
-    expect(a.help).toContain('code-automata/t1');
+    expect(a.help).toContain(taskBranch(task().id));
   });
 
-  it('offers to push new work to an open pull request', () => {
-    const a = pullRequestAction('https://github.com/o/r/pull/1', 'code-automata/t1');
+  it('is up to date when the PR holds every dev checkpoint', () => {
+    const t = task({
+      subtasks: [dev('d1', 'a1'), dev('d2', 'a2')],
+      pullRequest: { url, pushedCheckpoints: 2 },
+    });
+    const a = pullRequestAction(t, null);
+    expect(a.kind).toBe('current');
+    expect(a.url).toBe(url);
+    expect(a.label).toBe('Up to date');
+  });
+
+  it('offers the update after a rework round added a checkpoint', () => {
+    const t = task({
+      subtasks: [dev('d1', 'a1'), dev('d2', 'a2'), dev('rework-1', 'a3')],
+      pullRequest: { url, pushedCheckpoints: 2 },
+    });
+    const a = pullRequestAction(t, null);
     expect(a.kind).toBe('update');
-    expect(a.label).toBe('Update pull request');
-    expect(a.help).toMatch(/rework/);
+    expect(a.help).toMatch(/^1 change since/);
     expect(a.done).toBe('Pull request updated');
+  });
+
+  it('counts a PR just opened here as up to date until the task reloads', () => {
+    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), url);
+    expect(a.kind).toBe('current');
   });
 });

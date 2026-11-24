@@ -295,6 +295,22 @@ impl Review {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PullRequest {
     pub url: String,
+    /// How many dev subtasks had a checkpoint when the branch was last pushed to this PR. A rework
+    /// round after that adds one, and the PR lacks that work until it is updated (the UI says so).
+    /// 0 in task files from before this field.
+    #[serde(default)]
+    pub pushed_checkpoints: u32,
+}
+
+impl Task {
+    /// Dev subtasks with a checkpoint commit: the work a squash would put in the PR.
+    pub fn dev_checkpoints(&self) -> u32 {
+        let n = self
+            .subtasks_of(SubtaskKind::Dev)
+            .filter(|s| s.checkpoint.is_some())
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }
 }
 
 /// What a run is doing. One run at a time per task.

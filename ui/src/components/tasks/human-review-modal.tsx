@@ -62,8 +62,8 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
 
   const branch = taskBranch(task.id);
   const inReview = task.phase === 'human_review';
-  const prUrl = task.pullRequest?.url ?? createdUrl;
-  const prAction = pullRequestAction(prUrl, branch);
+  const prAction = pullRequestAction(task, createdUrl);
+  const prUrl = prAction.url;
 
   const setOpen = (next: boolean) => {
     if (!next) setFeedback('');
@@ -375,33 +375,48 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
                       Open pull request
                     </a>
                   )}
-                  <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  <p
+                    className="text-xs"
+                    style={{ color: 'var(--color-text-secondary)' }}
+                    data-testid="review-pr-status"
+                  >
+                    {prAction.kind === 'current' && (
+                      <CheckCircle2
+                        className="inline w-3.5 h-3.5 mr-1 -mt-0.5"
+                        style={{ color: 'var(--color-success)' }}
+                      />
+                    )}
                     {prAction.help}
                   </p>
-                  <Button
-                    onClick={createPullRequest}
-                    disabled={busy !== null}
-                    size="sm"
-                    variant={prAction.kind === 'update' ? 'outline' : 'default'}
-                    className="w-full text-xs"
-                    style={
-                      prAction.kind === 'create'
-                        ? { background: 'var(--color-primary)', color: 'var(--color-primary-text)' }
-                        : undefined
-                    }
-                    data-testid={
-                      prAction.kind === 'create' ? 'review-create-pr' : 'review-update-pr'
-                    }
-                  >
-                    {busy === 'pr' ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        {prAction.busyLabel}
-                      </>
-                    ) : (
-                      prAction.label
-                    )}
-                  </Button>
+                  {prAction.kind !== 'current' && (
+                    <Button
+                      onClick={createPullRequest}
+                      disabled={busy !== null}
+                      size="sm"
+                      variant={prAction.kind === 'update' ? 'outline' : 'default'}
+                      className="w-full text-xs"
+                      style={
+                        prAction.kind === 'create'
+                          ? {
+                              background: 'var(--color-primary)',
+                              color: 'var(--color-primary-text)',
+                            }
+                          : undefined
+                      }
+                      data-testid={
+                        prAction.kind === 'create' ? 'review-create-pr' : 'review-update-pr'
+                      }
+                    >
+                      {busy === 'pr' ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          {prAction.busyLabel}
+                        </>
+                      ) : (
+                        prAction.label
+                      )}
+                    </Button>
+                  )}
                   {busy === 'pr' && (
                     <p
                       className="text-xs"

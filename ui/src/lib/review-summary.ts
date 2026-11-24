@@ -89,9 +89,10 @@ export function reviewSummary(task: Task): ReviewSummary {
   return { built, skipped, checks, checksStale, qa, unresolved, attention };
 }
 
-/** The pull request section's one action: open a PR, or bring the open one up to date. */
+/** The pull request section: open a PR, push new work to the open one, or nothing to do. */
 export type PullRequestAction = {
-  kind: 'create' | 'update';
+  kind: 'create' | 'update' | 'current';
+  url: string | null;
   label: string;
   busyLabel: string;
   help: string;
@@ -99,15 +100,24 @@ export type PullRequestAction = {
   done: string;
 };
 
+/** Dev subtasks with a checkpoint commit: the work a squash puts in the pull request. */
+export function devCheckpoints(task: Task): number {
+  return (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoint).length;
+}
+
 /**
- * Work done after the PR was opened (a rework round) is committed in the worktree but not in the
- * PR until it is pushed again, so an open PR always offers the update: it squashes everything
- * into the PR's one commit, pushes the branch and refreshes the description.
+ * Work done after the PR was last pushed (a rework round adds a dev checkpoint) is committed in
+ * the worktree but not in the PR until it is pushed again. `createdUrl` is a PR just opened here,
+ * before the task reload shows it.
  */
-export function pullRequestAction(prUrl: string | null, branch: string): PullRequestAction {
-  if (!prUrl) {
+export function pullRequestAction(task: Task, createdUrl: string | null): PullRequestAction {
+  const branch = taskBranch(task.id);
+  const pr = task.pullRequest ?? null;
+  const url = pr?.url ?? createdUrl;
+  if (!url) {
     return {
       kind: 'create',
+      url: null,
       label: 'Create pull request',
       busyLabel: 'Creating pull request…',
       help: `Squash the checkpoints into one commit, push ${branch} and open a pull request with the GitHub CLI.`,
@@ -115,11 +125,25 @@ export function pullRequestAction(prUrl: string | null, branch: string): PullReq
       done: 'Pull request opened',
     };
   }
+  const unpushed = pr ? devCheckpoints(task) - pr.pushedCheckpoints : 0;
+  if (unpushed <= 0) {
+    return {
+      kind: 'current',
+      url,
+      label: 'Up to date',
+      busyLabel: '',
+      help: 'The pull request has all of the task’s work.',
+      progress: '',
+      done: '',
+    };
+  }
+  const what = unpushed === 1 ? '1 change' : `${unpushed} changes`;
   return {
     kind: 'update',
+    url,
     label: 'Update pull request',
     busyLabel: 'Updating pull request…',
-    help: `Work done since the pull request was opened, such as a rework round, is not in it until you update it: this squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
+    help: `${what} since the pull request was last pushed (a rework round) ${unpushed === 1 ? 'is' : 'are'} not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
     progress: 'Squashing and pushing to the pull request. This can take a minute.',
     done: 'Pull request updated',
   };
