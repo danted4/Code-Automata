@@ -1,11 +1,12 @@
 /**
- * Kanban Board Component
+ * Kanban Board
  *
- * Displays tasks across the five workflow phases. Dragging a card only moves it: the backend
- * decides whether the move is allowed, and agents are started from buttons, never by a drop.
+ * The five workflow columns. Dragging a card only moves it: the server decides whether the move
+ * is allowed, and agents start from buttons, never from a drop. The list stays current through
+ * the project's event stream (see store/project-sync.ts); there is no polling.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   DndContext,
   DragEndEvent,
@@ -15,84 +16,108 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import { useTaskStore } from '@/store/task-store';
-import { useProjectStore } from '@/store/project-store';
-import { WORKFLOW_PHASES, WorkflowPhase, Task } from '@/lib/tasks/schema';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { api, errorMessage } from '@/lib/api';
+import type { Phase } from '@/lib/api/types/Phase';
+import type { Task } from '@/lib/api/types/Task';
+import { PHASES } from '@/lib/task-view';
+import { act, useTaskStore } from '@/store/task-store';
+import { useSyncStore } from '@/store/project-sync';
 import { KanbanColumn } from './column';
 import { TaskCard } from './task-card';
-import { EditTaskModal } from '@/components/tasks/edit-task-modal';
+import { TaskDialogs } from './task-dialogs';
 
 export function KanbanBoard() {
-  const { tasks, loadTasks, updateTaskPhase } = useTaskStore();
-  const projectPath = useProjectStore((s) => s.projectPath);
+  const tasks = useTaskStore((s) => s.tasks);
+  const skipped = useTaskStore((s) => s.skipped);
+  const loadError = useTaskStore((s) => s.error);
+  const stream = useSyncStore((s) => s.stream);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
-  const [editModalTask, setEditModalTask] = useState<Task | null>(null);
 
-  // Disable pointer sensor activation delay for instant drag
   const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8, // Slight drag before activating (prevents accidental drags)
-      },
+      activationConstraint: { distance: 8 }, // a click is not a drag
     })
   );
 
-  useEffect(() => {
-    loadTasks();
-
-    // Auto-refresh tasks every 3 seconds to catch background updates
-    const interval = setInterval(() => loadTasks(), 3000);
-
-    // Reload when the window becomes visible again
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        loadTasks();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [loadTasks, projectPath]);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const deleteUnreadable = async (id: string) => {
+    // First click arms, second deletes: no browser dialog.
+    if (confirmDelete !== id) return setConfirmDelete(id);
+    setConfirmDelete(null);
+    try {
+      await api.tasks.remove(id);
+      toast.success('Task deleted');
+      void useTaskStore.getState().load();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
 
   const handleDragStart = (event: DragStartEvent) => {
-    const taskId = event.active.id as string;
-    const task = tasks.find((t) => t.id === taskId);
-    setActiveTask(task || null);
+    setActiveTask(tasks.find((t) => t.id === event.active.id) ?? null);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-
-    // Clear active task immediately to remove overlay
     setActiveTask(null);
-
+    const { active, over } = event;
     if (!over) return;
-
-    const taskId = active.id as string;
-    const newPhase = over.id as WorkflowPhase;
-    const task = tasks.find((t) => t.id === taskId);
-
-    if (!task || task.phase === newPhase) return;
-
-    const error = await updateTaskPhase(taskId, newPhase);
-    if (error) toast.error(`Cannot move the task: ${error}`);
+    const task = tasks.find((t) => t.id === active.id);
+    const to = over.id as Phase;
+    if (!task || task.phase === to) return;
+    await act(() => api.tasks.move(task.id, to));
   };
 
   return (
     <>
+      {(stream !== 'open' || loadError) && (
+        <div
+          data-testid="board-notice"
+          className="mx-4 mt-3 rounded-md border px-3 py-2 text-xs"
+          style={{ borderColor: 'var(--color-border)', color: 'var(--color-warning)' }}
+        >
+          {loadError
+            ? `Cannot load tasks: ${loadError}`
+            : 'Reconnecting to the Code-Automata server…'}
+        </div>
+      )}
+      {skipped.length > 0 && (
+        <div
+          data-testid="board-unreadable"
+          className="mx-4 mt-3 rounded-md border px-3 py-2 text-xs space-y-1"
+          style={{ borderColor: 'var(--color-border)', color: 'var(--color-warning)' }}
+        >
+          <p>
+            {skipped.length} task file{skipped.length === 1 ? '' : 's'} could not be read. Fix the
+            file by hand, or delete the task:
+          </p>
+          {skipped.map((s) => (
+            <div key={s.taskId} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-mono" title={s.error}>
+                {s.taskId}: {s.error}
+              </span>
+              <Button
+                data-testid={`unreadable-delete-${s.taskId}`}
+                size="sm"
+                variant="outline"
+                className="h-6 text-xs"
+                onClick={() => deleteUnreadable(s.taskId)}
+              >
+                {confirmDelete === s.taskId ? 'Delete task, worktree and branch?' : 'Delete'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        {/* Extends under fixed sidebar so columns slide under when scrolling horizontally */}
+        {/* Extends under the fixed sidebar so columns slide under it when scrolling sideways */}
         <div className="flex gap-4 p-4 pl-[272px] overflow-x-auto h-full -ml-64 w-[calc(100%+16rem)]">
-          {WORKFLOW_PHASES.map((phase) => (
+          {PHASES.map((phase) => (
             <KanbanColumn
               key={phase}
               phase={phase}
               tasks={tasks.filter((t) => t.phase === phase)}
-              onEditBlockedTask={setEditModalTask}
             />
           ))}
         </div>
@@ -104,12 +129,7 @@ export function KanbanBoard() {
           ) : null}
         </DragOverlay>
       </DndContext>
-
-      <EditTaskModal
-        open={!!editModalTask}
-        onOpenChange={(open) => !open && setEditModalTask(null)}
-        task={editModalTask}
-      />
+      <TaskDialogs />
     </>
   );
 }

@@ -19,9 +19,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useProjectStore } from '@/store/project-store';
-import { apiFetch } from '@/lib/api-client';
+import { api, errorMessage } from '@/lib/api';
 import { FolderOpen, FolderSearch } from 'lucide-react';
 import { native } from '@/lib/native';
+import { toast } from 'sonner';
 
 interface OpenProjectModalProps {
   open: boolean;
@@ -45,22 +46,20 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
     setError(null);
 
     try {
-      const response = await apiFetch(`/api/project/validate?path=${encodeURIComponent(trimmed)}`);
-      const data = await response.json();
-
-      if (!response.ok || !data.valid) {
-        setError(data.error || 'Invalid path');
-        return false;
+      // Opens (or finds) the project's engine; a subfolder opens its repository.
+      const opened = await api.openProject(trimmed);
+      const root = String(opened.root);
+      setProjectPath(root);
+      addRecentPath(root);
+      if (opened.reconcileProblems.length > 0) {
+        toast.warning(`Some tasks could not be checked: ${opened.reconcileProblems.join('; ')}`);
       }
-
-      setProjectPath(trimmed);
-      addRecentPath(trimmed);
       onOpenChange(false);
       setPathInput('');
       setError(null);
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Validation failed');
+      setError(errorMessage(err));
       return false;
     } finally {
       setIsValidating(false);

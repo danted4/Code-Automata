@@ -1,709 +1,280 @@
 /**
- * Plan Review Modal
- *
- * Modal for reviewing AI-generated implementation plans
+ * Plan Review Modal: the plan waiting for approval. The user approves it (development starts),
+ * asks the agent for changes (a revision run rewrites it while the modal waits), or edits the
+ * text directly. The task is read live from the store, so a revised plan appears in place.
  */
 
 import { useState } from 'react';
+import { ArrowLeft, CheckCircle, Loader2, MessageSquare, Pencil, Save } from 'lucide-react';
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogBody,
 } from '@/components/ui/dialog';
-import {
-  CheckCircle,
-  Play,
-  Edit,
-  Code,
-  Eye,
-  MessageSquare,
-  Save,
-  X,
-  ArrowLeft,
-  CornerUpLeft,
-} from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { apiFetch } from '@/lib/api-client';
+import { api } from '@/lib/api';
+import { planReviewState, type PlanReviewState } from '@/lib/planning';
+import { act, useTask } from '@/store/task-store';
+import type { TaskModalProps } from './modal-props';
+import { PlanMarkdown } from './plan-markdown';
 
-interface PlanReviewModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  taskId: string;
-  planContent: string;
-  taskTitle: string;
-}
+type Mode = 'view' | 'feedback' | 'edit';
 
-export function PlanReviewModal({
-  open,
-  onOpenChange,
-  taskId,
-  planContent,
-  taskTitle,
-}: PlanReviewModalProps) {
-  const [isApproving, setIsApproving] = useState(false);
-  const [showModifyMode, setShowModifyMode] = useState(false);
-  const [modifyMethod, setModifyMethod] = useState<'inline' | 'feedback' | null>(null);
-  const [editedPlan, setEditedPlan] = useState(planContent);
-  const [feedbackText, setFeedbackText] = useState('');
-  const [showRawMarkdown, setShowRawMarkdown] = useState(true); // Default to raw mode
-  const [isSaving, setIsSaving] = useState(false);
+const primaryButton = { background: 'var(--color-primary)', color: 'var(--color-primary-text)' };
+const successButton = { background: 'var(--color-success)', color: '#ffffff' };
 
-  const handleApproveOnly = async () => {
-    setIsApproving(true);
-    try {
-      const response = await apiFetch('/api/agents/approve-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId,
-          startDevelopment: false,
-        }),
-      });
+export function PlanReviewModal({ taskId, open, onOpenChange }: TaskModalProps) {
+  const task = useTask(taskId);
+  const [mode, setMode] = useState<Mode>('view');
+  const [feedback, setFeedback] = useState('');
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!task) return null;
 
-      if (!response.ok) {
-        const error = await response.json();
-        alert(error.error || 'Failed to approve plan');
-        return;
-      }
+  const state = planReviewState(task);
+  const plan = task.planning.plan ?? '';
+  const canAct = state.kind === 'reviewable' && !busy;
 
-      onOpenChange(false);
-      window.location.reload();
-    } catch (error) {
-      alert('Failed to approve plan');
-      console.error(error);
-    } finally {
-      setIsApproving(false);
+  const handleOpenChange = (next: boolean) => {
+    if (!next) setMode('view');
+    onOpenChange(next);
+  };
+
+  const run = async (command: Parameters<typeof act>[0], success: string) => {
+    setBusy(true);
+    const result = await act(command, success);
+    setBusy(false);
+    return result;
+  };
+
+  const approve = async () => {
+    if (await run(() => api.tasks.approvePlan(task.id), 'Plan approved')) handleOpenChange(false);
+  };
+
+  const sendFeedback = async () => {
+    const done = await run(
+      () => api.tasks.revisePlan(task.id, feedback.trim()),
+      'Revision requested'
+    );
+    if (done) {
+      setFeedback('');
+      setMode('view');
     }
   };
 
-  const handleApproveAndStart = async () => {
-    setIsApproving(true);
-    try {
-      const response = await apiFetch('/api/agents/approve-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId,
-          startDevelopment: true,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        alert(error.error || 'Failed to approve and start');
-        return;
-      }
-
-      onOpenChange(false);
-      window.location.reload();
-    } catch (error) {
-      alert('Failed to approve and start');
-      console.error(error);
-    } finally {
-      setIsApproving(false);
-    }
+  const saveEdit = async () => {
+    if (await run(() => api.tasks.editPlan(task.id, draft), 'Plan saved')) setMode('view');
   };
 
-  const handleModifyPlan = () => {
-    setShowModifyMode(true);
+  const startEdit = () => {
+    setDraft(plan);
+    setMode('edit');
   };
 
-  const handleBackToSelection = () => {
-    setModifyMethod(null);
-    setEditedPlan(planContent);
-    setFeedbackText('');
-    setShowRawMarkdown(true); // Reset to raw mode
-  };
-
-  const handleBackToReview = () => {
-    setShowModifyMode(false);
-    setModifyMethod(null);
-    setEditedPlan(planContent);
-    setFeedbackText('');
-    setShowRawMarkdown(true); // Reset to raw mode
-  };
-
-  const handleSaveInlineEdit = async () => {
-    setIsSaving(true);
-    try {
-      const response = await apiFetch('/api/agents/modify-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId,
-          method: 'inline',
-          newPlan: editedPlan,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        alert(error.error || 'Failed to save plan');
-        return;
-      }
-
-      onOpenChange(false);
-      window.location.reload();
-    } catch (error) {
-      alert('Failed to save plan');
-      console.error(error);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleSubmitFeedback = async () => {
-    if (!feedbackText.trim()) {
-      alert('Please provide feedback for plan modifications');
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const response = await apiFetch('/api/agents/modify-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId,
-          method: 'feedback',
-          feedback: feedbackText,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        alert(error.error || 'Failed to submit feedback');
-        return;
-      }
-
-      onOpenChange(false);
-      window.location.reload();
-    } catch (error) {
-      alert('Failed to submit feedback');
-      console.error(error);
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  const closed = state.kind === 'closed';
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[900px]">
+    <Dialog open={open} onOpenChange={busy ? undefined : handleOpenChange}>
+      <DialogContent className="sm:max-w-[900px]" data-testid="plan-review-modal">
         <DialogHeader>
           <DialogTitle>
-            {showModifyMode ? 'Modify Implementation Plan' : 'Review Implementation Plan'}
+            {mode === 'edit'
+              ? 'Edit Plan'
+              : mode === 'feedback'
+                ? 'Request Changes'
+                : 'Review Implementation Plan'}
           </DialogTitle>
-          <DialogDescription>
-            {showModifyMode
-              ? 'Choose how you want to modify the plan'
-              : `Review the AI-generated plan for: ${taskTitle}`}
-          </DialogDescription>
+          <DialogDescription>{task.title}</DialogDescription>
         </DialogHeader>
 
-        <DialogBody>
-          {/* Modify Mode Selection */}
-          {showModifyMode && !modifyMethod && (
-            <div className="flex flex-col gap-4 py-6">
-              <button
-                onClick={() => setModifyMethod('inline')}
-                className="p-4 rounded-lg border-2 transition-all text-left"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  background: 'var(--color-surface)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-info)';
-                  e.currentTarget.style.background = 'var(--color-surface-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                  e.currentTarget.style.background = 'var(--color-surface)';
-                }}
+        <StateNotice state={state} />
+
+        <DialogBody className="flex flex-col gap-3">
+          {mode === 'feedback' && !closed && (
+            <div className="flex flex-col gap-2">
+              <label
+                htmlFor="plan-feedback"
+                className="text-sm font-medium"
+                style={{ color: 'var(--color-text-primary)' }}
               >
-                <div className="flex items-start gap-3">
-                  <Edit className="w-5 h-5 mt-1" style={{ color: 'var(--color-info)' }} />
-                  <div>
-                    <h3
-                      className="font-semibold mb-1"
-                      style={{ color: 'var(--color-text-primary)' }}
-                    >
-                      Edit Plan Directly
-                    </h3>
-                    <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                      Manually edit the plan in markdown. Use the visual/raw toggle to switch
-                      between modes.
-                    </p>
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setModifyMethod('feedback')}
-                className="p-4 rounded-lg border-2 transition-all text-left"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  background: 'var(--color-surface)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-info)';
-                  e.currentTarget.style.background = 'var(--color-surface-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                  e.currentTarget.style.background = 'var(--color-surface)';
-                }}
-              >
-                <div className="flex items-start gap-3">
-                  <MessageSquare
-                    className="w-5 h-5 mt-1"
-                    style={{ color: 'var(--color-warning)' }}
-                  />
-                  <div>
-                    <h3
-                      className="font-semibold mb-1"
-                      style={{ color: 'var(--color-text-primary)' }}
-                    >
-                      Provide Feedback
-                    </h3>
-                    <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                      Describe what changes you want, and the AI will regenerate the plan based on
-                      your feedback.
-                    </p>
-                  </div>
-                </div>
-              </button>
-            </div>
-          )}
-
-          {/* Inline Editor Mode */}
-          {showModifyMode && modifyMethod === 'inline' && (
-            <div className="flex-1 overflow-hidden flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                  Edit Plan
-                </div>
-                <button
-                  onClick={() => setShowRawMarkdown(!showRawMarkdown)}
-                  className="px-3 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1"
-                  style={{
-                    background: 'var(--color-surface)',
-                    color: 'var(--color-text-primary)',
-                    border: '1px solid var(--color-border)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--color-surface-hover)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'var(--color-surface)';
-                  }}
-                >
-                  {showRawMarkdown ? (
-                    <>
-                      <Eye className="w-3 h-3" />
-                      Visual
-                    </>
-                  ) : (
-                    <>
-                      <Code className="w-3 h-3" />
-                      Raw
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {showRawMarkdown ? (
-                <Textarea
-                  value={editedPlan}
-                  onChange={(e) => setEditedPlan(e.target.value)}
-                  className="flex-1 font-mono text-sm"
-                  style={{
-                    minHeight: '500px',
-                    maxHeight: '500px',
-                    background: 'var(--color-background)',
-                    color: 'var(--color-text-secondary)',
-                    border: '1px solid var(--color-border)',
-                  }}
-                />
-              ) : (
-                <div
-                  className="flex-1 overflow-y-auto py-4 px-2"
-                  style={{
-                    minHeight: '500px',
-                    maxHeight: '500px',
-                    background: 'var(--color-surface)',
-                    borderRadius: '8px',
-                    border: '1px solid var(--color-border)',
-                  }}
-                >
-                  <div
-                    className="prose prose-sm max-w-none"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{editedPlan}</ReactMarkdown>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Feedback Mode */}
-          {showModifyMode && modifyMethod === 'feedback' && (
-            <div className="flex-1 flex flex-col gap-2 py-2">
-              <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                Describe the changes you want
-              </div>
+                What should change?
+              </label>
               <Textarea
-                value={feedbackText}
-                onChange={(e) => setFeedbackText(e.target.value)}
-                placeholder="Example: Add more detail about error handling, include performance considerations, etc."
-                className="flex-1"
-                style={{
-                  minHeight: '200px',
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-primary)',
-                  border: '1px solid var(--color-border)',
-                }}
+                id="plan-feedback"
+                data-testid="plan-feedback"
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="For example: split the migration into its own step, and add tests for the error paths."
+                rows={5}
+                autoFocus
               />
-              <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                The AI will regenerate the plan based on your feedback while keeping the original
-                structure.
-              </div>
+              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                The agent rewrites the plan from your feedback. The plan below is the current one.
+              </p>
             </div>
           )}
 
-          {/* Plan Content - Scrollable (only when not in modify mode) */}
-          {!showModifyMode && (
+          {mode === 'edit' && !closed ? (
+            <Textarea
+              data-testid="plan-edit-text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="font-mono text-xs min-h-[420px] flex-1"
+              style={{ background: 'var(--color-background)' }}
+              spellCheck={false}
+            />
+          ) : plan ? (
             <div
-              className="flex-1 overflow-y-auto py-4 px-2"
+              className="rounded-lg border px-4 py-3"
               style={{
-                background: 'var(--color-surface)',
-                borderRadius: '8px',
-                border: '1px solid var(--color-border)',
+                background: 'var(--color-background)',
+                borderColor: 'var(--color-border)',
+                opacity: state.kind === 'revising' ? 0.6 : 1,
               }}
+              data-testid="plan-content"
             >
-              <div
-                className="prose prose-sm max-w-none"
-                style={{
-                  color: 'var(--color-text-primary)',
-                }}
-              >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => (
-                      <h1
-                        style={{
-                          color: 'var(--color-text-primary)',
-                          fontSize: '1.5rem',
-                          fontWeight: 'bold',
-                          marginTop: '1rem',
-                          marginBottom: '0.5rem',
-                        }}
-                      >
-                        {children}
-                      </h1>
-                    ),
-                    h2: ({ children }) => (
-                      <h2
-                        style={{
-                          color: 'var(--color-text-primary)',
-                          fontSize: '1.25rem',
-                          fontWeight: 'bold',
-                          marginTop: '1rem',
-                          marginBottom: '0.5rem',
-                        }}
-                      >
-                        {children}
-                      </h2>
-                    ),
-                    h3: ({ children }) => (
-                      <h3
-                        style={{
-                          color: 'var(--color-text-primary)',
-                          fontSize: '1.1rem',
-                          fontWeight: 'bold',
-                          marginTop: '0.75rem',
-                          marginBottom: '0.5rem',
-                        }}
-                      >
-                        {children}
-                      </h3>
-                    ),
-                    p: ({ children }) => (
-                      <p
-                        style={{
-                          color: 'var(--color-text-secondary)',
-                          marginBottom: '0.75rem',
-                          lineHeight: '1.6',
-                        }}
-                      >
-                        {children}
-                      </p>
-                    ),
-                    ul: ({ children }) => (
-                      <ul
-                        style={{
-                          color: 'var(--color-text-secondary)',
-                          marginLeft: '1.5rem',
-                          marginBottom: '0.75rem',
-                          listStyleType: 'disc',
-                        }}
-                      >
-                        {children}
-                      </ul>
-                    ),
-                    ol: ({ children }) => (
-                      <ol
-                        style={{
-                          color: 'var(--color-text-secondary)',
-                          marginLeft: '1.5rem',
-                          marginBottom: '0.75rem',
-                          listStyleType: 'decimal',
-                        }}
-                      >
-                        {children}
-                      </ol>
-                    ),
-                    li: ({ children }) => <li style={{ marginBottom: '0.25rem' }}>{children}</li>,
-                    code: ({ children, className }) => {
-                      const isInline = !className;
-                      return isInline ? (
-                        <code
-                          style={{
-                            background: 'var(--color-background)',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            fontSize: '0.9em',
-                            color: 'var(--color-info)',
-                          }}
-                        >
-                          {children}
-                        </code>
-                      ) : (
-                        <code
-                          style={{
-                            display: 'block',
-                            background: 'var(--color-background)',
-                            padding: '1rem',
-                            borderRadius: '6px',
-                            overflowX: 'auto',
-                            fontSize: '0.9em',
-                            color: 'var(--color-text-secondary)',
-                          }}
-                        >
-                          {children}
-                        </code>
-                      );
-                    },
-                    blockquote: ({ children }) => (
-                      <blockquote
-                        style={{
-                          borderLeft: '4px solid var(--color-info)',
-                          paddingLeft: '1rem',
-                          marginLeft: '0',
-                          fontStyle: 'italic',
-                          color: 'var(--color-text-muted)',
-                        }}
-                      >
-                        {children}
-                      </blockquote>
-                    ),
-                  }}
-                >
-                  {planContent}
-                </ReactMarkdown>
-              </div>
+              <PlanMarkdown markdown={plan} />
             </div>
+          ) : (
+            <p
+              className="text-sm"
+              style={{ color: 'var(--color-text-muted)' }}
+              data-testid="plan-content"
+            >
+              There is no plan yet.
+            </p>
           )}
         </DialogBody>
 
-        {/* Action Buttons */}
-        <DialogFooter className="flex justify-end gap-2 pt-4">
-          {showModifyMode && modifyMethod ? (
+        <DialogFooter className="gap-2">
+          {closed ? (
+            <Button variant="outline" onClick={() => handleOpenChange(false)}>
+              Close
+            </Button>
+          ) : mode === 'view' ? (
             <>
-              <button
-                onClick={handleBackToReview}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-primary)',
-                  border: '1px solid var(--color-border)',
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--color-surface-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--color-surface)';
-                }}
+              <Button
+                variant="outline"
+                onClick={startEdit}
+                disabled={!canAct}
+                data-testid="plan-edit"
               >
-                <ArrowLeft className="w-4 h-4" />
-                Back to Review
-              </button>
-
-              <button
-                onClick={handleBackToSelection}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-primary)',
-                  border: '1px solid var(--color-border)',
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--color-surface-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--color-surface)';
-                }}
+                <Pencil className="w-4 h-4" />
+                Edit
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setMode('feedback')}
+                disabled={!canAct}
+                data-testid="plan-request-changes"
               >
-                <CornerUpLeft className="w-4 h-4" />
-                Back to Selection
-              </button>
-
-              <button
-                onClick={modifyMethod === 'inline' ? handleSaveInlineEdit : handleSubmitFeedback}
-                disabled={isSaving || (modifyMethod === 'feedback' && !feedbackText.trim())}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background:
-                    isSaving || (modifyMethod === 'feedback' && !feedbackText.trim())
-                      ? 'var(--color-surface)'
-                      : 'var(--color-info)',
-                  color:
-                    isSaving || (modifyMethod === 'feedback' && !feedbackText.trim())
-                      ? 'var(--color-text-muted)'
-                      : '#ffffff',
-                  border: `1px solid ${isSaving || (modifyMethod === 'feedback' && !feedbackText.trim()) ? 'var(--color-border)' : 'var(--color-info)'}`,
-                  cursor:
-                    isSaving || (modifyMethod === 'feedback' && !feedbackText.trim())
-                      ? 'not-allowed'
-                      : 'pointer',
-                  opacity:
-                    isSaving || (modifyMethod === 'feedback' && !feedbackText.trim()) ? 0.6 : 1,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSaving && !(modifyMethod === 'feedback' && !feedbackText.trim())) {
-                    e.currentTarget.style.opacity = '0.9';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSaving && !(modifyMethod === 'feedback' && !feedbackText.trim())) {
-                    e.currentTarget.style.opacity = '1';
-                  }
-                }}
+                <MessageSquare className="w-4 h-4" />
+                Request Changes
+              </Button>
+              <Button
+                onClick={approve}
+                disabled={!canAct}
+                style={successButton}
+                data-testid="plan-approve"
               >
-                <Save className="w-4 h-4" />
-                {isSaving
-                  ? 'Saving...'
-                  : modifyMethod === 'inline'
-                    ? 'Save Changes'
-                    : 'Submit Feedback'}
-              </button>
+                {busy ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle className="w-4 h-4" />
+                )}
+                Approve
+              </Button>
             </>
-          ) : showModifyMode && !modifyMethod ? (
-            <button
-              onClick={handleBackToReview}
-              className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-              style={{
-                background: 'var(--color-surface)',
-                color: 'var(--color-text-primary)',
-                border: '1px solid var(--color-border)',
-                cursor: 'pointer',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--color-surface-hover)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'var(--color-surface)';
-              }}
-            >
-              <X className="w-4 h-4" />
-              Back to Review
-            </button>
           ) : (
             <>
-              <button
-                onClick={handleModifyPlan}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background: 'var(--color-secondary)',
-                  color: 'var(--color-secondary-text)',
-                  border: '1px solid var(--color-secondary)',
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--color-secondary-hover)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--color-secondary)';
-                }}
+              <Button
+                variant="outline"
+                onClick={() => setMode('view')}
+                disabled={busy}
+                data-testid="plan-back"
               >
-                <Edit className="w-4 h-4" />
-                Modify Plan
-              </button>
-
-              <button
-                onClick={handleApproveOnly}
-                disabled={isApproving}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background: 'var(--color-success)',
-                  color: '#ffffff',
-                  border: '1px solid var(--color-success)',
-                  cursor: isApproving ? 'not-allowed' : 'pointer',
-                  opacity: isApproving ? 0.7 : 1,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isApproving) {
-                    e.currentTarget.style.opacity = '0.9';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isApproving) {
-                    e.currentTarget.style.opacity = '1';
-                  }
-                }}
-              >
-                <CheckCircle className="w-4 h-4" />
-                {isApproving ? 'Approving...' : 'Only Approve'}
-              </button>
-
-              <button
-                onClick={handleApproveAndStart}
-                disabled={isApproving}
-                className="px-4 py-2 rounded-md text-sm font-medium transition-all flex items-center gap-2"
-                style={{
-                  background: 'var(--color-info)',
-                  color: '#ffffff',
-                  border: '1px solid var(--color-info)',
-                  cursor: isApproving ? 'not-allowed' : 'pointer',
-                  opacity: isApproving ? 0.7 : 1,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isApproving) {
-                    e.currentTarget.style.opacity = '0.9';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isApproving) {
-                    e.currentTarget.style.opacity = '1';
-                  }
-                }}
-              >
-                <Play className="w-4 h-4" />
-                {isApproving ? 'Starting...' : 'Approve & Start'}
-              </button>
+                <ArrowLeft className="w-4 h-4" />
+                Back
+              </Button>
+              {mode === 'feedback' ? (
+                <Button
+                  onClick={sendFeedback}
+                  disabled={!canAct || !feedback.trim()}
+                  style={primaryButton}
+                  data-testid="plan-send-feedback"
+                >
+                  {busy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <MessageSquare className="w-4 h-4" />
+                  )}
+                  Send Feedback
+                </Button>
+              ) : (
+                <Button
+                  onClick={saveEdit}
+                  disabled={!canAct || !draft.trim()}
+                  style={primaryButton}
+                  data-testid="plan-save-edit"
+                >
+                  {busy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  Save Plan
+                </Button>
+              )}
             </>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A line above the plan saying why it cannot be acted on, if it cannot. */
+function StateNotice({ state }: { state: PlanReviewState }) {
+  let text: string;
+  let color = 'var(--color-text-secondary)';
+  let spinner = false;
+  let testId = 'plan-status';
+  switch (state.kind) {
+    case 'reviewable':
+      return null;
+    case 'revising':
+      text = 'Revising the plan…';
+      spinner = true;
+      testId = 'plan-revising';
+      break;
+    case 'working':
+      text = `${state.label}…`;
+      spinner = true;
+      break;
+    case 'revision_halted':
+      color = state.status.kind === 'failed' ? 'var(--color-error)' : 'var(--color-warning)';
+      text =
+        state.status.kind === 'failed'
+          ? `The revision failed: ${state.status.error.replace(/\.$/, '')}. Retry it from the task card.`
+          : 'The revision stopped before it finished. Resume the task to continue it.';
+      break;
+    case 'closed':
+      text = `${state.message} There is nothing to review here.`;
+      break;
+  }
+  return (
+    <div
+      className="shrink-0 flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+      style={{ borderColor: 'var(--color-border)', color }}
+      data-testid={testId}
+    >
+      {spinner && <Loader2 className="w-4 h-4 animate-spin" />}
+      {text}
+    </div>
   );
 }

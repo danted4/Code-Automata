@@ -22,12 +22,13 @@ crates/server/     ca_server: HTTP API and event stream in front of the engine (
 ui/                React UI: Vite, React Router, Tailwind, Zustand
   src/routes/      one file per page
   src/components/  kanban, tasks, worktrees, theme, ui (shadcn-style)
-  src/lib/         api-client, native (desktop-only actions), themes, 2.x task types
+  src/lib/         api/ (client, endpoints, event stream, generated types), task-view and other
+                   pure view logic, native (desktop-only actions), themes
   src/types/       global declarations
 docs/images/       screenshots and logos
 ```
 
-Not built yet: the Tauri shell `crates/app` (Phase 5). The UI still speaks the 2.2.x API (`/api/tasks/*`, `/api/agents/*`, 2.x task types) until its Phase 4 rewrite, and `yarn dev` and `yarn preview` answer every `/api` call with 503 until then.
+Not built yet: the Tauri shell `crates/app` (Phase 5). Until then the UI runs in a browser against `ca-server`: `yarn dev` and `yarn preview` proxy `/api` to it and add its token.
 
 ## Commands
 
@@ -35,11 +36,12 @@ Not built yet: the Tauri shell `crates/app` (Phase 5). The UI still speaks the 2
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo run -p code-automata-server --bin ca-server -- --port 7878 --token dev --allow-mock
+cargo run -p code-automata-server --bin ca-server -- --port 7878 --token dev \
+  --allow-mock --mock-scenario path/to/scenario.json    # mock tasks from the UI play this
 
 cd ui
 yarn install
-yarn dev            # http://localhost:5173
+yarn dev            # http://localhost:5173, proxies /api to ca-server (CA_SERVER_URL, CA_SERVER_TOKEN)
 yarn lint
 yarn typecheck
 yarn test           # Vitest
@@ -51,7 +53,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml`. Both fai
 
 ## Invariants
 
-**Project scoping.** Every UI request that touches tasks, git or agents goes through `apiFetch` (`ui/src/lib/api-client.ts`), which carries the open project's path. Never assume the process's working directory is the user's project.
+**Project scoping.** Every UI request goes through `ui/src/lib/api/client.ts`, which sends the open project's path (`X-Project-Path`). Never assume the process's working directory is the user's project.
 
 **On-disk layout.** Everything lives under `<repo root>/.code-automata/`, which the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs beside it. `worktrees/<id>/` is the worktree on branch `code-automata/<id>`. There is no aggregate file.
 
@@ -61,7 +63,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml`. Both fai
 
 **Desktop-only actions** (folder picker, open in editor, reveal in file manager) go through `ui/src/lib/native.ts`. It is `null` until the Tauri shell implements it, and the UI hides those actions then.
 
-**UI data flow.** Components → Zustand stores → `apiFetch` → core. Keep business logic out of components.
+**UI data flow.** `lib/api` (typed calls, generated types) → Zustand stores, kept current by the project's event stream (`store/project-sync.ts`; no polling) → components. What a task shows (badge, buttons, progress) comes from pure functions in `lib/task-view.ts` and siblings, each with a Vitest test; keep business logic out of components.
 
 ## Testing
 

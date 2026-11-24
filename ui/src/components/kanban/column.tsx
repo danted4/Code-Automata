@@ -1,34 +1,23 @@
 /**
- * Kanban Column Component
- *
- * Represents a single workflow phase column
+ * Kanban Column: one workflow phase.
  */
 
 import { useDroppable } from '@dnd-kit/core';
-import { Task, WorkflowPhase, getPhaseDisplayName } from '@/lib/tasks/schema';
+import type { Phase } from '@/lib/api/types/Phase';
+import type { Task } from '@/lib/api/types/Task';
+import { PHASE_LABELS } from '@/lib/task-view';
 import { TaskCard } from './task-card';
 
-interface KanbanColumnProps {
-  phase: WorkflowPhase;
-  tasks: Task[];
-  onEditBlockedTask?: (task: Task | null) => void;
-}
+const PHASE_COLORS: Record<Phase, string> = {
+  planning: 'var(--color-phase-planning)',
+  in_progress: 'var(--color-status-in-progress)',
+  ai_review: 'var(--color-phase-validate)',
+  human_review: 'var(--color-phase-discovery)',
+  done: 'var(--color-status-completed)',
+};
 
-export function KanbanColumn({ phase, tasks, onEditBlockedTask }: KanbanColumnProps) {
-  const { setNodeRef } = useDroppable({
-    id: phase,
-  });
-
-  const getPhaseColor = (phase: WorkflowPhase): string => {
-    const colors: Record<WorkflowPhase, string> = {
-      planning: 'var(--color-phase-planning)',
-      in_progress: 'var(--color-status-in-progress)',
-      ai_review: 'var(--color-phase-validate)',
-      human_review: 'var(--color-phase-discovery)',
-      done: 'var(--color-status-completed)',
-    };
-    return colors[phase];
-  };
+export function KanbanColumn({ phase, tasks }: { phase: Phase; tasks: Task[] }) {
+  const { setNodeRef } = useDroppable({ id: phase });
 
   return (
     <div
@@ -38,13 +27,12 @@ export function KanbanColumn({ phase, tasks, onEditBlockedTask }: KanbanColumnPr
       style={{
         background: 'var(--color-surface)',
         borderColor: 'var(--color-border)',
-        borderTopColor: getPhaseColor(phase),
+        borderTopColor: PHASE_COLORS[phase],
       }}
     >
-      {/* Column Header */}
       <div className="p-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
         <h3 className="font-semibold text-base" style={{ color: 'var(--color-text-primary)' }}>
-          {getPhaseDisplayName(phase)}
+          {PHASE_LABELS[phase]}
         </h3>
         <div
           data-testid={`task-count-${phase}`}
@@ -54,14 +42,12 @@ export function KanbanColumn({ phase, tasks, onEditBlockedTask }: KanbanColumnPr
           {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
         </div>
       </div>
-
-      {/* Tasks */}
       <div
         data-testid={`task-list-${phase}`}
         className="p-3 space-y-3 min-h-[200px] max-h-[calc(100vh-12rem)] overflow-y-auto"
       >
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} onEditBlockedTask={onEditBlockedTask} />
+          <TaskCard key={task.id} task={task} />
         ))}
         {tasks.length === 0 && (
           <div

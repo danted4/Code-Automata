@@ -1,165 +1,98 @@
 /**
- * Task Store (Zustand)
+ * The open project's tasks, kept current by the server's event stream.
  *
- * Global state management for tasks and Kanban board
+ * `load` fetches the list; `useProjectSync` (in the layout) follows the event stream and calls
+ * `load` after every (re)connect, then applies task changes as they arrive. Commands go through
+ * `act`, which stores the task the server returns and turns failures into toasts.
  */
 
 import { create } from 'zustand';
-import { Task, WorkflowPhase } from '@/lib/tasks/schema';
-import { apiFetch } from '@/lib/api-client';
+import { toast } from 'sonner';
+import { api, errorMessage } from '@/lib/api';
+import type { SkippedFile } from '@/lib/api/types/SkippedFile';
+import type { Task } from '@/lib/api/types/Task';
 import { useProjectStore } from '@/store/project-store';
 
 interface TaskState {
   tasks: Task[];
-  isLoading: boolean;
+  /** Task files the server could not read. */
+  skipped: SkippedFile[];
+  loading: boolean;
   error: string | null;
-
-  // Actions
-  loadTasks: () => Promise<void>;
-  createTask: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) => Promise<Task>;
-  updateTask: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  /** Resolves to null on success, else the reason the move was refused or failed. */
-  updateTaskPhase: (taskId: string, phase: WorkflowPhase) => Promise<string | null>;
-  deleteTask: (taskId: string) => Promise<void>;
+  load: () => Promise<void>;
+  upsert: (task: Task) => void;
+  remove: (id: string) => void;
+  clear: () => void;
 }
 
-/** The task-list request currently out, if any, and the project it is for. */
-let inFlight: { project: string | null; token: object; done: Promise<void> } | null = null;
+/** The list request currently out, if any, and the project it is for. */
+let inFlight: { project: string | null; done: Promise<void> } | null = null;
 
-export const useTaskStore = create<TaskState>((set, _get) => ({
+export const useTaskStore = create<TaskState>((set) => ({
   tasks: [],
-  isLoading: false,
+  skipped: [],
+  loading: false,
   error: null,
 
-  loadTasks: () => {
-    // The board polls every few seconds; a poll that arrives while a load for the same project is
-    // still out joins it instead of starting a second request.
+  load: () => {
     const project = useProjectStore.getState().projectPath;
     if (inFlight && inFlight.project === project) return inFlight.done;
-    set({ isLoading: true, error: null });
-    const token = {};
-    const done = (async () => {
+    if (!project) {
+      set({ tasks: [], skipped: [], loading: false, error: null });
+      return Promise.resolve();
+    }
+    set({ loading: true });
+    const entry: { project: string | null; done: Promise<void> } = {
+      project,
+      done: Promise.resolve(),
+    };
+    entry.done = (async () => {
       try {
-        const response = await apiFetch('/api/tasks/list', { projectPath: project });
-        if (!response.ok) {
-          throw new Error('Failed to load tasks');
-        }
-        const tasks = await response.json();
-        // A project switched while this was out: its own load sets the list.
+        const list = await api.tasks.list();
         if (useProjectStore.getState().projectPath !== project) return;
-        set({ tasks, isLoading: false });
-      } catch (error) {
+        set({ tasks: list.tasks, skipped: list.skipped, loading: false, error: null });
+      } catch (e) {
         if (useProjectStore.getState().projectPath !== project) return;
-        set({
-          error: error instanceof Error ? error.message : 'Unknown error',
-          isLoading: false,
-        });
+        set({ loading: false, error: errorMessage(e) });
       } finally {
-        if (inFlight?.token === token) inFlight = null;
+        if (inFlight === entry) inFlight = null;
       }
     })();
-    inFlight = { project, token, done };
-    return done;
+    inFlight = entry;
+    return entry.done;
   },
 
-  createTask: async (taskData) => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await apiFetch('/api/tasks/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(taskData),
-      });
+  upsert: (task) =>
+    set((state) => {
+      const i = state.tasks.findIndex((t) => t.id === task.id);
+      if (i === -1) return { tasks: [task, ...state.tasks] };
+      const tasks = state.tasks.slice();
+      tasks[i] = task;
+      return { tasks };
+    }),
 
-      if (!response.ok) {
-        throw new Error('Failed to create task');
-      }
+  remove: (id) => set((state) => ({ tasks: state.tasks.filter((t) => t.id !== id) })),
 
-      const task = await response.json();
-      set((state) => ({
-        tasks: [...state.tasks, task],
-        isLoading: false,
-      }));
-
-      return task;
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        isLoading: false,
-      });
-      throw error;
-    }
-  },
-
-  updateTask: async (taskId, updates) => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await apiFetch('/api/tasks/update', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, ...updates }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update task');
-      }
-
-      set((state) => ({
-        tasks: state.tasks.map((t) =>
-          t.id === taskId ? { ...t, ...updates, updatedAt: Date.now() } : t
-        ),
-        isLoading: false,
-      }));
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        isLoading: false,
-      });
-    }
-  },
-
-  updateTaskPhase: async (taskId, phase) => {
-    try {
-      const response = await apiFetch('/api/tasks/update', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, phase }),
-      });
-      if (!response.ok) {
-        const body: { error?: unknown } = await response.json().catch(() => ({}));
-        return typeof body.error === 'string' ? body.error : `HTTP ${response.status}`;
-      }
-      set((state) => ({
-        tasks: state.tasks.map((t) =>
-          t.id === taskId ? { ...t, phase, updatedAt: Date.now() } : t
-        ),
-      }));
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : 'Unknown error';
-    }
-  },
-
-  deleteTask: async (taskId) => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await apiFetch(`/api/tasks/delete?taskId=${taskId}`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete task');
-      }
-
-      set((state) => ({
-        tasks: state.tasks.filter((t) => t.id !== taskId),
-        isLoading: false,
-      }));
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Unknown error',
-        isLoading: false,
-      });
-    }
-  },
+  clear: () => set({ tasks: [], skipped: [], error: null }),
 }));
+
+/**
+ * Run a command that returns the task, store the result, and toast a failure. Resolves to the
+ * task, or null when the command failed.
+ */
+export async function act(command: () => Promise<Task>, success?: string): Promise<Task | null> {
+  try {
+    const task = await command();
+    useTaskStore.getState().upsert(task);
+    if (success) toast.success(success);
+    return task;
+  } catch (e) {
+    toast.error(errorMessage(e));
+    return null;
+  }
+}
+
+/** The task with this id from the store, kept current. */
+export function useTask(id: string | null | undefined): Task | undefined {
+  return useTaskStore((s) => (id ? s.tasks.find((t) => t.id === id) : undefined));
+}

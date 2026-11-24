@@ -1,149 +1,197 @@
 /**
- * Worktrees Page
- *
- * Lists git worktrees for the current project: disk usage summary,
- * "Cleanup all" action, and WorktreeCard list. Delete opens DeleteWorktreeModal;
- * Cleanup opens CleanupModal with toggles. Uses apiFetch with X-Project-Path.
- * Gates on projectPath so we always query the correct project (not process.cwd()).
+ * Worktrees Page: the open project's task worktrees with their disk use. Only orphans (their task
+ * file is gone) can be deleted here, one at a time or all at once; a task's own worktree goes with
+ * the task.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { useProjectStore } from '@/store/project-store';
-import { apiFetch } from '@/lib/api-client';
-import { WorktreeCard, type WorktreeItem } from '@/components/worktrees/worktree-card';
-import { DeleteWorktreeModal } from '@/components/worktrees/delete-worktree-modal';
-import { CleanupModal } from '@/components/worktrees/cleanup-modal';
-import { Button } from '@/components/ui/button';
-import { Loader2, AlertCircle, HardDrive, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertCircle, HardDrive, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { DeleteOrphansModal } from '@/components/worktrees/delete-orphans-modal';
+import { WorktreeCard } from '@/components/worktrees/worktree-card';
+import { Button } from '@/components/ui/button';
+import { api, errorMessage } from '@/lib/api';
+import type { DiskUsage } from '@/lib/api/types/DiskUsage';
+import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
+import { cleanupSummary, formatBytes, orphans } from '@/lib/worktree-view';
+import { useProjectStore } from '@/store/project-store';
 
-interface WorktreesListResponse {
-  worktrees: WorktreeItem[];
-  count: number;
-  totalDiskUsageBytes: number;
+const pageStyle = { background: 'var(--color-background)', color: 'var(--color-text-primary)' };
+
+function CenteredNotice({
+  testId,
+  icon,
+  title,
+  children,
+}: {
+  testId: string;
+  icon: React.ReactNode;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      className="h-screen flex flex-col items-center justify-center p-6"
+      style={pageStyle}
+    >
+      <div
+        className="rounded-lg border p-8 max-w-md w-full text-center space-y-4"
+        style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+      >
+        {icon}
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {children}
+      </div>
+    </div>
+  );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${Number((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+/** Messages for a toast, one per line. */
+function lines(messages: string[]) {
+  return <span style={{ whiteSpace: 'pre-line' }}>{messages.join('\n')}</span>;
 }
+
+/** Deleting: one orphan (a card's Delete) or all of them (cleanup). */
+type Pending = { kind: 'one'; taskId: string } | { kind: 'all' } | null;
 
 export default function WorktreesPage() {
   const projectPath = useProjectStore((s) => s.projectPath);
-  const [data, setData] = useState<WorktreesListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [worktrees, setWorktrees] = useState<WorktreeEntry[] | null>(null);
+  const [usage, setUsage] = useState<DiskUsage | null>(null);
+  const [usageError, setUsageError] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState<Pending>(null);
+  /** Drops answers from an earlier load (another project, or a reload that overtook it). */
+  const loadId = useRef(0);
 
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [worktreeToDelete, setWorktreeToDelete] = useState<WorktreeItem | null>(null);
-  const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
-
-  const fetchWorktrees = useCallback(async () => {
-    if (!projectPath) {
-      setData(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+  const load = useCallback(async () => {
+    const id = ++loadId.current;
     setLoading(true);
     setError(null);
+    api.worktrees
+      .usage()
+      .then((u) => {
+        if (id !== loadId.current) return;
+        setUsage(u);
+        setUsageError(false);
+      })
+      .catch(() => {
+        if (id === loadId.current) setUsageError(true);
+      });
     try {
-      const res = await apiFetch('/api/git/worktree?action=list');
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const bodyError = typeof body?.error === 'string' ? body.error : null;
-        if (res.status === 503) {
-          setError(bodyError ?? 'Git is not available');
-        } else if (res.status >= 500) {
-          setError(bodyError ?? 'Server error');
-        } else {
-          setError(bodyError ?? `Request failed (${res.status})`);
-        }
-        setData(null);
-        return;
-      }
-      const json: WorktreesListResponse = await res.json();
-      setData(json);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load worktrees';
-      setError(message);
-      setData(null);
+      const list = await api.worktrees.list();
+      if (id === loadId.current) setWorktrees(list);
+    } catch (e) {
+      if (id === loadId.current) setError(errorMessage(e));
     } finally {
-      setLoading(false);
+      if (id === loadId.current) setLoading(false);
     }
-  }, [projectPath]);
+  }, []);
 
   useEffect(() => {
-    fetchWorktrees();
-  }, [fetchWorktrees]);
-
-  const handleRetry = useCallback(() => {
+    setWorktrees(null);
+    setUsage(null);
+    setUsageError(false);
     setError(null);
-    fetchWorktrees();
-  }, [fetchWorktrees]);
+    if (projectPath) void load();
+  }, [projectPath, load]);
 
-  const handleDeleteClick = useCallback(
-    (taskId: string) => {
-      const worktree = data?.worktrees.find((w) => w.taskId === taskId) ?? null;
-      setWorktreeToDelete(worktree);
-      setDeleteModalOpen(true);
-    },
-    [data?.worktrees]
-  );
-
-  const handleDeleted = useCallback(() => {
-    toast.success('Worktree deleted');
+  const afterDelete = useCallback(() => {
     useProjectStore.getState().incrementWorktreeRefresh();
-    fetchWorktrees();
-  }, [fetchWorktrees]);
+    void load();
+  }, [load]);
 
-  const handleCleanedUp = useCallback(
-    (removedCount: number) => {
-      toast.success(
-        removedCount > 0
-          ? `Removed ${removedCount} worktree${removedCount === 1 ? '' : 's'}`
-          : 'No worktrees to remove'
-      );
-      useProjectStore.getState().incrementWorktreeRefresh();
-      fetchWorktrees();
-    },
-    [fetchWorktrees]
-  );
+  const deleteOne = async (taskId: string) => {
+    try {
+      const report = await api.worktrees.removeOrphan(taskId);
+      if (report.warnings.length > 0) {
+        toast.warning('Orphan worktree deleted with warnings', {
+          description: lines(report.warnings),
+        });
+      } else {
+        toast.success('Orphan worktree deleted');
+      }
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      afterDelete();
+    }
+  };
+
+  const deleteAll = async (targets: WorktreeEntry[]) => {
+    let removed = 0;
+    const problems: string[] = [];
+    for (const w of targets) {
+      try {
+        const report = await api.worktrees.removeOrphan(w.taskId);
+        removed += 1;
+        problems.push(...report.warnings.map((m) => `${w.taskId}: ${m}`));
+      } catch (e) {
+        problems.push(`${w.taskId}: ${errorMessage(e)}`);
+      }
+    }
+    const failed = targets.length - removed;
+    const summary = cleanupSummary(removed, failed);
+    const description = problems.length > 0 ? lines(problems) : undefined;
+    if (failed > 0) toast.error(summary, { description });
+    else if (problems.length > 0) toast.warning(summary, { description });
+    else toast.success(summary);
+    afterDelete();
+  };
 
   if (!projectPath) {
     return (
-      <div
-        data-testid="worktrees-no-project"
-        className="min-h-screen flex flex-col items-center justify-center gap-6 p-6"
-        style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
-      >
-        <div
-          className="rounded-lg border p-8 max-w-md w-full text-center space-y-4"
-          style={{
-            background: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
+      <CenteredNotice
+        testId="worktrees-page"
+        icon={
           <HardDrive className="w-12 h-12 mx-auto" style={{ color: 'var(--color-text-muted)' }} />
-          <h2 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            Select a project
-          </h2>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            Open a project from the sidebar to view its git worktrees.
-          </p>
-        </div>
-      </div>
+        }
+        title="Open a project"
+      >
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          Open a project to see its worktrees.
+        </p>
+      </CenteredNotice>
     );
   }
 
-  if (loading) {
+  if (error && worktrees === null) {
+    return (
+      <CenteredNotice
+        testId="worktrees-page"
+        icon={
+          <AlertCircle
+            className="w-12 h-12 mx-auto"
+            style={{ color: 'var(--color-destructive)' }}
+          />
+        }
+        title="Could not load worktrees"
+      >
+        <p
+          data-testid="worktrees-error"
+          className="text-sm"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {error}
+        </p>
+        <Button
+          onClick={() => void load()}
+          style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-text)' }}
+        >
+          Retry
+        </Button>
+      </CenteredNotice>
+    );
+  }
+
+  if (worktrees === null) {
     return (
       <div
-        className="min-h-screen flex flex-col items-center justify-center gap-4 p-6"
-        style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
+        data-testid="worktrees-page"
+        className="h-screen flex flex-col items-center justify-center gap-4 p-6"
+        style={pageStyle}
       >
         <Loader2 className="w-10 h-10 animate-spin" style={{ color: 'var(--color-primary)' }} />
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
@@ -153,88 +201,22 @@ export default function WorktreesPage() {
     );
   }
 
-  if (error) {
-    return (
-      <div
-        data-testid="worktrees-error-state"
-        className="min-h-screen flex flex-col items-center justify-center gap-6 p-6"
-        style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
-      >
-        <div
-          className="rounded-lg border p-6 max-w-md w-full text-center space-y-4"
-          style={{
-            background: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-          <AlertCircle
-            className="w-12 h-12 mx-auto"
-            style={{ color: 'var(--color-destructive)' }}
-          />
-          <h2 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            Something went wrong
-          </h2>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            {error}
-          </p>
-          <Button
-            onClick={handleRetry}
-            style={{
-              backgroundColor: 'var(--color-primary)',
-              color: 'var(--color-primary-text)',
-            }}
-          >
-            Retry
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  const count = data?.count ?? 0;
-
-  if (count === 0) {
-    return (
-      <div
-        data-testid="worktrees-empty-state"
-        className="min-h-screen flex flex-col items-center justify-center gap-6 p-6"
-        style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
-      >
-        <div
-          className="rounded-lg border p-8 max-w-md w-full text-center space-y-4"
-          style={{
-            background: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-          }}
-        >
-          <HardDrive className="w-12 h-12 mx-auto" style={{ color: 'var(--color-text-muted)' }} />
-          <h2 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            No worktrees
-          </h2>
-          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            There are no git worktrees for this project yet. Worktrees are created when you start
-            working on a task.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const worktrees = data!.worktrees;
-  const totalBytes = data!.totalDiskUsageBytes;
+  const orphanList = orphans(worktrees);
+  const targets: WorktreeEntry[] =
+    pending?.kind === 'all'
+      ? orphanList
+      : pending?.kind === 'one'
+        ? worktrees.filter((w) => w.taskId === pending.taskId)
+        : [];
 
   return (
-    <div
-      className="min-h-screen p-6"
-      style={{ background: 'var(--color-background)', color: 'var(--color-text-primary)' }}
-    >
+    <div data-testid="worktrees-page" className="h-screen overflow-y-auto p-6" style={pageStyle}>
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
-            Worktrees
-          </h1>
-          <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-bold">Worktrees</h1>
+          <div className="flex flex-wrap items-center gap-3">
             <div
+              data-testid="worktrees-usage"
               className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm"
               style={{
                 background: 'var(--color-surface)',
@@ -243,49 +225,90 @@ export default function WorktreesPage() {
               }}
             >
               <HardDrive className="w-4 h-4" />
-              <span>Total: {formatBytes(totalBytes)}</span>
+              <span>
+                {usage
+                  ? `Total: ${formatBytes(usage.totalBytes)}`
+                  : usageError
+                    ? 'Disk use unavailable'
+                    : 'Measuring…'}
+              </span>
             </div>
             <Button
               variant="outline"
               size="sm"
               className="gap-2"
+              aria-label="Reload"
+              title="Reload"
+              data-testid="worktrees-reload"
+              onClick={() => void load()}
+              disabled={loading}
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              data-testid="worktrees-cleanup"
+              disabled={orphanList.length === 0}
+              title={orphanList.length === 0 ? 'No orphan worktrees' : undefined}
+              onClick={() => setPending({ kind: 'all' })}
               style={{
                 backgroundColor: 'var(--color-surface)',
                 borderColor: 'var(--color-destructive)',
                 color: 'var(--color-destructive)',
               }}
-              onClick={() => setCleanupModalOpen(true)}
             >
               <Trash2 className="w-4 h-4" />
-              Cleanup
+              Clean up orphans{orphanList.length > 0 ? ` (${orphanList.length})` : ''}
             </Button>
           </div>
         </header>
 
-        <ul data-testid="worktrees-list" className="grid gap-4 sm:grid-cols-2">
-          {worktrees.map((worktree) => (
-            <li key={worktree.taskId}>
-              <WorktreeCard worktree={worktree} onDelete={handleDeleteClick} />
-            </li>
-          ))}
-        </ul>
+        {error && (
+          <p className="text-sm" style={{ color: 'var(--color-destructive)' }}>
+            Reload failed: {error}
+          </p>
+        )}
+
+        {worktrees.length === 0 ? (
+          <div
+            data-testid="worktrees-empty"
+            className="rounded-lg border p-8 text-center space-y-2"
+            style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+          >
+            <h2 className="text-lg font-semibold">No worktrees</h2>
+            <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+              A task gets its own worktree when it starts.
+            </p>
+          </div>
+        ) : (
+          <ul data-testid="worktrees-list" className="grid gap-4 sm:grid-cols-2">
+            {worktrees.map((w) => (
+              <li key={w.taskId}>
+                <WorktreeCard
+                  worktree={w}
+                  sizeBytes={usage?.perWorktree[w.taskId]}
+                  onDelete={(taskId) => setPending({ kind: 'one', taskId })}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
-      <DeleteWorktreeModal
-        open={deleteModalOpen}
+      <DeleteOrphansModal
+        open={pending !== null && targets.length > 0}
         onOpenChange={(open) => {
-          setDeleteModalOpen(open);
-          if (!open) setWorktreeToDelete(null);
+          if (!open) setPending(null);
         }}
-        worktree={worktreeToDelete}
-        onDeleted={handleDeleted}
-      />
-
-      <CleanupModal
-        open={cleanupModalOpen}
-        onOpenChange={setCleanupModalOpen}
-        worktrees={worktrees}
-        onCleanedUp={handleCleanedUp}
+        worktrees={targets}
+        onConfirm={() => (pending?.kind === 'one' ? deleteOne(pending.taskId) : deleteAll(targets))}
       />
     </div>
   );

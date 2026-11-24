@@ -35,6 +35,8 @@ const TASK_FILE: &str = "task.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedFile {
+    /// The task's directory name, which is its id: enough to delete it.
+    pub task_id: String,
     pub path: PathBuf,
     pub error: String,
 }
@@ -112,6 +114,7 @@ impl TaskStore {
                 Ok(Some(task)) => out.tasks.push(task),
                 Ok(None) => {} // a directory without a task file, or deleted meanwhile
                 Err(e) => out.skipped.push(SkippedFile {
+                    task_id: name.clone(),
                     path,
                     error: e.to_string(),
                 }),

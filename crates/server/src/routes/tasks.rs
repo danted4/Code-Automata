@@ -41,14 +41,24 @@ pub async fn create(
     Body(req): Body<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     check_provider(&state, req.agent.provider)?;
+    let mut agent = req.agent;
+    if agent.provider == Provider::Mock
+        && !agent.options.contains_key("scenario")
+        && let Some(scenario) = &state.config.mock_scenario
+    {
+        agent.options.insert(
+            "scenario".into(),
+            Value::String(scenario.display().to_string()),
+        );
+    }
     let (title, description, approval) = (&req.title, &req.description, req.require_plan_approval);
     let task = if req.start {
         engine
-            .create_and_start(title, description, req.agent, approval)
+            .create_and_start(title, description, agent, approval)
             .await?
     } else {
         engine
-            .create_task(title, description, req.agent, approval)
+            .create_task(title, description, agent, approval)
             .await?
     };
     Ok((StatusCode::CREATED, Json(task)))

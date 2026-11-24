@@ -20,6 +20,8 @@ pub struct Config {
     pub port: u16,
     /// Offer the scripted mock agent (development and tests only).
     pub allow_mock: bool,
+    /// The scenario a mock task plays when it names none (the UI has no field for one).
+    pub mock_scenario: Option<PathBuf>,
     /// Where the agent CLIs are.
     pub bins: Binaries,
 }

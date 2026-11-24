@@ -6,29 +6,22 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router';
-import {
-  LayoutDashboard,
-  Terminal,
-  ListTodo,
-  Settings,
-  GitBranch,
-  GithubIcon,
-  Brain,
-  Plus,
-  FolderOpen,
-} from 'lucide-react';
+import { LayoutDashboard, Settings, GitBranch, Plus, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { NewTaskModal } from '@/components/tasks/new-task-modal';
 import { OpenProjectModal } from '@/components/project/open-project-modal';
 import { ThemeSwitcher } from '@/components/theme/theme-switcher';
 import { useProjectStore } from '@/store/project-store';
-import { apiFetch } from '@/lib/api-client';
+import { api } from '@/lib/api';
+import { useTaskStore } from '@/store/task-store';
 
 /** Fetches worktree count for the current project. Refetches when projectPath or worktreeRefreshKey changes. */
 function useWorktreeCount(): number {
   const projectPath = useProjectStore((s) => s.projectPath);
   const worktreeRefreshKey = useProjectStore((s) => s.worktreeRefreshKey);
+  // A task gets its worktree when planning starts and loses it when deleted.
+  const tasksWithWorktrees = useTaskStore((s) => s.tasks.filter((t) => t.baseCommit).length);
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -39,14 +32,10 @@ function useWorktreeCount(): number {
 
     let cancelled = false;
 
-    apiFetch('/api/git/worktree?action=list')
-      .then((res) => {
-        if (cancelled || !res.ok) return;
-        return res.json();
-      })
-      .then((data: { count?: number } | undefined) => {
-        if (cancelled || data == null) return;
-        setCount(typeof data.count === 'number' ? data.count : 0);
+    api.worktrees
+      .list()
+      .then((list) => {
+        if (!cancelled) setCount(list.length);
       })
       .catch(() => {
         if (!cancelled) setCount(0);
@@ -55,23 +44,17 @@ function useWorktreeCount(): number {
     return () => {
       cancelled = true;
     };
-  }, [projectPath, worktreeRefreshKey]);
+  }, [projectPath, worktreeRefreshKey, tasksWithWorktrees]);
 
   return count;
 }
 
 const projectLinks = [
   { href: '/', label: 'Kanban Board', icon: LayoutDashboard },
-  { href: '/agents', label: 'Agent Terminals', icon: Terminal },
-  { href: '/tasks', label: 'Task List', icon: ListTodo },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-const toolLinks = [
-  { href: '/github', label: 'GitHub Issues', icon: GithubIcon },
-  { href: '/worktrees', label: 'Git Worktrees', icon: GitBranch },
-  { href: '/memory', label: 'Memory/Context', icon: Brain },
-];
+const toolLinks = [{ href: '/worktrees', label: 'Git Worktrees', icon: GitBranch }];
 
 export function Sidebar() {
   const { pathname } = useLocation();

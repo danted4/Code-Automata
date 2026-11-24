@@ -3,4 +3,8 @@
 /**
  * A task directory that could not be read during [`TaskStore::list`].
  */
-export type SkippedFile = { path: string, error: string, };
+export type SkippedFile = { 
+/**
+ * The task's directory name, which is its id: enough to delete it.
+ */
+taskId: string, path: string, error: string, };

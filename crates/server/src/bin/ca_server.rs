@@ -1,14 +1,15 @@
 //! `ca-server`: the HTTP server on its own, for development and the UI's end-to-end tests.
 //!
 //! ```text
-//! ca-server [--port N] [--token T] [--allow-mock]
+//! ca-server [--port N] [--token T] [--allow-mock [--mock-scenario FILE]]
 //! ```
 //!
 //! Prints `listening on http://127.0.0.1:<port>` and `token <token>`, one per line, once it
 //! accepts connections. Ctrl-C (or SIGTERM on Unix) stops it; running tasks are left `interrupted`.
 //!
 //! With `--allow-mock`, the mock agent is offered. It is found through `CODE_AUTOMATA_MOCK_AGENT`,
-//! else next to this binary (`cargo build` puts `mock-agent` there).
+//! else next to this binary (`cargo build` puts `mock-agent` there). `--mock-scenario` is the
+//! scenario a mock task plays when it names none, as tasks created from the UI do.
 
 use std::process::ExitCode;
 
@@ -20,6 +21,7 @@ struct Args {
     port: u16,
     token: Option<String>,
     allow_mock: bool,
+    mock_scenario: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -27,6 +29,7 @@ fn parse_args() -> Result<Args, String> {
         port: 0,
         token: None,
         allow_mock: false,
+        mock_scenario: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -45,8 +48,17 @@ fn parse_args() -> Result<Args, String> {
                 args.token = Some(value);
             }
             "--allow-mock" => args.allow_mock = true,
+            "--mock-scenario" => {
+                let value = it.next().ok_or("--mock-scenario needs a file")?;
+                let path = std::path::absolute(&value)
+                    .map_err(|e| format!("--mock-scenario {value:?}: {e}"))?;
+                args.mock_scenario = Some(path);
+            }
             "-h" | "--help" => {
-                return Err("usage: ca-server [--port N] [--token T] [--allow-mock]".into());
+                return Err(
+                    "usage: ca-server [--port N] [--token T] [--allow-mock [--mock-scenario FILE]]"
+                        .into(),
+                );
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -79,6 +91,9 @@ fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    if args.mock_scenario.is_some() && !args.allow_mock {
+        return Err("--mock-scenario needs --allow-mock".into());
+    }
     let mut bins = Binaries::from_login_shell().await;
     if args.allow_mock {
         let mock = std::env::var_os("CODE_AUTOMATA_MOCK_AGENT")
@@ -104,6 +119,7 @@ async fn run(args: Args) -> Result<(), String> {
         token: token.clone(),
         port,
         allow_mock: args.allow_mock,
+        mock_scenario: args.mock_scenario,
         bins,
     });
 

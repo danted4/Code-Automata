@@ -103,6 +103,7 @@ impl Harness {
             token: TOKEN.into(),
             port: PORT,
             allow_mock,
+            mock_scenario: None,
             bins,
         });
         Harness {

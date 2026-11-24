@@ -127,7 +127,13 @@ impl RunLogWriter {
             return;
         };
         text.push('\n');
-        if file.write_all(text.as_bytes()).await.is_err() {
+        // tokio's File hands writes to a blocking thread and keeps them until flushed: without
+        // the flush, a reader (or a writer dropped after `finished`) may not see the line yet.
+        let written = async {
+            file.write_all(text.as_bytes()).await?;
+            file.flush().await
+        };
+        if written.await.is_err() {
             self.file = None;
         }
     }

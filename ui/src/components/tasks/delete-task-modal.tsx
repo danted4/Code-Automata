@@ -1,184 +1,77 @@
 /**
- * Delete Task Modal
- *
- * Confirmation modal for deleting tasks with warning about worktree deletion
+ * Delete Task Modal: confirms, then stops the task's agent and removes its worktree, branch and
+ * files.
  */
 
+import { useState } from 'react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogBody,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, AlertTriangle } from 'lucide-react';
-import type { Task } from '@/lib/tasks/schema';
+import { api, errorMessage } from '@/lib/api';
+import { useTask, useTaskStore } from '@/store/task-store';
+import type { TaskModalProps } from './modal-props';
 
-interface DeleteTaskModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  task: Task | null;
-  onConfirmDelete: () => void;
-  isDeleting?: boolean;
-}
-
-export function DeleteTaskModal({
-  open,
-  onOpenChange,
-  task,
-  onConfirmDelete,
-  isDeleting = false,
-}: DeleteTaskModalProps) {
+export function DeleteTaskModal({ taskId, open, onOpenChange }: TaskModalProps) {
+  const task = useTask(taskId);
+  const [deleting, setDeleting] = useState(false);
   if (!task) return null;
 
+  const confirm = async () => {
+    setDeleting(true);
+    try {
+      await api.tasks.remove(task.id);
+      useTaskStore.getState().remove(task.id);
+      toast.success('Task deleted');
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={isDeleting ? undefined : onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+    <Dialog open={open} onOpenChange={deleting ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-[500px]" data-testid="delete-task-modal">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="w-5 h-5" style={{ color: 'var(--color-destructive)' }} />
             Delete Task
           </DialogTitle>
           <DialogDescription>
-            This action cannot be undone. This will permanently delete the task and its associated
-            worktree.
+            Delete &ldquo;{task.title}&rdquo;? A running agent is stopped first.
           </DialogDescription>
         </DialogHeader>
-
-        <DialogBody className="space-y-4 py-4">
-          {/* Task Details */}
-          <div className="space-y-3">
-            <div>
-              <div
-                className="text-sm font-medium mb-1"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                Task Title
-              </div>
-              <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-                {task.title || task.id}
-              </div>
-            </div>
-
-            <div>
-              <div
-                className="text-sm font-medium mb-1"
-                style={{ color: 'var(--color-text-primary)' }}
-              >
-                Description
-              </div>
-              <div
-                className="text-sm line-clamp-3"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                {task.description}
-              </div>
-            </div>
-
-            {task.branchName && (
-              <div>
-                <div
-                  className="text-sm font-medium mb-1"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  Branch Name
-                </div>
-                <div
-                  className="text-sm font-mono px-2 py-1 rounded"
-                  style={{
-                    backgroundColor: 'var(--color-surface-hover)',
-                    color: 'var(--color-text-secondary)',
-                  }}
-                >
-                  {task.branchName}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Warning Box */}
-          <div
-            className="rounded-md border p-3 space-y-2"
-            style={{
-              borderColor: 'var(--color-destructive)',
-              backgroundColor: 'var(--color-surface-hover)',
-            }}
-          >
-            <div className="flex items-start gap-2">
-              <AlertTriangle
-                className="w-4 h-4 mt-0.5 flex-shrink-0"
-                style={{ color: 'var(--color-destructive)' }}
-              />
-              <div className="space-y-1">
-                <div className="text-sm font-medium" style={{ color: 'var(--color-destructive)' }}>
-                  Warning
-                </div>
-                <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                  Deleting this task will:
-                </div>
-                <ul
-                  className="text-xs space-y-0.5 ml-4 list-disc"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  <li>Permanently delete all task data and subtasks</li>
-                  <li>Remove the associated git worktree if it exists</li>
-                  <li>Delete any uncommitted changes in the worktree</li>
-                  <li>Remove the task from all phases in the workflow</li>
-                </ul>
-              </div>
-            </div>
-          </div>
+        <DialogBody>
+          <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+            This removes the task, its logs, its worktree and its branch{' '}
+            <code className="font-mono">code-automata/{task.id}</code>, including any work that is
+            not in a pull request. It cannot be undone.
+          </p>
         </DialogBody>
-
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isDeleting}
-            style={{
-              background: 'var(--color-surface-hover)',
-              color: 'var(--color-text-primary)',
-              borderColor: 'var(--color-border)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isDeleting) {
-                e.currentTarget.style.background = 'var(--color-background)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'var(--color-surface-hover)';
-            }}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={deleting}>
             Cancel
           </Button>
           <Button
-            onClick={onConfirmDelete}
-            disabled={isDeleting}
-            className="font-medium"
+            data-testid="confirm-delete-task"
+            onClick={confirm}
+            disabled={deleting}
             style={{
-              backgroundColor: 'var(--color-destructive)',
-              color: 'var(--color-surface)',
-            }}
-            onMouseEnter={(e) => {
-              if (!isDeleting) {
-                e.currentTarget.style.opacity = '0.9';
-              }
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = '1';
+              background: 'var(--color-destructive)',
+              color: 'var(--color-destructive-text)',
             }}
           >
-            {isDeleting ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Deleting...
-              </>
-            ) : (
-              'Delete Task'
-            )}
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete'}
           </Button>
         </DialogFooter>
       </DialogContent>
