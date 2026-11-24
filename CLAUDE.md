@@ -17,6 +17,25 @@ yarn playwright test e2e/kanban.spec.ts -g "name of the test"    # one e2e test
 
 Playwright starts `yarn next:dev` on port 3000 itself (and reuses a server already running there outside CI). Unit coverage today is themes only; nothing under `src/lib/agents`, `src/lib/cli` or the agent routes has tests.
 
+## Rust core (3.0 migration, branch `v3-tauri`)
+
+The backend is being rewritten in Rust; the TypeScript app above is unchanged until the UI switches over. Plan and phase notes live in the Obsidian vault under `Plans/code-automata/`.
+
+```bash
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings     # CI fails on any warning
+cargo test                                    # all crates
+cargo test --test git worktree_lifecycle      # one integration test
+```
+
+`crates/core` (`ca_core`) holds the task store, phase table and git layer:
+
+- `TaskStore::update` is the only write path: per-task lock, then atomic temp-file-and-rename. Reads never write.
+- `status` and `assignedAgent` are derived from the `run` record on every save; never set them by hand.
+- v1 (2.2.x) task files are migrated in memory on load (`migrate.rs`). A task that was mid-run becomes an `interrupted` run on its first unfinished subtask.
+- Phase moves go through `transitions::check_move`; UI edits through `apply_patch`, which accepts only `EDITABLE_FIELDS`.
+- Integration tests under `crates/core/tests/` run against throwaway git repos and the hand-written v1 fixtures in `tests/fixtures/`.
+
 ## How a task actually runs
 
 The orchestration is not in `src/lib`. It lives inside the route handlers under `src/app/api/agents/`, as closures that keep running after the HTTP response is sent:
