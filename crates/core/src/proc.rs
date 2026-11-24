@@ -186,7 +186,10 @@ pub(crate) fn shell_command(line: &str) -> Command {
         // cmd does not parse arguments the way the C runtime does, so the line is passed raw.
         // With /S, cmd strips exactly the outer quotes and runs the rest as written. /D skips
         // AutoRun commands from the registry.
-        let mut cmd = Command::new("cmd");
+        // %ComSpec% rather than a PATH lookup: checks run with the user's PATH, which need not
+        // include System32. A command line is limited to about 8191 characters.
+        let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+        let mut cmd = Command::new(comspec);
         cmd.args(["/D", "/S", "/C"]).raw_arg(format!("\"{line}\""));
         cmd
     }

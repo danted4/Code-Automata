@@ -157,22 +157,36 @@ impl Binaries {
     }
 }
 
-/// The file names `name` may have on disk. On Windows, `name` plus each `PATHEXT` extension in
-/// order (`.COM;.EXE;.BAT;.CMD` when unset), the way `cmd` searches; elsewhere just `name`.
+/// The file names `name` may have on disk. On Windows, `name` as written if it already has an
+/// extension (`gh.exe`), then `name` plus each `PATHEXT` extension in order, the way `cmd`
+/// searches (`.COM;.EXE;.BAT;.CMD` when `PATHEXT` is unset or has no usable entry). Elsewhere
+/// just `name`.
 pub fn executable_names(name: &str, pathext: Option<&OsStr>) -> Vec<OsString> {
+    const DEFAULT: &str = ".COM;.EXE;.BAT;.CMD";
     if !cfg!(windows) {
         return vec![OsString::from(name)];
     }
-    let pathext = pathext
-        .and_then(OsStr::to_str)
-        .filter(|p| !p.trim().is_empty())
-        .unwrap_or(".COM;.EXE;.BAT;.CMD");
-    pathext
-        .split(';')
-        .map(str::trim)
-        .filter(|ext| ext.starts_with('.') && ext.len() > 1)
-        .map(|ext| OsString::from(format!("{name}{}", ext.to_ascii_lowercase())))
-        .collect()
+    let exts = |list: &str| -> Vec<String> {
+        list.split(';')
+            .map(str::trim)
+            .filter(|ext| ext.starts_with('.') && ext.len() > 1)
+            .map(str::to_ascii_lowercase)
+            .collect()
+    };
+    let mut found = exts(pathext.and_then(OsStr::to_str).unwrap_or(DEFAULT));
+    if found.is_empty() {
+        found = exts(DEFAULT);
+    }
+    let mut names = Vec::new();
+    if Path::new(name).extension().is_some() {
+        names.push(OsString::from(name));
+    }
+    names.extend(
+        found
+            .iter()
+            .map(|ext| OsString::from(format!("{name}{ext}"))),
+    );
+    names
 }
 
 #[cfg(unix)]
@@ -236,6 +250,13 @@ mod tests {
             ["claude.com", "claude.exe", "claude.bat", "claude.cmd"]
         );
         assert_eq!(names(Some(" ; .Bat ;junk")), ["claude.bat"]);
+        // Set but unusable: the default list.
+        assert_eq!(names(Some("EXE;CMD")).len(), 4);
+        let exact: Vec<_> = executable_names("gh.exe", Some(OsStr::new(".EXE")))
+            .into_iter()
+            .map(|n| n.into_string().unwrap())
+            .collect();
+        assert_eq!(exact, ["gh.exe", "gh.exe.exe"]);
     }
 
     #[test]

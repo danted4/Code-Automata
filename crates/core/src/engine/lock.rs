@@ -47,9 +47,11 @@ impl ProjectLock {
                     .unwrap_or_default()
                     .trim()
                     .to_string();
+                // Empty: the holder has just taken the lock and not yet said who it is. (A
+                // line from an earlier owner can show for that same instant.)
                 return Err(CoreError::ProjectLocked {
                     holder: if holder.is_empty() {
-                        "unknown process".into()
+                        "a window that is just starting".into()
                     } else {
                         holder
                     },
@@ -64,12 +66,12 @@ impl ProjectLock {
                 });
             }
         }
+        // Through a temp file, so a second window never reads a half-written line.
         let owner = owner_path(path);
-        std::fs::write(
-            &owner,
-            format!("pid {} boot {boot_id}\n", std::process::id()),
-        )
-        .map_err(io_at(&owner))?;
+        let tmp = owner.with_file_name(format!("engine.owner.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, format!("pid {} boot {boot_id}\n", std::process::id()))
+            .and_then(|()| std::fs::rename(&tmp, &owner))
+            .map_err(io_at(&owner))?;
         Ok(ProjectLock { _file: file })
     }
 }

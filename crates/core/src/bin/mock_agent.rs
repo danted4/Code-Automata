@@ -64,6 +64,14 @@ fn shell(line: &str) -> std::process::Command {
 
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `mock-agent --dump-args <file> ARGS...`: write ARGS to <file> as JSON and exit (tests that
+    // check how arguments survive a launcher such as a Windows .cmd shim).
+    if let [flag, file, rest @ ..] = args.as_slice()
+        && flag == "--dump-args"
+    {
+        let _ = std::fs::write(file, json!(rest).to_string());
+        return 0;
+    }
     // A child started by a portable spawnChild step: `mock-agent --sleep-ms n`.
     if let [flag, ms] = args.as_slice()
         && flag == "--sleep-ms"

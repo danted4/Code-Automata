@@ -347,11 +347,12 @@ mod tests {
             },
             CheckCommand {
                 name: "bad".into(),
-                command: "echo broken >&2; exit 3".into(),
+                // Valid in both sh and cmd.
+                command: "echo broken 1>&2&& exit 3".into(),
             },
             CheckCommand {
                 name: "never".into(),
-                command: "touch ran.txt".into(),
+                command: "echo x> ran.txt".into(),
             },
         ];
         let runs = run_all(d.path(), &cmds, None, Duration::from_secs(10)).await;
@@ -373,7 +374,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let cmds = vec![CheckCommand {
             name: "hang".into(),
-            command: "sleep 30".into(),
+            command: SLEEP_30.into(),
         }];
         let started = Instant::now();
         let runs = run_all(d.path(), &cmds, None, Duration::from_millis(300)).await;
@@ -387,7 +388,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let cmds = vec![CheckCommand {
             name: "build".into(),
-            command: "echo built; (sleep 30 &) ; exit 0".into(),
+            command: if cfg!(windows) {
+                // The background ping inherits the output pipe and holds it open.
+                "echo built& start \"\" /b ping -n 31 127.0.0.1".into()
+            } else {
+                "echo built; (sleep 30 &) ; exit 0".into()
+            },
         }];
         let started = Instant::now();
         let runs = run_all(d.path(), &cmds, None, Duration::from_secs(10)).await;
@@ -405,7 +411,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let cmds = vec![CheckCommand {
             name: "slow".into(),
-            command: "echo compiling module 7; sleep 30".into(),
+            command: format!("echo compiling module 7&& {SLEEP_30}"),
         }];
         let runs = run_all(d.path(), &cmds, None, Duration::from_millis(500)).await;
         assert!(runs[0].timed_out);
@@ -417,7 +423,15 @@ mod tests {
         assert!(runs[0].output.contains("timed out"));
     }
 
+    /// Thirty seconds of doing nothing, in the platform's check shell.
+    const SLEEP_30: &str = if cfg!(windows) {
+        "ping -n 31 127.0.0.1 > nul"
+    } else {
+        "sleep 30"
+    };
+
     #[tokio::test]
+    #[cfg(unix)] // needs the grandchild's pid from the shell ($!)
     async fn dropping_a_running_check_kills_its_processes() {
         let d = tempfile::tempdir().unwrap();
         let pid_file = d.path().join("pid");

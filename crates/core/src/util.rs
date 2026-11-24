@@ -101,7 +101,8 @@ pub fn plain_path(path: std::path::PathBuf) -> std::path::PathBuf {
     if let Some(rest) = text.strip_prefix(r"\\?\") {
         let bytes = rest.as_bytes();
         let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-        if drive && (bytes.len() == 2 || bytes[2] == b'\\') && plain_keeps_meaning(&rest[2..]) {
+        // `C:` alone means "the current directory on C:", so the backslash is required.
+        if drive && bytes.len() > 2 && bytes[2] == b'\\' && plain_keeps_meaning(&rest[2..]) {
             return std::path::PathBuf::from(rest);
         }
     }
@@ -176,6 +177,7 @@ mod tests {
         let plain = |text: &str| plain_path(PathBuf::from(text)).display().to_string();
         assert_eq!(plain(r"\\?\E:\my\folder"), r"E:\my\folder");
         assert_eq!(plain(r"\\?\C:\"), r"C:\");
+        assert_eq!(plain(r"\\?\C:"), r"\\?\C:");
         assert_eq!(plain(r"\\?\UNC\nas\share\dl"), r"\\nas\share\dl");
         // Plain would mean another folder: a trailing dot or space, a device name.
         assert_eq!(plain(r"\\?\E:\dl.\x"), r"\\?\E:\dl.\x");

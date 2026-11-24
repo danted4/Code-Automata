@@ -245,6 +245,7 @@ fn fake_cli(dir: &Path, name: &str, version: &str, login: &str) -> PathBuf {
 }
 
 #[tokio::test]
+#[cfg(unix)] // the fake CLI is a shell script
 async fn preflight_reads_claude_login_from_stdout_only() {
     use ca_core::agent::preflight::check;
     let dir = tempfile::tempdir().unwrap();

@@ -520,3 +520,33 @@ async fn an_unmatched_tool_call_is_forgotten_once_the_agent_talks_again() {
         began.elapsed()
     );
 }
+
+/// npm installs CLIs on Windows as `.cmd` shims, so arguments pass through cmd.exe's parser. The
+/// biggest and most quote-heavy argument any provider gets is the JSON schema; it must arrive
+/// byte for byte.
+#[tokio::test]
+#[cfg(windows)]
+async fn a_json_schema_survives_a_cmd_shim() {
+    use ca_core::engine::output::{AgentOutput, QaOut, SubtasksOut};
+    let m = Mock::new();
+    let shim = m.path("agent.cmd");
+    std::fs::write(
+        &shim,
+        format!("@\"{}\" %*\r\n", env!("CARGO_BIN_EXE_mock-agent")),
+    )
+    .unwrap();
+    for schema in [SubtasksOut::schema(), QaOut::schema()] {
+        let text = schema.to_string();
+        let out = m.path("args.json");
+        let _ = std::fs::remove_file(&out);
+        let status = tokio::process::Command::new(&shim)
+            .args(["--dump-args", out.to_str().unwrap(), "--json-schema", &text])
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+        let got: Vec<String> =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(got, ["--json-schema", text.as_str()]);
+    }
+}
