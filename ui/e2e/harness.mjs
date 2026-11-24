@@ -25,6 +25,9 @@ const TOKEN = 'e2e-token';
 const SESSION = 'ca-e2e';
 export const BASE = `http://localhost:${PREVIEW_PORT}`;
 
+/** Terminal colour codes: ESC [ ... m. */
+const ANSI_COLOUR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- processes -------------------------------------------------------------------------------
@@ -45,7 +48,8 @@ function waitForLine(child, pattern, what, timeoutMs = 30_000) {
       timeoutMs
     );
     const onData = (chunk) => {
-      seen += chunk.toString();
+      // Colour codes (CI forces colour on) would split "localhost:4173".
+      seen += chunk.toString().replace(ANSI_COLOUR, '');
       if (pattern.test(seen)) done(resolve, seen);
     };
     const onExit = (code) => done(reject, new Error(`${what} exited with ${code}:\n${seen}`));
@@ -88,6 +92,7 @@ export async function startPreview() {
     cwd: UI,
     env: {
       ...process.env,
+      NO_COLOR: '1',
       CA_SERVER_URL: `http://127.0.0.1:${SERVER_PORT}`,
       CA_SERVER_TOKEN: TOKEN,
     },
