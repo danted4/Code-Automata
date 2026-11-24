@@ -56,6 +56,11 @@ Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-co
 
 3.0 keeps every run's position on disk. Closing the app, a crash or Pause leaves the task where it was. Resume continues the same subtask, using the agent's own session and the partial work.
 
+## Things to know
+
+- Agents work in a git worktree per task, and they can edit any file there, including your repository's git hooks (for example husky's `.husky/`). Code-Automata runs hooks as git normally does: `post-commit` and `prepare-commit-msg` on each checkpoint commit, `pre-push` when it creates or updates the pull request, with your login shell's `PATH`. Review hook changes in a task's diff before you push it.
+- The installers are not code-signed (see Install).
+
 ## Repository layout
 
 | Path | What |
