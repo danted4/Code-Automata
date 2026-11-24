@@ -38,15 +38,17 @@ pub(crate) async fn git_output(
     timeout: Option<Duration>,
 ) -> Result<Output> {
     let mut attempt = 0;
+    let mut cleared = false;
     loop {
         let out = git_output_once(cwd, args, timeout).await?;
+        let locked = !out.status.success() && retry_safe(args);
+        if locked && !cleared && remove_dead_lock(&out.stderr).await {
+            cleared = true;
+            continue;
+        }
         // Another git process (an editor's git integration, say) holding the index lock for a
         // moment: wait and try again rather than fail the task's step.
-        if !out.status.success()
-            && attempt < INDEX_LOCK_RETRIES
-            && retry_safe(args)
-            && index_held(&out.stderr)
-        {
+        if locked && attempt < INDEX_LOCK_RETRIES && index_held(&out.stderr) {
             attempt += 1;
             tokio::time::sleep(Duration::from_millis(100 * u64::from(attempt))).await;
             continue;
@@ -82,19 +84,64 @@ fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
 /// A lock older than this was left by a git process that died; waiting will not clear it.
 const STALE_LOCK: Duration = Duration::from_secs(15);
 
+/// `Some` when the command failed because an index lock exists, with the lock's path when git's
+/// message names it.
+fn index_lock_in(stderr: &[u8]) -> Option<Option<PathBuf>> {
+    let text = String::from_utf8_lossy(stderr);
+    if !(text.contains("index.lock") && text.contains("File exists")) {
+        return None;
+    }
+    Some(
+        text.split_once("Unable to create '")
+            .and_then(|(_, rest)| rest.split_once("': File exists"))
+            .map(|(path, _)| PathBuf::from(path)),
+    )
+}
+
+/// How old an index lock must be before Windows may treat it as dead (see [`remove_dead_lock`]).
+/// git holds a live lock open from creation until it renames it, which takes far less.
+const DEAD_LOCK_AGE: Duration = Duration::from_secs(1);
+
+/// Windows only: delete the index lock the command failed on if no process has it open, and say
+/// whether it did. git for Windows creates lock files with `open(O_CREAT | O_EXCL)`, which it
+/// routes to `_wopen`, and that cannot grant `FILE_SHARE_DELETE` (compat/mingw.c,
+/// `mingw_open`). So while any git holds the lock, deleting it fails with a sharing violation and
+/// nothing is removed; it can only succeed for a lock whose git is gone: killed mid-write, as a
+/// run's leftover git is when its Job Object closes. Such a lock is never released and would fail
+/// every later step (a checkpoint's `git add`, a reset) until the user deleted it by hand. On Unix
+/// a lock cannot be told from a live one this way, so nothing is removed there.
+async fn remove_dead_lock(stderr: &[u8]) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let Some(Some(lock)) = index_lock_in(stderr) else {
+        return false;
+    };
+    let old = std::fs::metadata(&lock)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age >= DEAD_LOCK_AGE);
+    if !old {
+        return false;
+    }
+    match tokio::fs::remove_file(&lock).await {
+        Ok(()) => {
+            log::warn!("removed {}, left by a git that is gone", lock.display());
+            true
+        }
+        // Held open (a live git), or gone already: the normal retry decides.
+        Err(_) => false,
+    }
+}
+
 /// The command failed because another git process holds an index lock right now. A stale lock
 /// (from a killed git) is not waited on: git's own message names the file to remove.
 fn index_held(stderr: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(stderr);
-    if !(text.contains("index.lock") && text.contains("File exists")) {
-        return false;
-    }
-    let Some(lock) = text
-        .split_once("Unable to create '")
-        .and_then(|(_, rest)| rest.split_once("': File exists"))
-        .map(|(path, _)| std::path::PathBuf::from(path))
-    else {
-        return true;
+    let lock = match index_lock_in(stderr) {
+        None => return false,
+        Some(None) => return true,
+        Some(Some(lock)) => lock,
     };
     match std::fs::metadata(&lock).and_then(|m| m.modified()) {
         Ok(modified) => modified.elapsed().map_or(true, |age| age < STALE_LOCK),
@@ -840,7 +887,7 @@ pub async fn head(worktree: &Path) -> Result<String> {
 /// files removed. Ignored files (build output, `node_modules`) are kept. This is what makes
 /// read-only and review runs read-only whatever the provider allowed.
 pub async fn discard_changes(worktree: &Path) -> Result<()> {
-    reset_hard(worktree, "HEAD").await?;
+    run_git(worktree, &["reset", "--hard", "-q", "HEAD"]).await?;
     run_git(worktree, &["clean", "-fdq"]).await?;
     Ok(())
 }
@@ -848,49 +895,9 @@ pub async fn discard_changes(worktree: &Path) -> Result<()> {
 /// Like [`discard_changes`], and also drop any commits made after `commit` (an agent that ran
 /// `git commit` during a run that may not change anything).
 pub async fn discard_to(worktree: &Path, commit: &str) -> Result<()> {
-    reset_hard(worktree, commit).await?;
+    run_git(worktree, &["reset", "--hard", "-q", commit]).await?;
     run_git(worktree, &["clean", "-fdq"]).await?;
     Ok(())
-}
-
-/// `git reset --hard` in a task worktree after a run has ended.
-///
-/// On Windows a run's whole process tree dies with its Job Object, so a `git` the agent left
-/// running is killed mid-write and its `index.lock` stays behind for good; the usual retries
-/// (see [`git_output`]) wait for it in vain. If the reset still finds the worktree's index lock
-/// held, that lock is from the dead run: it is removed and the reset tried once more. Elsewhere a
-/// leftover process is still alive and releases its lock, so nothing is removed.
-async fn reset_hard(worktree: &Path, commit: &str) -> Result<()> {
-    let args = ["reset", "--hard", "-q", commit];
-    match run_git(worktree, &args).await {
-        Err(CoreError::Git { stderr, .. })
-            if cfg!(windows) && stderr.contains("index.lock") && stderr.contains("File exists") =>
-        {
-            let lock =
-                PathBuf::from(run_git(worktree, &["rev-parse", "--git-path", "index.lock"]).await?);
-            let lock = if lock.is_absolute() {
-                lock
-            } else {
-                worktree.join(lock)
-            };
-            log::warn!(
-                "removing {} left by a killed git, then resetting again",
-                lock.display()
-            );
-            match tokio::fs::remove_file(&lock).await {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(CoreError::Io {
-                        path: lock,
-                        source: e,
-                    });
-                }
-            }
-            run_git(worktree, &args).await.map(|_| ())
-        }
-        other => other.map(|_| ()),
-    }
 }
 
 /// Subject of the temporary commit that parks partial work (see [`park_changes`]).

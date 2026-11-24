@@ -597,7 +597,7 @@ async fn a_stale_index_lock_fails_at_once_with_its_path() {
 }
 
 /// On Windows a run's leftover `git`, killed with its Job Object, leaves `index.lock` behind for
-/// good. Discarding a run's changes removes that dead lock and resets anyway.
+/// good. A lock no process holds open is removed, and the command (here a reset) goes on.
 #[cfg(windows)]
 #[tokio::test]
 async fn a_dead_runs_index_lock_does_not_block_the_discard() {
@@ -618,4 +618,68 @@ async fn a_dead_runs_index_lock_does_not_block_the_discard() {
     ca_core::git::discard_to(&info.path, &base).await.unwrap();
     assert!(!lock.exists());
     assert!(!info.path.join("leftover.txt").exists());
+}
+
+/// The same dead lock, long past the 15 s after which a lock is no longer waited on, must not fail
+/// the next checkpoint (`git add -A`) either.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_dead_index_lock_does_not_block_the_next_checkpoint() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-lock2").await.unwrap();
+    std::fs::write(info.path.join("work.txt"), "x").unwrap();
+    let lock =
+        std::path::PathBuf::from(git(&info.path, &["rev-parse", "--git-path", "index.lock"]));
+    let lock = if lock.is_absolute() {
+        lock
+    } else {
+        info.path.join(lock)
+    };
+    let file = std::fs::File::create(&lock).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+        .unwrap();
+    drop(file);
+
+    let cp = checkpoint_commit(&info.path, "task-lock2", "dev-1", "Work")
+        .await
+        .unwrap();
+    assert!(cp.created, "the checkpoint was committed");
+    assert!(!lock.exists());
+}
+
+/// A lock a live process holds open is never removed: git for Windows opens it without delete
+/// sharing, and this test opens it the same way.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_held_index_lock_is_not_removed() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-lock3").await.unwrap();
+    let base = info.base_commit.clone().unwrap();
+    let lock =
+        std::path::PathBuf::from(git(&info.path, &["rev-parse", "--git-path", "index.lock"]));
+    let lock = if lock.is_absolute() {
+        lock
+    } else {
+        info.path.join(lock)
+    };
+    // Opened as git opens it: read and write sharing only, no FILE_SHARE_DELETE (std's default
+    // includes it).
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&lock)
+            .unwrap()
+    };
+    held.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+        .unwrap();
+    assert!(ca_core::git::discard_to(&info.path, &base).await.is_err());
+    assert!(lock.exists(), "a held lock stays");
+    drop(held);
 }
