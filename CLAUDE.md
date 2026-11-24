@@ -24,6 +24,7 @@ The backend is being rewritten in Rust; the TypeScript app above is unchanged un
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings     # CI fails on any warning
+cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings   # Windows, from macOS
 cargo test                                    # all crates
 cargo test --test git worktree_lifecycle      # one integration test
 ```
@@ -41,7 +42,7 @@ cargo test --test git worktree_lifecycle      # one integration test
 `crates/core/src/agent/` runs agent CLIs (Claude Code, Cursor, Amp, and the scripted `mock-agent` binary for tests):
 
 - A run's outcome comes only from the provider's final `result` event; exit codes are ignored. No `result` means crashed, timed out or stopped.
-- Agents run in their own process group; stop and timeouts kill the whole group (SIGTERM, then SIGKILL after `kill_grace`).
+- Agents and check commands run as their own process tree (`src/proc.rs`). On Unix that is a process group: stop and timeouts send SIGTERM, then SIGKILL after `kill_grace`. On Windows it is a Job Object with kill-on-close: stop kills at once, and the agents die with the engine process. Windows needs no orphan cleanup.
 - Prompts go on stdin, never in arguments. Claude runs with project settings only and no MCP servers, so the user's own hooks and connectors never reach task agents.
 - Live tests make real model calls: `cargo test --test live_agents -- --ignored --test-threads=1`. Amp spends credit; keep it to `--mode low`.
 
@@ -49,7 +50,7 @@ cargo test --test git worktree_lifecycle      # one integration test
 
 - `step::next_step(task, settings)` is a pure function that decides the next step from the task file alone. Change behaviour there and in its table tests, not in the driver.
 - `driver.rs` executes one step at a time. Each step's result, and clearing its run, go in one `TaskStore::update`. A run record exists only while a step is in progress or halted (`paused` / `interrupted` / `failed`).
-- `Engine::open` takes `.code-automata/engine.lock` (one window per project) and reconciles: runs left by another process become `interrupted`, and their orphaned agents are killed if pid and start time match. Nothing restarts on its own; the user resumes.
+- `Engine::open` takes `.code-automata/engine.lock` with `File::try_lock` (one window per project; the holder is named in `engine.owner`, since Windows locks block reads) and reconciles: runs left by another process become `interrupted`, and on Unix their orphaned agents are killed if pid and start time match. Nothing restarts on its own; the user resumes.
 - Review (QA) and read-only (planning) runs have their changes, and any commits made during the run, discarded afterwards whatever the provider. Checks run against the last dev checkpoint and fail clearly if HEAD is elsewhere.
 - Acceptance tests run the whole engine on the mock agent (`tests/engine.rs`); the crash test drives the `ca-engine` binary in a child process and SIGKILLs it. One live run through Claude: `cargo test --test live_engine -- --ignored --nocapture`.
 

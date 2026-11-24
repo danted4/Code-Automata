@@ -119,20 +119,15 @@ async fn run_one(
     timeout: Duration,
 ) -> CheckRun {
     let started = Instant::now();
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c")
-        .arg(&check.command)
-        .current_dir(worktree)
+    let mut cmd = crate::proc::shell_command(&check.command);
+    cmd.current_dir(worktree)
         .env("CI", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
     if let Some(p) = path_var {
         cmd.env("PATH", p);
     }
-    #[cfg(unix)]
-    cmd.process_group(0);
 
     let finish = |passed, exit_code, timed_out, output: String| CheckRun {
         name: check.name.clone(),
@@ -143,36 +138,36 @@ async fn run_one(
         output,
         duration: started.elapsed(),
     };
-    let mut child = match cmd.spawn() {
+    let child = match crate::proc::spawn(cmd) {
         Ok(c) => c,
         Err(e) => return finish(false, None, false, format!("could not start: {e}")),
     };
-    // Kills the command's whole process group however this function is left: normal exit, timeout,
+    // Kills the command's whole process tree however this function is left: normal exit, timeout,
     // or the future being dropped (pause, shutdown).
-    let _group = GroupGuard(child.id());
+    let mut child = TreeGuard(child);
     let output = Arc::new(StdMutex::new(Vec::new()));
     let readers = [
         child
-            .stdout
-            .take()
+            .0
+            .take_stdout()
             .map(|p| tokio::spawn(read_into(p, output.clone()))),
         child
-            .stderr
-            .take()
+            .0
+            .take_stderr()
             .map(|p| tokio::spawn(read_into(p, output.clone()))),
     ];
 
     // The check is over when the command exits, not when its pipes close: something it started
     // (a daemon, a watcher) may hold them open indefinitely.
-    let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+    let (exit_code, timed_out) = match tokio::time::timeout(timeout, child.0.wait()).await {
         Ok(status) => (status.ok().and_then(|s| s.code()), false),
         Err(_) => (None, true),
     };
-    drop(_group); // stop anything left in the group, so the pipes close
+    drop(child); // stop anything left in the tree, so the pipes close
     for reader in readers.into_iter().flatten() {
         let abort = reader.abort_handle();
         if tokio::time::timeout(DRAIN, reader).await.is_err() {
-            // Something outside the group (a setsid daemon) still holds the pipe; stop reading.
+            // Something outside the tree (a setsid daemon) still holds the pipe; stop reading.
             abort.abort();
         }
     }
@@ -215,20 +210,12 @@ fn push_tail(buf: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-/// SIGKILLs a process group when dropped.
-struct GroupGuard(Option<u32>);
+/// Kills a process tree when dropped.
+struct TreeGuard(crate::proc::TreeChild);
 
-impl Drop for GroupGuard {
+impl Drop for TreeGuard {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(pid) = self.0
-            && let Ok(raw) = i32::try_from(pid)
-        {
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(raw),
-                nix::sys::signal::Signal::SIGKILL,
-            );
-        }
+        self.0.kill_now();
     }
 }
 

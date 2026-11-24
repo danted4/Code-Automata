@@ -83,3 +83,22 @@ pub async fn store_with_example() -> (TempRepo, ProjectDir, TaskStore, String) {
     let store = TaskStore::new(&project);
     (repo, project, store, id)
 }
+
+/// Whether a process with this pid exists.
+pub fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+    #[cfg(windows)]
+    {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output();
+        out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
+    }
+}

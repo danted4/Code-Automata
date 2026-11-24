@@ -183,7 +183,7 @@ async fn probe(path: &Path) -> Probe {
     if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         return Probe::Missing;
     }
-    let canonical = tokio::fs::canonicalize(path)
+    let canonical = crate::util::canonicalize(path)
         .await
         .unwrap_or_else(|_| path.to_path_buf());
     let rev_parse = ["rev-parse", "--show-toplevel"];
@@ -214,7 +214,7 @@ async fn probe(path: &Path) -> Probe {
         };
     }
     let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let top = tokio::fs::canonicalize(&top)
+    let top = crate::util::canonicalize(&top)
         .await
         .unwrap_or_else(|_| PathBuf::from(top));
     if top != canonical {
@@ -357,7 +357,9 @@ impl Worktrees {
 
         Ok(WorktreeInfo {
             task_id: task_id.to_string(),
-            path: tokio::fs::canonicalize(&path).await.map_err(io_at(&path))?,
+            path: crate::util::canonicalize(&path)
+                .await
+                .map_err(io_at(&path))?,
             branch_name: Some(branch),
             main_repo: repo.to_path_buf(),
             main_branch: self.main_branch().await,
@@ -460,7 +462,7 @@ impl Worktrees {
         let repo = self.project.root();
         let raw = run_git_raw(repo, &["worktree", "list", "--porcelain", "-z"]).await?;
         let main_branch = self.main_branch().await;
-        let base = tokio::fs::canonicalize(self.base_path())
+        let base = crate::util::canonicalize(self.base_path())
             .await
             .unwrap_or_else(|_| self.base_path());
 
@@ -488,7 +490,7 @@ impl Worktrees {
             let Some(parent) = path.parent() else {
                 continue;
             };
-            let parent = tokio::fs::canonicalize(parent)
+            let parent = crate::util::canonicalize(parent)
                 .await
                 .unwrap_or_else(|_| parent.to_path_buf());
             if parent != base {
@@ -527,8 +529,8 @@ impl Worktrees {
 
     async fn ensure_inside_base(&self, path: &Path) -> Result<()> {
         let base = self.base_path();
-        let base = tokio::fs::canonicalize(&base).await.unwrap_or(base);
-        let resolved = match tokio::fs::canonicalize(path).await {
+        let base = crate::util::canonicalize(&base).await.unwrap_or(base);
+        let resolved = match crate::util::canonicalize(path).await {
             Ok(p) => p,
             // A prunable worktree's directory may be gone; check the path as written.
             Err(_) => path.to_path_buf(),

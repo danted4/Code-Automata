@@ -28,7 +28,8 @@
 //! | `{"write": {"path", "content"}}` | write a file under the cwd (refused with `--read-only`) |
 //! | `{"stderr": "…"}` | a line on stderr |
 //! | `{"sleepMs": n}` | pause |
-//! | `{"spawnChild": {"command", "pidFile"}}` | start `sh -c command` (inheriting stdout) and write its pid |
+//! | `{"spawnChild": {"command", "pidFile"}}` | start `command` with `sh -c` (`cmd /C` on Windows), inheriting stdout, and write its pid |
+//! | `{"spawnChild": {"sleepMs", "pidFile"}}` | start a copy of this binary that sleeps for `sleepMs` (inheriting stdout) and write its pid; every platform |
 //! | `{"result": {"subtype", "text", "isError", "structured"}}` | the final result line |
 //! | `{"exit": n}` | exit now with code n |
 //! | `{"hang": true}` | never finish |
@@ -45,8 +46,31 @@ fn main() {
     std::process::exit(run());
 }
 
+fn shell(line: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/D", "/S", "/C"]).raw_arg(format!("\"{line}\""));
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(line);
+        cmd
+    }
+}
+
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // A child started by a portable spawnChild step: `mock-agent --sleep-ms n`.
+    if let [flag, ms] = args.as_slice()
+        && flag == "--sleep-ms"
+    {
+        std::thread::sleep(Duration::from_millis(ms.parse().unwrap_or(60_000)));
+        return 0;
+    }
     let flag = |name: &str| {
         args.iter()
             .position(|a| a == name)
@@ -187,15 +211,21 @@ fn run() -> i32 {
         } else if let Some(ms) = step.get("sleepMs").and_then(Value::as_u64) {
             std::thread::sleep(Duration::from_millis(ms));
         } else if let Some(child) = step.get("spawnChild") {
-            let command = child
-                .get("command")
-                .and_then(Value::as_str)
-                .unwrap_or("sleep 60");
-            match std::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .spawn()
-            {
+            let spawned = match child.get("sleepMs").and_then(Value::as_u64) {
+                Some(ms) => std::env::current_exe().and_then(|me| {
+                    std::process::Command::new(me)
+                        .args(["--sleep-ms", &ms.to_string()])
+                        .spawn()
+                }),
+                None => shell(
+                    child
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("sleep 60"),
+                )
+                .spawn(),
+            };
+            match spawned {
                 Ok(c) => {
                     if let Some(pid_file) = child.get("pidFile").and_then(Value::as_str) {
                         let _ = std::fs::write(pid_file, c.id().to_string());

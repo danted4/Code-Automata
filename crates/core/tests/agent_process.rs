@@ -1,6 +1,7 @@
 //! Process supervision, end to end, with the scripted mock agent.
 #![allow(clippy::unwrap_used)]
-#![cfg(unix)]
+
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -91,12 +92,7 @@ fn outcome(events: &[AgentEvent]) -> &ca_core::agent::Outcome {
     finished[0]
 }
 
-fn alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .is_ok_and(|s| s.success())
-}
+use common::alive;
 
 async fn wait_dead(pid: u32) -> bool {
     for _ in 0..40 {
@@ -259,7 +255,7 @@ async fn stop_kills_the_agent_and_its_children() {
     let m = Mock::new();
     let pid_file = m.path("child.pid");
     let req = m.request(json!({ "steps": [
-        { "spawnChild": { "command": "sleep 60", "pidFile": pid_file.to_str().unwrap() } },
+        { "spawnChild": { "sleepMs": 60000, "pidFile": pid_file.to_str().unwrap() } },
         { "text": "running" },
         { "hang": true }
     ]}));
@@ -282,6 +278,7 @@ async fn stop_kills_the_agent_and_its_children() {
 }
 
 #[tokio::test]
+#[cfg(unix)] // Windows has no SIGTERM: a stop kills at once
 async fn a_child_that_ignores_sigterm_is_killed_after_the_grace_period() {
     let m = Mock::new();
     let pid_file = m.path("child.pid");
@@ -308,7 +305,7 @@ async fn a_finished_agent_is_not_held_open_by_a_leftover_child() {
     let pid_file = m.path("child.pid");
     let req = m.request(json!({ "steps": [
         // Inherits stdout, so the pipe stays open after the agent exits.
-        { "spawnChild": { "command": "sleep 30", "pidFile": pid_file.to_str().unwrap() } },
+        { "spawnChild": { "sleepMs": 30000, "pidFile": pid_file.to_str().unwrap() } },
         { "result": { "text": "done" } }
     ]}));
     let began = Instant::now();
@@ -420,7 +417,7 @@ async fn dropping_the_handle_stops_the_agent_and_its_children() {
     let m = Mock::new();
     let pid_file = m.path("child.pid");
     let req = m.request(json!({ "steps": [
-        { "spawnChild": { "command": "sleep 60", "pidFile": pid_file.to_str().unwrap() } },
+        { "spawnChild": { "sleepMs": 60000, "pidFile": pid_file.to_str().unwrap() } },
         { "text": "running" },
         { "hang": true }
     ]}));

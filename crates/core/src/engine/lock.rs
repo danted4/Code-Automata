@@ -1,19 +1,18 @@
 //! One engine per project.
 //!
-//! An exclusive OS lock (`flock`) on `.code-automata/engine.lock`, held for as long as the engine
-//! lives. The OS drops it when the process exits, crash included, so a stale lock can never block a
-//! restart. The file holds the owner's pid and boot id, for the error shown to a second window.
-
-use std::io::{Seek, Write};
+//! An exclusive OS lock on `.code-automata/engine.lock` (`File::try_lock`: `flock` on Unix,
+//! `LockFileEx` on Windows), held for as long as the engine lives. The OS drops it when the
+//! process exits, crash included, so a stale lock can never block a restart.
+//!
+//! The owner's pid and boot id go in `engine.owner` next to it, for the error shown to a second
+//! window. A separate file because Windows locks are mandatory: nobody else can read a locked file.
 
 use crate::error::{CoreError, Result, io_at};
 use crate::project::ProjectDir;
 
 #[derive(Debug)]
 pub struct ProjectLock {
-    #[cfg(unix)]
-    _lock: nix::fcntl::Flock<std::fs::File>,
-    #[cfg(not(unix))]
+    /// Locked; closing it releases the lock.
     _file: std::fs::File,
 }
 
@@ -41,52 +40,40 @@ impl ProjectLock {
             .open(path)
             .map_err(io_at(path))?;
 
-        #[cfg(unix)]
-        {
-            use nix::fcntl::{Flock, FlockArg};
-            let mut lock = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-                Ok(lock) => lock,
-                // Only "would block" means another process holds it; anything else (a network
-                // share without locking, for example) is a real error.
-                Err((_, errno))
-                    if errno != nix::errno::Errno::EWOULDBLOCK
-                        && errno != nix::errno::Errno::EAGAIN =>
-                {
-                    return Err(CoreError::Io {
-                        path: path.to_path_buf(),
-                        source: std::io::Error::from(errno),
-                    });
-                }
-                Err((file, _)) => {
-                    let holder = std::io::read_to_string(&file)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    return Err(CoreError::ProjectLocked {
-                        holder: if holder.is_empty() {
-                            "unknown process".into()
-                        } else {
-                            holder
-                        },
-                    });
-                }
-            };
-            write_owner(&mut lock, path, boot_id)?;
-            Ok(ProjectLock { _lock: lock })
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let holder = std::fs::read_to_string(owner_path(path))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                return Err(CoreError::ProjectLocked {
+                    holder: if holder.is_empty() {
+                        "unknown process".into()
+                    } else {
+                        holder
+                    },
+                });
+            }
+            // Anything but "held by someone else" (a network share without locking, for example)
+            // is a real error.
+            Err(std::fs::TryLockError::Error(source)) => {
+                return Err(CoreError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
         }
-        #[cfg(not(unix))]
-        {
-            // Windows: no cross-process lock yet (Phase 5); the file still records the owner.
-            let mut file = file;
-            write_owner(&mut file, path, boot_id)?;
-            Ok(ProjectLock { _file: file })
-        }
+        let owner = owner_path(path);
+        std::fs::write(
+            &owner,
+            format!("pid {} boot {boot_id}\n", std::process::id()),
+        )
+        .map_err(io_at(&owner))?;
+        Ok(ProjectLock { _file: file })
     }
 }
 
-fn write_owner(file: &mut std::fs::File, path: &std::path::Path, boot_id: &str) -> Result<()> {
-    file.set_len(0).map_err(io_at(path))?;
-    file.rewind().map_err(io_at(path))?;
-    writeln!(file, "pid {} boot {boot_id}", std::process::id()).map_err(io_at(path))?;
-    file.sync_all().map_err(io_at(path))
+fn owner_path(lock: &std::path::Path) -> std::path::PathBuf {
+    lock.with_file_name("engine.owner")
 }

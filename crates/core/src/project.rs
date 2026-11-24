@@ -56,7 +56,7 @@ impl ProjectDir {
             }));
         }
         let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let root = tokio::fs::canonicalize(&top)
+        let root = crate::util::canonicalize(&top)
             .await
             .map_err(|_| invalid("the git repository root cannot be resolved".into()))?;
 

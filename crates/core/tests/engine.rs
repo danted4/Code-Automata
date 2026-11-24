@@ -4,7 +4,6 @@
 //! pull request, failure, timeout, planning with approval, check and QA rework, one window per
 //! project, skip, and a worktree moved by hand.
 #![allow(clippy::unwrap_used)]
-#![cfg(unix)]
 
 mod common;
 
@@ -19,7 +18,7 @@ use ca_core::{
     AgentConfig, CoreError, Phase, PlanningStage, ProjectDir, Provider, RunKind, RunState,
     SubtaskStatus, TaskStore,
 };
-use common::{TempRepo, git};
+use common::{TempRepo, alive, git};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -185,14 +184,6 @@ async fn wait_for(store: &TaskStore, id: &str, what: &str, pred: impl Fn(&Task) 
     );
 }
 
-fn alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 async fn wait_dead(pid: u32) -> bool {
     for _ in 0..100 {
         if !alive(pid) {
@@ -257,18 +248,26 @@ async fn a_crash_mid_subtask_resumes_on_that_subtask_with_its_partial_work() {
             t.run.as_ref().is_some_and(|r| {
                 r.subtask_id.as_deref() == Some("dev-2")
                     && r.pid.is_some()
-                    && r.process_started.is_some()
+                    && (cfg!(windows) || r.process_started.is_some())
             }) && wt.join("dev-2-partial.txt").exists()
         },
     )
     .await;
     let agent_pid = running.run.unwrap().pid.unwrap();
-    child.kill().unwrap(); // SIGKILL: no shutdown, no cleanup
+    child.kill().unwrap(); // SIGKILL / TerminateProcess: no shutdown, no cleanup
     child.wait().unwrap();
-    assert!(
-        alive(agent_pid),
-        "the agent should outlive its engine (own process group)"
-    );
+    if cfg!(windows) {
+        // The agent's Job Object closed with the engine, taking the agent with it.
+        assert!(
+            wait_dead(agent_pid).await,
+            "the agent outlived its engine (job object not killed on close)"
+        );
+    } else {
+        assert!(
+            alive(agent_pid),
+            "the agent should outlive its engine (own process group)"
+        );
+    }
 
     // Reopen: the orphan is stopped and the run is interrupted, on dev-2.
     let engine = env.engine().await;
@@ -357,6 +356,7 @@ async fn pause_stops_now_and_resume_continues_the_same_subtask() {
 // 3 + 4 --------------------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake gh is a shell script
 async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_the_pr() {
     let env = Env::new().await;
     let agent = env.agent(3, vec![]);
@@ -465,6 +465,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     );
 }
 
+#[cfg(unix)]
 fn fake_gh(env: &Env, create: &str) -> PathBuf {
     let gh = env.path("gh");
     let made = env.path("pr-made");
@@ -486,6 +487,7 @@ fn fake_gh(env: &Env, create: &str) -> PathBuf {
     gh
 }
 
+#[cfg(unix)]
 async fn reviewed_task_with_remote(env: &Env, dev_writes: bool) -> (Engine, String) {
     let remote = env.path("remote.git");
     git(
@@ -513,6 +515,7 @@ async fn reviewed_task_with_remote(env: &Env, dev_writes: bool) -> (Engine, Stri
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake gh is a shell script
 async fn a_task_that_changed_nothing_has_no_pull_request() {
     let env = Env::new().await;
     fake_gh(&env, "echo https://github.com/example/repo/pull/9");
@@ -522,6 +525,7 @@ async fn a_task_that_changed_nothing_has_no_pull_request() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake gh is a shell script
 async fn a_pr_that_gh_made_but_failed_to_report_is_still_found() {
     let env = Env::new().await;
     fake_gh(&env, "echo 'timeout talking to GitHub' >&2; exit 1");
@@ -662,7 +666,11 @@ async fn failing_checks_start_a_rework_round_with_the_output() {
     env.settings(|s| {
         s.checks = Some(vec![CheckCommand {
             name: "fixed".into(),
-            command: "test -f fixed.txt || (echo fixed.txt is missing; exit 1)".into(),
+            command: if cfg!(windows) {
+                "if not exist fixed.txt (echo fixed.txt is missing&& exit 1)".into()
+            } else {
+                "test -f fixed.txt || (echo fixed.txt is missing; exit 1)".into()
+            },
         }]);
     })
     .await;
@@ -693,7 +701,7 @@ async fn checks_that_never_pass_end_in_human_review_with_the_findings() {
     env.settings(|s| {
         s.checks = Some(vec![CheckCommand {
             name: "always".into(),
-            command: "echo broken; exit 1".into(),
+            command: "echo broken&& exit 1".into(),
         }]);
     })
     .await;
@@ -725,7 +733,7 @@ async fn a_failing_qa_verdict_starts_rework_and_qa_changes_are_discarded() {
     let agent = env.agent(
         1,
         vec![json!({ "whenPrompt": "(qa-1)", "onceFile": env.once("qa"), "steps": [
-            { "spawnChild": { "command": "echo x > qa-leak.txt; git add -A; git -c user.email=q@q -c user.name=q commit -qm qa-commit" } },
+            { "spawnChild": { "command": "echo x > qa-leak.txt&& git add -A&& git -c user.email=q@q -c user.name=q commit -qm qa-commit" } },
             { "sleepMs": 300 },
             structured(json!({ "passed": false, "summary": "broken", "findings": ["the cursor is ignored"] }))
         ]})],
@@ -986,10 +994,17 @@ async fn pausing_during_checks_stops_them_promptly() {
     env.settings(|s| {
         s.checks = Some(vec![CheckCommand {
             name: "slow".into(),
-            command: format!(
-                "if [ -f {f} ]; then exit 0; fi; touch {f}; sleep 30",
-                f = flag.display()
-            ),
+            command: if cfg!(windows) {
+                format!(
+                    "if exist \"{f}\" (exit 0) else (type nul > \"{f}\" && ping -n 31 127.0.0.1 > nul)",
+                    f = flag.display()
+                )
+            } else {
+                format!(
+                    "if [ -f {f} ]; then exit 0; fi; touch {f}; sleep 30",
+                    f = flag.display()
+                )
+            },
         }]);
     })
     .await;

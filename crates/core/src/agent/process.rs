@@ -1,8 +1,9 @@
 //! Spawning and supervising one agent process.
 //!
-//! * The agent runs in its own process group, so stopping it also stops whatever it started (a
-//!   test runner, a dev server, a `sleep`): SIGTERM to the group, then SIGKILL after a grace
-//!   period. The group is also cleaned up when the agent exits on its own.
+//! * The agent runs as its own process tree (`crate::proc`: a process group on Unix, a Job Object
+//!   on Windows), so stopping it also stops whatever it started (a test runner, a dev server, a
+//!   `sleep`). On Unix that is SIGTERM, then SIGKILL after a grace period; Windows kills at once.
+//!   The tree is also cleaned up when the agent exits on its own.
 //! * The run ends when the agent process exits, not when stdout closes: a child the agent started
 //!   inherits stdout and can hold it open. After the exit, output is drained for a short window
 //!   while the group is killed, then reading stops.
@@ -14,8 +15,6 @@
 //! * A CLI that prints its result and then lingers is ended after `result_grace`.
 //! * While a tool call is open the idle timeout is replaced by the longer tool timeout (CLIs print
 //!   nothing during a long build); open calls are forgotten once the agent talks again.
-//!
-//! On Windows only the direct child is killed for now; Job Objects come with packaging (Phase 5).
 
 use std::path::Path;
 use std::process::Stdio;
@@ -109,8 +108,7 @@ pub(crate) async fn spawn(
         .current_dir(&req.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
     if let Some(path) = bins.path_var() {
         cmd.env("PATH", path);
     }
@@ -120,15 +118,13 @@ pub(crate) async fn spawn(
     for (key, value) in &spec.env_set {
         cmd.env(key, value);
     }
-    #[cfg(unix)]
-    cmd.process_group(0);
 
-    let mut child = cmd.spawn().map_err(|e| {
+    let mut child = crate::proc::spawn(cmd).map_err(|e| {
         CoreError::Invalid(format!("could not start {}: {e}", spec.program.display()))
     })?;
     let pid = child.id();
     let (Some(mut stdin), Some(stdout), Some(stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        (child.take_stdin(), child.take_stdout(), child.take_stderr())
     else {
         return Err(CoreError::Invalid(
             "agent process has no stdio pipes".into(),
@@ -150,7 +146,6 @@ pub(crate) async fn spawn(
 
     let supervisor = Supervisor {
         child,
-        pid,
         parser,
         events: event_tx,
         log,
@@ -193,8 +188,7 @@ enum EndedBy {
 }
 
 struct Supervisor {
-    child: tokio::process::Child,
-    pid: Option<u32>,
+    child: crate::proc::TreeChild,
     parser: Box<dyn LineParser>,
     events: mpsc::UnboundedSender<AgentEvent>,
     log: File,
@@ -436,60 +430,20 @@ impl Supervisor {
         let _ = self.log.write_all(b"\n").await;
     }
 
-    /// Stop the agent and everything in its process group, in the background.
+    /// Stop the agent and everything it started, in the background.
     fn terminate(&mut self) {
-        #[cfg(unix)]
-        if let Some(pgid) = self.pid {
-            tokio::spawn(terminate_group(pgid, self.kill_grace));
-            return;
-        }
-        let _ = self.child.start_kill();
+        self.child.terminate(self.kill_grace);
     }
 }
 
 impl Drop for Supervisor {
     /// If the supervisor itself is dropped mid-run (the runtime shutting down), `kill_on_drop`
-    /// would kill only the direct child. Kill the whole group instead, at once. Only while the
+    /// would kill only the direct child. Kill the whole tree instead, at once. Only while the
     /// agent is unreaped, since until then its process group id cannot have been reused.
     fn drop(&mut self) {
-        #[cfg(unix)]
-        if !self.reaped
-            && let Some(pgid) = self.pid
-            && let Ok(raw) = i32::try_from(pgid)
-        {
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(raw),
-                nix::sys::signal::Signal::SIGKILL,
-            );
+        if !self.reaped {
+            self.child.kill_now();
         }
-    }
-}
-
-/// SIGTERM the group, wait up to `grace` for it to empty, then SIGKILL whatever is left.
-///
-/// The group id is the agent's pid. Once the agent has been reaped, the id stays reserved only
-/// while some member of the group lives, so polling stops the moment the group is empty, and the
-/// group is checked again immediately before SIGKILL. A wrong target would need the pid space to
-/// wrap around inside that window.
-#[cfg(unix)]
-async fn terminate_group(pgid: u32, grace: Duration) {
-    use nix::sys::signal::{Signal, killpg};
-    use nix::unistd::Pid;
-
-    let Ok(raw) = i32::try_from(pgid) else { return };
-    let group = Pid::from_raw(raw);
-    if killpg(group, Signal::SIGTERM).is_err() {
-        return; // the group is already gone
-    }
-    let deadline = Instant::now() + grace;
-    while Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        if killpg(group, None).is_err() {
-            return;
-        }
-    }
-    if killpg(group, None).is_ok() {
-        let _ = killpg(group, Signal::SIGKILL);
     }
 }
 

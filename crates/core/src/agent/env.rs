@@ -8,6 +8,9 @@
 //! The same `PATH` is passed to agent processes, so the tools they run (node, git, cargo) are found
 //! too. Resolve at every launch rather than caching across launches: version managers (nvm) move
 //! binaries when the default version changes.
+//!
+//! On Windows a GUI app gets the user's full `PATH` from the environment, so there is no login
+//! shell step, and a name is searched with each `PATHEXT` extension (`claude.exe`, `claude.cmd`).
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -65,6 +68,9 @@ impl Binaries {
     /// if the shell cannot be run or reports something that is not a usable `PATH`. Right for an
     /// app started from the Dock or Finder.
     pub async fn from_login_shell() -> Self {
+        if cfg!(windows) {
+            return Self::from_env();
+        }
         let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/zsh"));
         let is_fish = Path::new(&shell).file_name().is_some_and(|n| n == "fish");
         // Sentinels around the value, so banners or motd lines printed by shell startup files
@@ -109,15 +115,9 @@ impl Binaries {
         if let Some(path) = self.tools.get(name) {
             return Ok(path.clone());
         }
-        self.search_path
-            .as_deref()
-            .into_iter()
-            .flat_map(std::env::split_paths)
-            .map(|dir| dir.join(name))
-            .find(|candidate| is_executable(candidate))
-            .ok_or_else(|| {
-                CoreError::Invalid(format!("`{name}` was not found on PATH; install it first"))
-            })
+        self.search(name).ok_or_else(|| {
+            CoreError::Invalid(format!("`{name}` was not found on PATH; install it first"))
+        })
     }
 
     /// The `PATH` to give agent processes.
@@ -138,18 +138,41 @@ impl Binaries {
             };
         }
         let name = binary_name(provider);
+        self.search(name).ok_or_else(|| {
+            CoreError::Invalid(format!(
+                "`{name}` was not found on PATH; install it or set its path in settings"
+            ))
+        })
+    }
+
+    /// The first executable called `name` on the search path.
+    fn search(&self, name: &str) -> Option<PathBuf> {
+        let names = executable_names(name, std::env::var_os("PATHEXT").as_deref());
         self.search_path
             .as_deref()
             .into_iter()
             .flat_map(std::env::split_paths)
-            .map(|dir| dir.join(name))
+            .flat_map(|dir| names.iter().map(|n| dir.join(n)).collect::<Vec<_>>())
             .find(|candidate| is_executable(candidate))
-            .ok_or_else(|| {
-                CoreError::Invalid(format!(
-                    "`{name}` was not found on PATH; install it or set its path in settings"
-                ))
-            })
     }
+}
+
+/// The file names `name` may have on disk. On Windows, `name` plus each `PATHEXT` extension in
+/// order (`.COM;.EXE;.BAT;.CMD` when unset), the way `cmd` searches; elsewhere just `name`.
+pub fn executable_names(name: &str, pathext: Option<&OsStr>) -> Vec<OsString> {
+    if !cfg!(windows) {
+        return vec![OsString::from(name)];
+    }
+    let pathext = pathext
+        .and_then(OsStr::to_str)
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or(".COM;.EXE;.BAT;.CMD");
+    pathext
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| ext.starts_with('.') && ext.len() > 1)
+        .map(|ext| OsString::from(format!("{name}{}", ext.to_ascii_lowercase())))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -196,5 +219,31 @@ mod tests {
         ] {
             assert_eq!(parse_path_output(&bad), None, "{bad:?} was accepted");
         }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_names_follow_pathext() {
+        let names = |ext: Option<&str>| {
+            executable_names("claude", ext.map(OsStr::new))
+                .into_iter()
+                .map(|n| n.into_string().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(Some(".EXE;.CMD")), ["claude.exe", "claude.cmd"]);
+        assert_eq!(
+            names(None),
+            ["claude.com", "claude.exe", "claude.bat", "claude.cmd"]
+        );
+        assert_eq!(names(Some(" ; .Bat ;junk")), ["claude.bat"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_names_are_unchanged() {
+        assert_eq!(
+            executable_names("claude", Some(OsStr::new(".EXE"))),
+            ["claude"]
+        );
     }
 }

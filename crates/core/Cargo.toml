@@ -30,7 +30,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.30", default-features = false, features = ["fs", "signal", "process"] }
+nix = { version = "0.30", default-features = false, features = ["signal", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+# Job Objects: an agent and everything it starts are stopped together, and die with this process.
+process-wrap = { version = "11", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }
 
 [dev-dependencies]
 tempfile = "3"

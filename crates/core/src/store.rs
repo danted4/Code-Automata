@@ -222,6 +222,28 @@ async fn read_task(path: &Path, expected_id: &str) -> Result<Option<Task>> {
 
 /// Write pretty JSON to a hidden temp file next to `path`, flush it to disk, then rename it over
 /// `path`. The temp name starts with '.', so it is never read as a task file.
+/// Rename `from` over `to`. On Windows the rename is refused while another program (a virus
+/// scanner, a search indexer, an editor) has `to` open without delete sharing; those hold it for
+/// moments, so the rename is retried for up to about 2.5 seconds before giving up.
+async fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut wait = std::time::Duration::from_millis(10);
+    let mut tries = 0;
+    loop {
+        match tokio::fs::rename(from, to).await {
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::PermissionDenied
+                    && tries < 8 =>
+            {
+                tries += 1;
+                tokio::time::sleep(wait).await;
+                wait *= 2;
+            }
+            other => return other,
+        }
+    }
+}
+
 pub(crate) async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let dir = path
         .parent()
@@ -247,7 +269,7 @@ pub(crate) async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> R
         file.write_all(&bytes).await.map_err(io_at(&tmp))?;
         file.sync_all().await.map_err(io_at(&tmp))?;
         drop(file);
-        tokio::fs::rename(&tmp, path).await.map_err(io_at(path))
+        replace_file(&tmp, path).await.map_err(io_at(path))
     }
     .await;
     if result.is_err() {

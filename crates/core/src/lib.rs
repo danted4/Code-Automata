@@ -5,6 +5,7 @@ pub mod agent;
 pub mod engine;
 pub mod error;
 pub mod git;
+pub(crate) mod proc;
 pub mod project;
 pub mod store;
 pub mod task;
