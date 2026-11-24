@@ -55,14 +55,14 @@ pub async fn pick_folder(app: AppHandle) -> Option<String> {
 
 #[tauri::command]
 pub async fn available_editors(server: State<'_, Server>) -> Result<Vec<Editor>, String> {
-    let bins = server.bins().await;
+    let bins = server.bins().await?;
     Ok(editors::detect(&bins, editors::system_app_paths))
 }
 
 /// Whether `path` is an existing folder inside an open project (false for anything else).
 #[tauri::command]
 pub async fn path_exists(server: State<'_, Server>, path: String) -> Result<bool, String> {
-    let roots = server.state().await.open_roots().await;
+    let roots = server.state().await?.open_roots().await;
     Ok(inside_open_project(&path, &roots).is_ok())
 }
 
@@ -75,9 +75,9 @@ pub async fn open_in_editor(
     editor_id: EditorId,
 ) -> Result<OpenResult, String> {
     let result = async {
-        let roots = server.state().await.open_roots().await;
+        let roots = server.state().await?.open_roots().await;
         let folder = inside_open_project(&worktree_path, &roots)?;
-        let bins = server.bins().await;
+        let bins = server.bins().await?;
         let launch = editors::launch_for(editor_id, &bins, &editors::system_app_paths(editor_id))
             .ok_or_else(|| format!("{} is not installed", editor_id.label()))?;
         editors::open(&launch, &folder, &bins).await
@@ -86,7 +86,9 @@ pub async fn open_in_editor(
     Ok(result.into())
 }
 
-/// Show a worktree in Finder, Explorer or the file manager.
+/// Show a worktree in Finder, Explorer or the file manager: the folder is selected in its parent,
+/// never opened. Opening a folder on macOS launches it if it is an app bundle (`Tool.app`), and
+/// an agent can leave one in a worktree.
 #[tauri::command]
 pub async fn reveal_folder(
     app: AppHandle,
@@ -94,11 +96,11 @@ pub async fn reveal_folder(
     worktree_path: String,
 ) -> Result<OpenResult, String> {
     let result = async {
-        let roots = server.state().await.open_roots().await;
+        let roots = server.state().await?.open_roots().await;
         let folder = inside_open_project(&worktree_path, &roots)?;
         app.opener()
-            .open_path(folder.to_string_lossy(), None::<&str>)
-            .map_err(|e| format!("could not open the folder: {e}"))
+            .reveal_item_in_dir(&folder)
+            .map_err(|e| format!("could not show the folder: {e}"))
     }
     .await;
     Ok(result.into())

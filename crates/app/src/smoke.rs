@@ -14,13 +14,25 @@ use tauri::AppHandle;
 
 const LIMIT: Duration = Duration::from_secs(90);
 
+/// The scratch project, removed by [`cleanup`].
+fn scratch() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("code-automata-smoke-{}", std::process::id()))
+}
+
+/// Remove the scratch project (after the server stopped, so no engine holds it on Windows).
+pub fn cleanup() {
+    if requested() {
+        let _ = std::fs::remove_dir_all(scratch());
+    }
+}
+
 pub fn requested() -> bool {
     std::env::var_os("CODE_AUTOMATA_SMOKE").is_some_and(|v| v == "1")
 }
 
 /// Make the scratch project, start the time limit, and return the page script.
 pub fn prepare() -> Result<String, Box<dyn std::error::Error>> {
-    let project = std::env::temp_dir().join(format!("code-automata-smoke-{}", std::process::id()));
+    let project = scratch();
     let _ = std::fs::remove_dir_all(&project);
     std::fs::create_dir_all(&project)?;
     std::fs::write(project.join("README.md"), "smoke\n")?;
@@ -66,6 +78,7 @@ pub fn prepare() -> Result<String, Box<dyn std::error::Error>> {
     std::thread::spawn(|| {
         std::thread::sleep(LIMIT);
         println!("smoke: FAILED: no result within {} s", LIMIT.as_secs());
+        cleanup();
         std::process::exit(1);
     });
     Ok(SCRIPT.replace(

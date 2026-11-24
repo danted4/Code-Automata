@@ -150,10 +150,20 @@ pub async fn open(launch: &Launch, folder: &Path, bins: &Binaries) -> Result<(),
         if !status.success() {
             return Err(format!("`open` failed ({status})"));
         }
+        return Ok(());
     }
-    // A launched editor keeps running on its own; it is not stopped when the app quits.
-    Ok(())
+    // A launcher script hands off and exits 0; the editor itself keeps running. A broken one (a
+    // stale `cursor` left on PATH) exits non-zero at once, so give it a moment to say so.
+    match tokio::time::timeout(EARLY_EXIT, child.wait()).await {
+        Ok(Ok(status)) if !status.success() => Err(format!("the editor exited at once ({status})")),
+        Ok(Err(e)) => Err(e.to_string()),
+        // Still running, or done handing off. It is not stopped when the app quits.
+        _ => Ok(()),
+    }
 }
+
+/// How long a launcher has to fail before the editor counts as opened.
+const EARLY_EXIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 #[cfg(test)]
 mod tests {

@@ -73,7 +73,7 @@ fn main() {
         ])
         .setup(|app| {
             log::info!("Code-Automata {} starting", env!("CARGO_PKG_VERSION"));
-            let server = Server::start()?;
+            let server = Server::start(app.handle().clone())?;
             let mut script = format!(
                 "window.__CODE_AUTOMATA__ = Object.freeze({{ baseUrl: {}, token: {} }});",
                 serde_json::to_string(&server.base_url)?,
@@ -146,10 +146,30 @@ pub(crate) fn request_quit(app: &AppHandle, code: i32, ask: bool) {
         }
         log::info!("quitting; {running} running task(s) left interrupted");
         server.stop().await;
+        smoke::cleanup();
         let quit = app.state::<Quit>();
         quit.done.store(true, Ordering::SeqCst);
         app.exit(quit.code.load(Ordering::SeqCst));
     });
+}
+
+/// The app cannot go on (the server could not serve, or stopped on an error): say why, then exit.
+pub(crate) fn fatal(app: &AppHandle, message: String) {
+    log::error!("{message}");
+    if smoke::requested() {
+        println!("smoke: FAILED: {message}");
+        smoke::cleanup();
+        std::process::exit(1);
+    }
+    let exit = app.clone();
+    app.dialog()
+        .message(format!("{message}\n\nThe log file has details."))
+        .title("Code-Automata cannot continue")
+        .kind(MessageDialogKind::Error)
+        .show(move |_| {
+            exit.state::<Quit>().done.store(true, Ordering::SeqCst);
+            exit.exit(1);
+        });
 }
 
 async fn confirm_quit(app: &AppHandle, running: usize) -> bool {
@@ -175,15 +195,21 @@ async fn confirm_quit(app: &AppHandle, running: usize) -> bool {
     rx.await.unwrap_or(false)
 }
 
-/// The app's own pages: Tauri's origin, or Vite's under `cargo tauri dev`.
+/// The app's own pages: Tauri's origin on this OS (`server::APP_ORIGIN`), or Vite's under
+/// `cargo tauri dev`. Only this OS's form: `http://tauri.localhost` on macOS or Linux would be
+/// whatever listens on local port 80, and must not get the token.
 fn is_app_page(url: &Url) -> bool {
     let host = url.host_str();
-    match url.scheme() {
-        "tauri" => host == Some("localhost"),
-        "http" | "https" if host == Some("tauri.localhost") => true,
-        "http" if cfg!(debug_assertions) => host == Some("localhost") && url.port() == Some(5173),
-        _ => false,
-    }
+    let app = if cfg!(windows) {
+        url.scheme() == "http" && host == Some("tauri.localhost")
+    } else {
+        url.scheme() == "tauri" && host == Some("localhost")
+    };
+    let dev = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && host == Some("localhost")
+        && url.port() == Some(5173);
+    (app && url.port().is_none()) || dev
 }
 
 /// Web links (a pull request, a link in a plan) open in the default browser, never in the app.
@@ -204,12 +230,22 @@ mod tests {
     #[test]
     fn only_the_app_origin_is_shown_in_the_window() {
         let ok = |s: &str| is_app_page(&Url::parse(s).unwrap());
-        assert!(ok("tauri://localhost/index.html"));
-        assert!(ok("http://tauri.localhost/settings"));
+        assert_eq!(ok("tauri://localhost/index.html"), !cfg!(windows));
+        assert_eq!(ok("http://tauri.localhost/settings"), cfg!(windows));
+        assert!(!ok("https://tauri.localhost/settings"));
+        assert!(!ok("http://tauri.localhost:8080/"));
         assert!(!ok("https://github.com/danted4/Code-Automata/pull/1"));
         assert!(!ok("http://127.0.0.1:7878/api/tasks"));
         assert!(!ok("tauri://evil/index.html"));
         assert!(!ok("file:///etc/passwd"));
         assert_eq!(ok("http://localhost:5173/"), cfg!(debug_assertions));
+    }
+
+    #[test]
+    fn the_server_allows_the_same_origin_the_window_shows() {
+        let origin = server::APP_ORIGIN;
+        assert!(is_app_page(
+            &Url::parse(&format!("{origin}/index.html")).unwrap()
+        ));
     }
 }
