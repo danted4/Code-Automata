@@ -57,7 +57,7 @@ Path alias: `@/` → `src/`.
 
 Branch name: `code-automata/{taskId}`.
 
-**Workflow.** Phases are fixed: `planning → in_progress → ai_review → human_review → done`. Backward only for rework: `ai_review` / `human_review` → `in_progress`. `in_progress` advances when **all** `dev` subtasks are `completed`; `ai_review` advances when **all** `qa` subtasks are `completed`. Do not invent extra phases or skip aggregation rules.
+**Workflow.** Phases are fixed: `planning → in_progress → ai_review → human_review → done`. Backward moves: rework (`ai_review` / `human_review` → `in_progress`), replan (`in_progress` / `ai_review` / `human_review` → `planning`) and reopen (`done` → `human_review`). On `v3-tauri` the table in `crates/core/src/transitions.rs` is authoritative; 2.2.4's update route still wrongly forbids the rework moves. `in_progress` advances when **all** `dev` subtasks are `completed`; `ai_review` advances when **all** `qa` subtasks are `completed`. Do not invent extra phases or skip aggregation rules.
 
 **CLI adapters.** Implement `CLIAdapter` (`src/lib/cli/base.ts`) and register in `CLIFactory`. Providers: `cursor`, `amp`, `mock`. UI order is Cursor → Amp → Mock. **Hide Mock** when `CODE_AUTOMATA_PACKAGED=1` or Electron is present (`src/app/api/cli/adapters/route.ts`). Packaged app never ships Mock as a user-facing backend.
 

@@ -19,6 +19,15 @@ pub enum CoreError {
         source: serde_json::Error,
     },
 
+    #[error(
+        "{path} was written by a newer Code-Automata (task schema {found}, this build reads up to {supported})"
+    )]
+    NewerSchema {
+        path: PathBuf,
+        found: u32,
+        supported: u32,
+    },
+
     #[error("invalid project directory {path}: {reason}")]
     InvalidProject { path: PathBuf, reason: String },
 

@@ -10,7 +10,9 @@
 //! * `in_progress` subtasks go back to `pending` (the run record says which one was interrupted);
 //! * `assignedAgent` is dropped, since the thread it names no longer exists.
 //!
-//! Migration is pure: loading a file never writes it. The upgraded form is saved on the next update.
+//! Migration is pure and deterministic: loading a file never writes it, and loading it twice gives
+//! the same result (the run id and timestamps come from the task, not the clock). The upgraded form
+//! is saved on the next update.
 
 use crate::task::{Phase, Run, RunKind, RunState, SCHEMA_VERSION, SubtaskType, Task, TaskStatus};
 
@@ -54,7 +56,12 @@ fn migrate_v1(task: &mut Task) {
         Some(_) => RunState::Interrupted,
         None if blocked => RunState::Failed,
         None if was_running => RunState::Interrupted,
-        None => return,
+        None => {
+            // No run to own it, but a subtask may still say in_progress: 2.2.x's stop route left
+            // exactly that (planning, pending, subtask untouched).
+            reset_in_progress_subtasks(task);
+            return;
+        }
     };
 
     let subtask_id = subtask_type.and_then(|kind| {
@@ -66,6 +73,10 @@ fn migrate_v1(task: &mut Task) {
     reset_in_progress_subtasks(task);
 
     let mut run = Run::new(kind, state, subtask_id);
+    // Deterministic, so every load of the same unsaved v1 file yields the same run.
+    run.id = format!("run-v1-{}-{}", task.id, task.updated_at);
+    run.started_at = task.updated_at;
+    run.updated_at = task.updated_at;
     if blocked {
         run.last_error = Some("Task was blocked in Code-Automata 2.x.".into());
     }

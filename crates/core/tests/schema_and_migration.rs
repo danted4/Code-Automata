@@ -259,3 +259,81 @@ fn status_and_assigned_agent_follow_the_run() {
     task.normalize();
     assert_eq!(task.status, TaskStatus::Completed);
 }
+
+#[tokio::test]
+async fn migration_is_deterministic_across_loads() {
+    let (_repo, _project, store, ids) = store_with(&["v1-in-progress-running.json"]).await;
+    let a = store.load(&ids[0]).await.unwrap().unwrap().run.unwrap();
+    let b = store.load(&ids[0]).await.unwrap().unwrap().run.unwrap();
+    let c = store.list().await.unwrap().tasks.remove(0).run.unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a, c);
+    assert_eq!(
+        a.started_at, 1_770_278_200_000,
+        "timestamps come from the task"
+    );
+
+    // An engine holding that id can still find the run inside update.
+    let id = a.id.clone();
+    store
+        .update(&ids[0], |t| {
+            assert_eq!(t.run.as_ref().map(|r| r.id.as_str()), Some(id.as_str()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn stopped_planning_task_has_no_orphaned_running_subtask() {
+    let (_repo, project, store, _ids) = store_with(&[]).await;
+    // What 2.2.x's stop route left: planning, pending, a subtask still in_progress.
+    let json = serde_json::json!({
+        "id": "task-stopped",
+        "title": "Stopped",
+        "phase": "planning",
+        "status": "pending",
+        "subtasks": [
+            { "id": "s1", "content": "a", "label": "a", "type": "dev", "status": "in_progress" }
+        ],
+        "planApproved": true,
+        "createdAt": 1, "updatedAt": 2, "metadata": {}
+    });
+    std::fs::create_dir_all(project.tasks_dir()).unwrap();
+    std::fs::write(
+        project.tasks_dir().join("task-stopped.json"),
+        json.to_string(),
+    )
+    .unwrap();
+
+    let task = store.load("task-stopped").await.unwrap().unwrap();
+    assert!(task.run.is_none());
+    assert_eq!(task.subtasks[0].status, TaskStatus::Pending);
+}
+
+#[tokio::test]
+async fn files_from_a_newer_build_are_refused_not_downgraded() {
+    let (_repo, project, store, ids) = store_with(&["v1-human-review.json"]).await;
+    let mut json = fixture_json("v1-human-review.json");
+    json["id"] = "task-future".into();
+    json["schemaVersion"] = 3.into();
+    let path = project.tasks_dir().join("task-future.json");
+    std::fs::write(&path, json.to_string()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    assert!(matches!(
+        store.load("task-future").await,
+        Err(ca_core::CoreError::NewerSchema { found: 3, .. })
+    ));
+    assert!(store.update("task-future", |_| Ok(())).await.is_err());
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "the newer file was rewritten"
+    );
+
+    let list = store.list().await.unwrap();
+    assert_eq!(list.tasks.len(), 1);
+    assert_eq!(list.tasks[0].id, ids[0]);
+    assert_eq!(list.skipped.len(), 1);
+}

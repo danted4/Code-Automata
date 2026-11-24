@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use crate::error::{CoreError, Result, io_at};
 use crate::migrate::migrate;
 use crate::project::ProjectDir;
-use crate::task::{Phase, Task};
+use crate::task::{Phase, SCHEMA_VERSION, Task};
 use crate::transitions::{Mover, apply_patch, check_move};
 use crate::util::{now_ms, random_base36, unique_u64, validate_task_id};
 
@@ -260,6 +260,14 @@ async fn read_task(path: &Path) -> Result<Option<Task>> {
         path: path.to_path_buf(),
         source,
     })?;
+    if task.schema_version > SCHEMA_VERSION {
+        // Saving would silently downgrade it; refuse to load instead.
+        return Err(CoreError::NewerSchema {
+            path: path.to_path_buf(),
+            found: task.schema_version,
+            supported: SCHEMA_VERSION,
+        });
+    }
     migrate(&mut task);
     Ok(Some(task))
 }

@@ -53,7 +53,10 @@ async fn worktree_lifecycle_with_checkpoints_and_squash() {
     assert_eq!(wts.main_branch().await, "main");
 
     let info = wts.create(id).await.unwrap();
-    assert_eq!(info.branch_name, "code-automata/task-1-abc");
+    assert_eq!(
+        info.branch_name.as_deref(),
+        Some("code-automata/task-1-abc")
+    );
     assert!(info.path.ends_with(".code-automata/worktrees/task-1-abc"));
     let base = info.base_commit.clone().unwrap();
     assert_eq!(base, git(&repo.path, &["rev-parse", "HEAD"]));
@@ -139,6 +142,11 @@ async fn worktree_lifecycle_with_checkpoints_and_squash() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].task_id, id);
     assert_eq!(listed[0].is_dirty, Some(false));
+    assert_eq!(
+        listed[0].branch_name.as_deref(),
+        Some("code-automata/task-1-abc"),
+        "branch is read from git, not invented"
+    );
 
     let usage = wts.disk_usage().await.unwrap();
     assert!(usage.per_worktree[id] > 0);
@@ -249,4 +257,132 @@ async fn delete_refuses_paths_outside_the_worktrees_folder() {
         assert!(result.is_err(), "deleted {}", path.display());
     }
     assert!(victim.join("keep.txt").exists());
+}
+
+#[tokio::test]
+async fn non_forced_delete_returns_gits_error_instead_of_wiping() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-5").await.unwrap();
+    std::fs::write(info.path.join("committed.txt"), "x").unwrap();
+    checkpoint_commit(&info.path, "task-5", "s1", "x")
+        .await
+        .unwrap();
+    // A locked worktree is clean, but `git worktree remove` refuses it.
+    git(
+        &repo.path,
+        &["worktree", "lock", info.path.to_str().unwrap()],
+    );
+
+    let err = wts.delete("task-5", DeleteOptions::default()).await;
+    assert!(err.is_err(), "a locked worktree was deleted without force");
+    assert!(
+        info.path.join("committed.txt").exists(),
+        "files were removed"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_vanished_worktree_still_prunes_and_deletes_the_branch() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-6").await.unwrap();
+    std::fs::remove_dir_all(&info.path).unwrap();
+
+    let report = wts
+        .delete(
+            "task-6",
+            DeleteOptions {
+                delete_branch: true,
+                ..DeleteOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert!(git(&repo.path, &["branch", "--list", "code-automata/task-6"]).is_empty());
+    assert!(!git(&repo.path, &["worktree", "list"]).contains("task-6"));
+    // The same id can be used again.
+    wts.create("task-6").await.unwrap();
+}
+
+#[tokio::test]
+async fn create_refuses_an_existing_branch() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    git(&repo.path, &["branch", "code-automata/task-7"]);
+    let err = wts.create("task-7").await.unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+}
+
+#[tokio::test]
+async fn squash_of_work_that_nets_to_nothing_returns_the_branch_to_base() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let info = wts.create("task-8").await.unwrap();
+    let base = info.base_commit.unwrap();
+    let wt = info.path;
+
+    std::fs::write(wt.join("tmp.txt"), "t").unwrap();
+    checkpoint_commit(&wt, "task-8", "s1", "add").await.unwrap();
+    std::fs::remove_file(wt.join("tmp.txt")).unwrap();
+    checkpoint_commit(&wt, "task-8", "s2", "remove")
+        .await
+        .unwrap();
+    assert_ne!(head(&wt).await.unwrap(), base);
+
+    assert_eq!(squash_checkpoints(&wt, &base, "m").await.unwrap(), None);
+    assert_eq!(
+        head(&wt).await.unwrap(),
+        base,
+        "checkpoint commits would ship"
+    );
+    assert!(git(&wt, &["status", "--porcelain"]).is_empty());
+}
+
+#[tokio::test]
+async fn list_only_reports_worktrees_directly_in_the_worktrees_folder() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    wts.create("task-9").await.unwrap();
+    // Contains the marker substring but is not ours.
+    let nested = repo
+        .path
+        .join("nested")
+        .join(".code-automata")
+        .join("worktrees")
+        .join("task-other");
+    git(
+        &repo.path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "other",
+            nested.to_str().unwrap(),
+        ],
+    );
+
+    let listed = wts.list().await.unwrap();
+    let ids: Vec<_> = listed.iter().map(|w| w.task_id.as_str()).collect();
+    assert_eq!(ids, ["task-9"]);
+}
+
+#[tokio::test]
+async fn diff_keeps_whitespace_and_unusual_file_names() {
+    let repo = TempRepo::new();
+    let wts = Worktrees::new(repo.project().await);
+    let wt = wts.create("task-10").await.unwrap().path;
+    std::fs::write(wt.join("README.md"), "# test\nline   \n\n").unwrap();
+    std::fs::write(wt.join("café notes.txt"), "x").unwrap();
+
+    let diff = diff_since_checkpoint(&wt, 1 << 20).await.unwrap();
+    assert!(
+        diff.diff.ends_with('\n'),
+        "diff was trimmed: {:?}",
+        diff.diff
+    );
+    assert!(diff.diff.contains("+line   \n"));
+    assert_eq!(diff.untracked, ["café notes.txt"]);
 }

@@ -3,10 +3,12 @@
 //! Ported from `src/lib/git/worktree.ts`. Differences from 2.2.4:
 //!
 //! * arguments are passed as an array, never interpolated into a shell string;
+//! * git runs with `LC_ALL=C` so its messages can be matched, and network calls have a timeout;
 //! * a worktree's status is read only if the directory really is a worktree root (2.2.4 ran
 //!   `git status` in any directory under `.code-automata/worktrees/`, so a stray folder reported the
 //!   main checkout's status);
-//! * delete refuses to remove anything outside the worktrees directory;
+//! * delete refuses to remove anything outside the worktrees directory, and without `force` never
+//!   removes a worktree git itself would not remove;
 //! * main-branch detection checks exact refs (2.2.4 matched any branch name containing "main");
 //! * new: the base commit of each task branch, checkpoint commits, the diff since the last
 //!   checkpoint, and squashing checkpoints for the pull request.
@@ -14,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -21,36 +24,59 @@ use crate::error::{CoreError, Result, io_at};
 use crate::project::ProjectDir;
 use crate::util::validate_task_id;
 
-async fn git_output(cwd: &Path, args: &[&str]) -> Result<Output> {
-    tokio::process::Command::new("git")
-        .args(args)
+/// Limit for commands that talk to a remote.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn git_error(args: &[&str], stderr: impl Into<String>) -> CoreError {
+    CoreError::Git {
+        args: args.join(" "),
+        stderr: stderr.into(),
+    }
+}
+
+async fn git_output(cwd: &Path, args: &[&str], timeout: Option<Duration>) -> Result<Output> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
         .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| CoreError::Git {
-            args: args.join(" "),
-            stderr: format!("could not run git: {e}"),
-        })
+        .kill_on_drop(true);
+    let run = cmd.output();
+    let result = match timeout {
+        Some(limit) => tokio::time::timeout(limit, run)
+            .await
+            .map_err(|_| git_error(args, format!("timed out after {}s", limit.as_secs())))?,
+        None => run.await,
+    };
+    result.map_err(|e| git_error(args, format!("could not run git: {e}")))
+}
+
+fn check(args: &[&str], out: Output) -> Result<Vec<u8>> {
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        Err(git_error(
+            args,
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
+    }
 }
 
 /// Run git and return trimmed stdout, or an error carrying stderr.
 pub(crate) async fn run_git(cwd: &Path, args: &[&str]) -> Result<String> {
-    let out = git_output(cwd, args).await?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        Err(CoreError::Git {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        })
-    }
+    let out = check(args, git_output(cwd, args, None).await?)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// Run git and return stdout untouched (for diffs and `-z` output).
+async fn run_git_raw(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    check(args, git_output(cwd, args, None).await?)
 }
 
 /// Run git where a non-zero exit is an answer, not an error (for example `diff --quiet`).
 async fn git_succeeds(cwd: &Path, args: &[&str]) -> Result<bool> {
-    Ok(git_output(cwd, args).await?.status.success())
+    Ok(git_output(cwd, args, None).await?.status.success())
 }
 
 pub async fn git_available() -> bool {
@@ -59,9 +85,23 @@ pub async fn git_available() -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .status()
         .await
         .is_ok_and(|s| s.success())
+}
+
+async fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
+    git_succeeds(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -69,7 +109,8 @@ pub async fn git_available() -> bool {
 pub struct WorktreeInfo {
     pub task_id: String,
     pub path: PathBuf,
-    pub branch_name: String,
+    /// `None` for a worktree on a detached HEAD.
+    pub branch_name: Option<String>,
     pub main_repo: PathBuf,
     pub main_branch: String,
     /// Set by `create`; not known for worktrees found by `list`.
@@ -95,7 +136,7 @@ pub struct WorktreeStatus {
 
 #[derive(Debug, Clone, Default)]
 pub struct DeleteOptions {
-    /// Delete even with uncommitted changes.
+    /// Delete even with uncommitted changes, or when git refuses to remove the worktree.
     pub force: bool,
     /// Also delete the local branch `code-automata/<task id>`.
     pub delete_branch: bool,
@@ -116,6 +157,86 @@ pub struct DeleteReport {
 pub struct DiskUsage {
     pub total_bytes: u64,
     pub per_worktree: BTreeMap<String, u64>,
+}
+
+/// What is at a worktree path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Probe {
+    Missing,
+    /// The directory exists but is not the root of a git work tree.
+    NotWorktree,
+    Worktree {
+        path: PathBuf,
+        branch: String,
+        dirty: bool,
+    },
+    /// A worktree root whose state git could not read.
+    Unreadable {
+        path: PathBuf,
+        error: String,
+    },
+}
+
+async fn probe(path: &Path) -> Probe {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return Probe::Missing;
+    }
+    let canonical = tokio::fs::canonicalize(path)
+        .await
+        .unwrap_or_else(|_| path.to_path_buf());
+    let Ok(top) = run_git(&canonical, &["rev-parse", "--show-toplevel"]).await else {
+        return Probe::NotWorktree;
+    };
+    let top = tokio::fs::canonicalize(&top)
+        .await
+        .unwrap_or_else(|_| PathBuf::from(top));
+    if top != canonical {
+        return Probe::NotWorktree;
+    }
+    let changes = run_git(&canonical, &["status", "--porcelain"]).await;
+    let branch = run_git(&canonical, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+    match (changes, branch) {
+        (Ok(changes), Ok(branch)) => Probe::Worktree {
+            path: canonical,
+            branch,
+            dirty: !changes.is_empty(),
+        },
+        (Err(e), _) | (_, Err(e)) => Probe::Unreadable {
+            path: canonical,
+            error: e.to_string(),
+        },
+    }
+}
+
+/// Status of the worktree at `path`. Only a directory that is itself a git work tree root counts;
+/// otherwise git would walk up and report the main checkout.
+pub async fn status_at(path: &Path) -> WorktreeStatus {
+    match probe(path).await {
+        Probe::Missing => WorktreeStatus::default(),
+        Probe::NotWorktree => WorktreeStatus {
+            exists: true,
+            path: Some(path.to_path_buf()),
+            error: Some("directory exists but is not a git worktree".into()),
+            ..WorktreeStatus::default()
+        },
+        Probe::Worktree {
+            path,
+            branch,
+            dirty,
+        } => WorktreeStatus {
+            exists: true,
+            path: Some(path),
+            branch_name: Some(branch),
+            has_changes: Some(dirty),
+            error: None,
+        },
+        Probe::Unreadable { path, error } => WorktreeStatus {
+            exists: true,
+            path: Some(path),
+            error: Some(error),
+            ..WorktreeStatus::default()
+        },
+    }
 }
 
 /// Worktree operations for one project.
@@ -156,11 +277,7 @@ impl Worktrees {
             return name.to_string();
         }
         for candidate in ["main", "master"] {
-            let reference = format!("refs/heads/{candidate}");
-            if git_succeeds(repo, &["show-ref", "--verify", "--quiet", &reference])
-                .await
-                .unwrap_or(false)
-            {
+            if branch_exists(repo, candidate).await.unwrap_or(false) {
                 return candidate.to_string();
             }
         }
@@ -172,14 +289,22 @@ impl Worktrees {
     pub async fn create(&self, task_id: &str) -> Result<WorktreeInfo> {
         let path = self.path_for(task_id)?;
         let repo = self.project.repo_root();
+        let branch = Self::branch_for(task_id);
+        let add = ["worktree", "add"];
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err(CoreError::Git {
-                args: "worktree add".into(),
-                stderr: format!(
+            return Err(git_error(
+                &add,
+                format!(
                     "{} already exists; delete it first or use another task id",
                     path.display()
                 ),
-            });
+            ));
+        }
+        if branch_exists(repo, &branch).await? {
+            return Err(git_error(
+                &add,
+                format!("branch {branch} already exists; delete it first or use another task id"),
+            ));
         }
         let base = self.base_path();
         tokio::fs::create_dir_all(&base)
@@ -187,7 +312,6 @@ impl Worktrees {
             .map_err(io_at(&base))?;
 
         let base_commit = run_git(repo, &["rev-parse", "HEAD"]).await?;
-        let branch = Self::branch_for(task_id);
         let path_str = path.to_string_lossy().to_string();
         run_git(
             repo,
@@ -198,7 +322,7 @@ impl Worktrees {
         Ok(WorktreeInfo {
             task_id: task_id.to_string(),
             path: tokio::fs::canonicalize(&path).await.map_err(io_at(&path))?,
-            branch_name: branch,
+            branch_name: Some(branch),
             main_repo: repo.to_path_buf(),
             main_branch: self.main_branch().await,
             base_commit: Some(base_commit),
@@ -212,96 +336,128 @@ impl Worktrees {
     }
 
     /// Remove a task's worktree, optionally with its local and remote branch.
+    ///
+    /// Without `force`, a dirty or unreadable worktree is refused, and if `git worktree remove`
+    /// fails the git error is returned: files are only removed by hand when `force` is set or the
+    /// directory is not a worktree at all. A missing directory still has its stale git record
+    /// pruned and its branches deleted as asked.
     pub async fn delete(&self, task_id: &str, opts: DeleteOptions) -> Result<DeleteReport> {
         let computed = self.path_for(task_id)?;
         let path = opts.path_override.clone().unwrap_or(computed);
         self.ensure_inside_base(&path).await?;
         let repo = self.project.repo_root();
-        let exists = tokio::fs::try_exists(&path).await.unwrap_or(false);
+        let remove = ["worktree", "remove"];
 
-        // Without an override and with nothing on disk there is nothing to do. With an override the
-        // directory may be gone while git still lists it (prunable); removal below cleans that up.
-        if !exists && opts.path_override.is_none() {
-            return Ok(DeleteReport::default());
-        }
-        if exists && !opts.force {
-            let status = status_at(&path).await;
-            if status.has_changes == Some(true) {
-                return Err(CoreError::Git {
-                    args: "worktree remove".into(),
-                    stderr:
-                        "the worktree has uncommitted changes; force the delete or commit first"
-                            .into(),
-                });
+        match probe(&path).await {
+            Probe::Missing => {
+                run_git(repo, &["worktree", "prune"]).await?;
+            }
+            Probe::NotWorktree => {
+                // Nothing git would track: a leftover folder inside our own worktrees directory.
+                remove_dir_if_exists(&path).await?;
+                run_git(repo, &["worktree", "prune"]).await?;
+            }
+            Probe::Worktree { dirty: true, .. } if !opts.force => {
+                return Err(git_error(
+                    &remove,
+                    "the worktree has uncommitted changes; force the delete or commit first",
+                ));
+            }
+            Probe::Unreadable { error, .. } if !opts.force => {
+                return Err(git_error(
+                    &remove,
+                    format!("could not read the worktree's state ({error}); force the delete"),
+                ));
+            }
+            Probe::Worktree { .. } | Probe::Unreadable { .. } => {
+                let path_str = path.to_string_lossy().to_string();
+                let mut args = vec!["worktree", "remove", path_str.as_str()];
+                if opts.force {
+                    args.push("--force");
+                }
+                if let Err(e) = run_git(repo, &args).await {
+                    if !opts.force {
+                        return Err(e);
+                    }
+                    // Forced: a locked or broken worktree is removed by hand and git forgets it.
+                    remove_dir_if_exists(&path).await?;
+                    run_git(repo, &["worktree", "prune"]).await?;
+                }
+                remove_dir_if_exists(&path).await?;
             }
         }
-
-        let path_str = path.to_string_lossy().to_string();
-        let mut args = vec!["worktree", "remove", path_str.as_str()];
-        if opts.force {
-            args.push("--force");
-        }
-        if run_git(repo, &args).await.is_err() {
-            // Broken or prunable worktree: remove the directory and let git forget it.
-            remove_dir_if_exists(&path).await?;
-            run_git(repo, &["worktree", "prune"]).await?;
-        }
-        remove_dir_if_exists(&path).await?;
 
         let mut report = DeleteReport::default();
         let branch = Self::branch_for(task_id);
         if opts.delete_branch
+            && branch_exists(repo, &branch).await.unwrap_or(false)
             && let Err(e) = run_git(repo, &["branch", "-D", &branch]).await
         {
             report
                 .warnings
                 .push(format!("could not delete local branch {branch}: {e}"));
         }
-        if opts.delete_remote
-            && let Err(e) = run_git(repo, &["push", "origin", "--delete", &branch]).await
-        {
-            let msg = e.to_string();
-            // Expected when the branch was never pushed.
-            if !msg.contains("remote ref does not exist") {
-                report
-                    .warnings
-                    .push(format!("could not delete remote branch {branch}: {msg}"));
+        if opts.delete_remote {
+            let args = ["push", "origin", "--delete", branch.as_str()];
+            let result = match git_output(repo, &args, Some(NETWORK_TIMEOUT)).await {
+                Ok(out) => check(&args, out).map(|_| ()),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = result {
+                let msg = e.to_string();
+                // Expected when the branch was never pushed (LC_ALL=C keeps this text stable).
+                if !msg.contains("remote ref does not exist") {
+                    report
+                        .warnings
+                        .push(format!("could not delete remote branch {branch}: {msg}"));
+                }
             }
         }
         Ok(report)
     }
 
-    /// Worktrees git knows about under `.code-automata/worktrees/`.
+    /// Worktrees git knows about whose directory sits directly in `.code-automata/worktrees/`.
     pub async fn list(&self) -> Result<Vec<WorktreeInfo>> {
         let repo = self.project.repo_root();
-        let output = run_git(repo, &["worktree", "list", "--porcelain"]).await?;
+        let raw = run_git_raw(repo, &["worktree", "list", "--porcelain", "-z"]).await?;
         let main_branch = self.main_branch().await;
+        let base = tokio::fs::canonicalize(self.base_path())
+            .await
+            .unwrap_or_else(|_| self.base_path());
+
         let mut found = Vec::new();
-        for line in output.lines() {
-            let Some(raw) = line.strip_prefix("worktree ") else {
-                continue;
+        // With -z, fields end in NUL and records end in an empty field.
+        let text = String::from_utf8_lossy(&raw);
+        for record in text.split("\0\0") {
+            let mut path = None;
+            let mut branch = None;
+            for field in record.split('\0') {
+                if let Some(p) = field.strip_prefix("worktree ") {
+                    path = Some(PathBuf::from(p));
+                } else if let Some(b) = field.strip_prefix("branch ") {
+                    branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+                }
+            }
+            let Some(path) = path else { continue };
+            let path = if path.is_absolute() {
+                path
+            } else {
+                repo.join(path)
             };
-            let raw_path = PathBuf::from(raw.trim());
-            let normalized = raw.replace('\\', "/");
-            if !normalized.contains("/.code-automata/worktrees/") {
+            if path.parent() != Some(base.as_path()) {
                 continue;
             }
-            let Some(task_id) = raw_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-            else {
+            let Some(task_id) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
                 continue;
             };
-            let path = if raw_path.is_absolute() {
-                raw_path
-            } else {
-                repo.join(raw_path)
-            };
+            if validate_task_id(&task_id).is_err() {
+                continue;
+            }
             let is_dirty = status_at(&path).await.has_changes;
             found.push(WorktreeInfo {
-                branch_name: Self::branch_for(&task_id),
                 task_id,
                 path,
+                branch_name: branch,
                 main_repo: repo.to_path_buf(),
                 main_branch: main_branch.clone(),
                 base_commit: None,
@@ -338,58 +494,15 @@ impl Worktrees {
         if inside {
             Ok(())
         } else {
-            Err(CoreError::Git {
-                args: "worktree remove".into(),
-                stderr: format!(
+            Err(git_error(
+                &["worktree", "remove"],
+                format!(
                     "refusing to delete {}: it is not inside {}",
                     path.display(),
                     base.display()
                 ),
-            })
+            ))
         }
-    }
-}
-
-/// Status of the worktree at `path`. Only a directory that is itself a git work tree root counts;
-/// otherwise git would walk up and report the main checkout.
-pub async fn status_at(path: &Path) -> WorktreeStatus {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
-        return WorktreeStatus::default();
-    }
-    let canonical = tokio::fs::canonicalize(path)
-        .await
-        .unwrap_or_else(|_| path.to_path_buf());
-    let not_worktree = WorktreeStatus {
-        exists: true,
-        path: Some(canonical.clone()),
-        error: Some("directory exists but is not a git worktree".into()),
-        ..WorktreeStatus::default()
-    };
-
-    let Ok(top) = run_git(&canonical, &["rev-parse", "--show-toplevel"]).await else {
-        return not_worktree;
-    };
-    let top = tokio::fs::canonicalize(&top)
-        .await
-        .unwrap_or_else(|_| PathBuf::from(top));
-    if top != canonical {
-        return not_worktree;
-    }
-
-    let changes = run_git(&canonical, &["status", "--porcelain"]).await;
-    let branch = run_git(&canonical, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
-    match (changes, branch) {
-        (Ok(changes), Ok(branch)) => WorktreeStatus {
-            exists: true,
-            path: Some(canonical),
-            branch_name: Some(branch),
-            has_changes: Some(!changes.is_empty()),
-            error: None,
-        },
-        (Err(e), _) | (_, Err(e)) => WorktreeStatus {
-            error: Some(e.to_string()),
-            ..not_worktree
-        },
     }
 }
 
@@ -470,14 +583,17 @@ pub struct Checkpoint {
 pub struct WorkingDiff {
     /// The checkpoint the diff is against.
     pub base: String,
-    /// `git diff HEAD` for tracked files, cut to the size limit.
+    /// `git diff HEAD` for tracked files, byte-for-byte, cut to the size limit.
     pub diff: String,
-    /// New files not yet tracked (paths only).
+    /// New files not yet tracked (paths only), at most `MAX_UNTRACKED`.
     pub untracked: Vec<String>,
+    /// The diff or the untracked list was cut.
     pub truncated: bool,
 }
 
 impl WorkingDiff {
+    pub const MAX_UNTRACKED: usize = 200;
+
     pub fn is_empty(&self) -> bool {
         self.diff.is_empty() && self.untracked.is_empty()
     }
@@ -509,6 +625,13 @@ async fn identity_args(worktree: &Path) -> Vec<String> {
     args
 }
 
+async fn run_with_identity(worktree: &Path, args: &[&str]) -> Result<String> {
+    let mut full = identity_args(worktree).await;
+    full.extend(args.iter().map(|a| (*a).to_string()));
+    let refs: Vec<&str> = full.iter().map(String::as_str).collect();
+    run_git(worktree, &refs).await
+}
+
 /// Commit everything in the worktree as the checkpoint for a finished subtask.
 ///
 /// Hooks are skipped (`--no-verify`, as 2.2.4's PR commit did: worktrees usually lack
@@ -531,14 +654,11 @@ pub async fn checkpoint_commit(
     let message = format!(
         "code-automata: {label}\n\nCode-Automata-Task: {task_id}\nCode-Automata-Subtask: {subtask_id}"
     );
-    let mut args = identity_args(worktree).await;
-    args.extend(
-        ["commit", "--no-verify", "--no-gpg-sign", "-m", &message]
-            .into_iter()
-            .map(String::from),
-    );
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_git(worktree, &refs).await?;
+    run_with_identity(
+        worktree,
+        &["commit", "--no-verify", "--no-gpg-sign", "-m", &message],
+    )
+    .await?;
     Ok(Checkpoint {
         commit: head(worktree).await?,
         created: true,
@@ -546,16 +666,12 @@ pub async fn checkpoint_commit(
 }
 
 /// What changed since the last checkpoint, for the prompt of a resumed subtask. The tracked diff is
-/// cut at `max_bytes` (on a character boundary). Does not modify the index.
+/// cut at `max_bytes` (on a character boundary) and the untracked list at
+/// [`WorkingDiff::MAX_UNTRACKED`]. Does not modify the index.
 pub async fn diff_since_checkpoint(worktree: &Path, max_bytes: usize) -> Result<WorkingDiff> {
     let base = head(worktree).await?;
-    let mut diff = run_git(worktree, &["diff", "--no-color", "--no-ext-diff", "HEAD"]).await?;
-    let untracked = run_git(worktree, &["ls-files", "--others", "--exclude-standard"])
-        .await?
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect();
+    let raw = run_git_raw(worktree, &["diff", "--no-color", "--no-ext-diff", "HEAD"]).await?;
+    let mut diff = String::from_utf8_lossy(&raw).into_owned();
     let mut truncated = false;
     if diff.len() > max_bytes {
         let mut cut = max_bytes;
@@ -565,6 +681,22 @@ pub async fn diff_since_checkpoint(worktree: &Path, max_bytes: usize) -> Result<
         diff.truncate(cut);
         truncated = true;
     }
+
+    let raw = run_git_raw(
+        worktree,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .await?;
+    let mut untracked: Vec<String> = raw
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .collect();
+    if untracked.len() > WorkingDiff::MAX_UNTRACKED {
+        untracked.truncate(WorkingDiff::MAX_UNTRACKED);
+        truncated = true;
+    }
+
     Ok(WorkingDiff {
         base,
         diff,
@@ -574,43 +706,54 @@ pub async fn diff_since_checkpoint(worktree: &Path, max_bytes: usize) -> Result<
 }
 
 /// Replace every commit after `base_commit` (checkpoints plus any uncommitted work) with one commit.
-/// Returns the new commit, or `None` when there is nothing to squash. Hooks are skipped as for
-/// checkpoints; the user's signing setting is respected, since this commit is the one that ships.
+///
+/// The new commit is built with `commit-tree` and the branch is moved with a compare-and-swap
+/// `update-ref`, so the branch is never left rewound part-way: it points either at the old head or
+/// at the finished squash. Returns the new commit, or `None` when the branch was already at
+/// `base_commit` with nothing new. When the work nets out to no change against the base, the branch
+/// is moved back to `base_commit` and `None` is returned.
+///
+/// Hooks never run for `commit-tree`; the user's signing setting is respected, since this commit is
+/// the one that ships.
 pub async fn squash_checkpoints(
     worktree: &Path,
     base_commit: &str,
     message: &str,
 ) -> Result<Option<String>> {
-    run_git(worktree, &["add", "-A"]).await?;
     let ancestor = git_succeeds(
         worktree,
         &["merge-base", "--is-ancestor", base_commit, "HEAD"],
     )
     .await?;
     if !ancestor {
-        return Err(CoreError::Git {
-            args: "merge-base --is-ancestor".into(),
-            stderr: format!("{base_commit} is not an ancestor of HEAD; refusing to squash"),
-        });
+        return Err(git_error(
+            &["merge-base", "--is-ancestor"],
+            format!("{base_commit} is not an ancestor of HEAD; refusing to squash"),
+        ));
     }
+
+    run_git(worktree, &["add", "-A"]).await?;
+    let tree = run_git(worktree, &["write-tree"]).await?;
+    let base_tree = run_git(worktree, &["rev-parse", &format!("{base_commit}^{{tree}}")]).await?;
     let old_head = head(worktree).await?;
-    run_git(worktree, &["reset", "--soft", base_commit]).await?;
-    if git_succeeds(worktree, &["diff", "--cached", "--quiet"]).await? {
-        // Nothing differs from the base; put the branch back where it was.
-        run_git(worktree, &["reset", "--soft", &old_head]).await?;
+    let base_full = run_git(worktree, &["rev-parse", base_commit]).await?;
+
+    if tree == base_tree {
+        if old_head != base_full {
+            run_git(worktree, &["update-ref", "HEAD", &base_full, &old_head]).await?;
+        }
         return Ok(None);
     }
-    let mut args = identity_args(worktree).await;
-    args.extend(
-        ["commit", "--no-verify", "-m", message]
-            .into_iter()
-            .map(String::from),
-    );
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    if let Err(e) = run_git(worktree, &refs).await {
-        // Leave the branch exactly as it was (checkpoints intact) rather than rewound to the base.
-        let _ = run_git(worktree, &["reset", "--soft", &old_head]).await;
-        return Err(e);
+
+    let sign = run_git(worktree, &["config", "--bool", "commit.gpgsign"])
+        .await
+        .is_ok_and(|v| v == "true");
+    let mut args = vec!["commit-tree", "-p", base_full.as_str(), "-m", message];
+    if sign {
+        args.push("-S");
     }
-    Ok(Some(head(worktree).await?))
+    args.push(tree.as_str());
+    let new_commit = run_with_identity(worktree, &args).await?;
+    run_git(worktree, &["update-ref", "HEAD", &new_commit, &old_head]).await?;
+    Ok(Some(new_commit))
 }
