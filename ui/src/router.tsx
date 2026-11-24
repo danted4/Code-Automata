@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from 'react-router';
+import { createBrowserRouter, Link, Outlet } from 'react-router';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Sidebar } from '@/components/layout/sidebar';
 import { OpenProjectGate } from '@/components/project/open-project-gate';
@@ -28,6 +28,19 @@ function Layout() {
   );
 }
 
+function NotFound() {
+  return (
+    <div className="p-8 space-y-2">
+      <h1 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+        Page not found
+      </h1>
+      <Link to="/" className="text-sm underline" style={{ color: 'var(--color-primary)' }}>
+        Back to the board
+      </Link>
+    </div>
+  );
+}
+
 export const router = createBrowserRouter([
   {
     element: <Layout />,
@@ -39,6 +52,7 @@ export const router = createBrowserRouter([
       { path: 'github', element: <GitHubPage /> },
       { path: 'worktrees', element: <WorktreesPage /> },
       { path: 'memory', element: <MemoryPage /> },
+      { path: '*', element: <NotFound /> },
     ],
   },
 ]);

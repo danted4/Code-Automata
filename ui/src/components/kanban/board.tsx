@@ -1,7 +1,8 @@
 /**
  * Kanban Board Component
  *
- * Displays tasks across 6 workflow phases with drag-and-drop support
+ * Displays tasks across the five workflow phases. Dragging a card only moves it: the backend
+ * decides whether the move is allowed, and agents are started from buttons, never by a drop.
  */
 
 import { useEffect, useState } from 'react';
@@ -16,25 +17,11 @@ import {
 } from '@dnd-kit/core';
 import { useTaskStore } from '@/store/task-store';
 import { useProjectStore } from '@/store/project-store';
-import { apiFetch } from '@/lib/api-client';
 import { WORKFLOW_PHASES, WorkflowPhase, Task } from '@/lib/tasks/schema';
 import { toast } from 'sonner';
 import { KanbanColumn } from './column';
 import { TaskCard } from './task-card';
 import { EditTaskModal } from '@/components/tasks/edit-task-modal';
-
-/** Forbidden drag transitions: In Progress and AI Review are one-way states. */
-const FORBIDDEN_TRANSITIONS: Array<{ from: WorkflowPhase; to: WorkflowPhase }> = [
-  { from: 'ai_review', to: 'in_progress' },
-  { from: 'done', to: 'ai_review' },
-  { from: 'done', to: 'in_progress' },
-  { from: 'human_review', to: 'ai_review' },
-  { from: 'human_review', to: 'in_progress' },
-];
-
-function isTransitionAllowed(from: WorkflowPhase, to: WorkflowPhase): boolean {
-  return !FORBIDDEN_TRANSITIONS.some((t) => t.from === from && t.to === to);
-}
 
 export function KanbanBoard() {
   const { tasks, loadTasks, updateTaskPhase } = useTaskStore();
@@ -52,9 +39,7 @@ export function KanbanBoard() {
   );
 
   useEffect(() => {
-    // Load immediately and again after delay (handles API cold-start in dev)
     loadTasks();
-    const delayedTimer = setTimeout(() => loadTasks(), 600);
 
     // Auto-refresh tasks every 3 seconds to catch background updates
     const interval = setInterval(() => loadTasks(), 3000);
@@ -68,7 +53,6 @@ export function KanbanBoard() {
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      clearTimeout(delayedTimer);
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
@@ -94,57 +78,9 @@ export function KanbanBoard() {
 
     if (!task || task.phase === newPhase) return;
 
-    if (!isTransitionAllowed(task.phase, newPhase)) {
-      toast.error(
-        'Cannot move task backwards to In Progress or AI Review. Use Planning or Replanning to redo work.'
-      );
-      return;
-    }
-
-    // Update task phase (optimistic update happens in store)
     await updateTaskPhase(taskId, newPhase);
-
-    // Auto-start agent when moving to "In Progress" phase
-    if (newPhase === 'in_progress' && !task.assignedAgent) {
-      try {
-        const response = await apiFetch('/api/agents/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            taskId: task.id,
-            prompt: `Work on task: ${task.title}\n\nDescription: ${task.description}`,
-          }),
-        });
-
-        if (response.ok) {
-          // Reload to show agent status
-          window.location.reload();
-        }
-      } catch (error) {
-        console.error('Failed to auto-start agent:', error);
-      }
-    }
-
-    // Auto-start AI review when moving to "AI Review" phase (manual drag or automatic)
-    if (
-      newPhase === 'ai_review' &&
-      !task.assignedAgent &&
-      task.subtasks?.some((s) => s.type === 'qa')
-    ) {
-      try {
-        const response = await apiFetch('/api/agents/start-review', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: task.id }),
-        });
-
-        if (response.ok) {
-          loadTasks();
-        }
-      } catch (error) {
-        console.error('Failed to auto-start AI review:', error);
-      }
-    }
+    const error = useTaskStore.getState().error;
+    if (error) toast.error(`Cannot move the task: ${error}`);
   };
 
   return (

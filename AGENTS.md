@@ -20,11 +20,12 @@ crates/core/       ca_core: task store, phase table, run engine, agent processes
 ui/                React UI: Vite, React Router, Tailwind, Zustand
   src/routes/      one file per page
   src/components/  kanban, tasks, worktrees, theme, ui (shadcn-style)
-  src/lib/         api-client, native (desktop-only actions), themes, types
+  src/lib/         api-client, native (desktop-only actions), themes, 2.x task types
+  src/types/       global declarations
 docs/images/       screenshots and logos
 ```
 
-Not built yet: the HTTP server between UI and core (Phase 4) and the Tauri shell `crates/app` (Phase 5). Until Phase 4, `yarn dev` answers every `/api` call with 503.
+Not built yet: the HTTP server between UI and core (Phase 4) and the Tauri shell `crates/app` (Phase 5). Until Phase 4 the UI still speaks the 2.2.x API (`/api/tasks/*`, `/api/agents/*`, 2.x task types), and `yarn dev` and `yarn preview` answer every `/api` call with 503. Phase 4 replaces those calls with the core's commands.
 
 ## Commands
 

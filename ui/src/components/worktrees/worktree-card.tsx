@@ -3,8 +3,8 @@
  *
  * Card for a single worktree: task ID, branch, path, status (clean/dirty),
  * linked task indicator, orphan badge. Actions: Open in editor, Open in explorer,
- * Copy path (absolute), Delete. Editor/explorer actions need the desktop app (`lib/native`);
- * otherwise shows toast "Use desktop app for this."
+ * Copy path (absolute), Delete. Editor/explorer actions need the desktop app (`lib/native`) and
+ * are hidden without it.
  */
 
 import { useState } from 'react';
@@ -70,14 +70,10 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
   const [editorsLoaded, setEditorsLoaded] = useState(false);
 
   const hasNative = !!native;
-  const desktopMessage = 'Use desktop app for this.';
 
   const handleOpenInEditor = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!hasNative || !native) {
-      toast.info(desktopMessage);
-      return;
-    }
+    if (!native) return; // the buttons are hidden without the desktop app
     let editors: AvailableEditor[];
     try {
       const raw = await native.getAvailableEditors();
@@ -132,10 +128,7 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
 
   const handleOpenInExplorer = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!hasNative || !native) {
-      toast.info(desktopMessage);
-      return;
-    }
+    if (!native) return; // the buttons are hidden without the desktop app
     try {
       const exists = await native.pathExists(worktree.path);
       if (!exists) {
@@ -280,44 +273,48 @@ export function WorktreeCard({ worktree, onDelete }: WorktreeCardProps) {
         )}
       </CardContent>
       <CardFooter className="flex flex-wrap gap-2 pt-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 text-xs"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-          onClick={handleOpenInEditor}
-          disabled={openingEditor}
-        >
-          {openingEditor ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Code2 className="w-3.5 h-3.5" />
-          )}
-          Open in editor
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 text-xs"
-          style={{
-            backgroundColor: 'var(--color-surface)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text-primary)',
-          }}
-          onClick={handleOpenInExplorer}
-          disabled={openingFolder}
-        >
-          {openingFolder ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <FolderOpen className="w-3.5 h-3.5" />
-          )}
-          Open in explorer
-        </Button>
+        {hasNative && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+              onClick={handleOpenInEditor}
+              disabled={openingEditor}
+            >
+              {openingEditor ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Code2 className="w-3.5 h-3.5" />
+              )}
+              Open in editor
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+              }}
+              onClick={handleOpenInExplorer}
+              disabled={openingFolder}
+            >
+              {openingFolder ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FolderOpen className="w-3.5 h-3.5" />
+              )}
+              Open in explorer
+            </Button>
+          </>
+        )}
         <Button
           variant="ghost"
           size="sm"

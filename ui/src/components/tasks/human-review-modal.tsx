@@ -83,11 +83,7 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
   const worktreePath = buildWorktreePath(projectPath, task.id);
   const hasNative = !!native;
   const canUseLocalActions = !!projectPath && hasNative;
-  const localActionsMessage = !projectPath
-    ? 'No project path set.'
-    : !hasNative
-      ? 'Use desktop app for Review Locally and Open in File Explorer.'
-      : null;
+  const localActionsMessage = projectPath ? null : 'No project path set.';
 
   const selectedEditor = useMemo(
     () => availableEditors.find((e) => e.id === selectedEditorId) ?? availableEditors[0] ?? null,
@@ -469,177 +465,182 @@ export function HumanReviewModal({ open, onOpenChange, task }: HumanReviewModalP
             </div>
           )}
 
-          {/* Review Locally & Open Project */}
-          <div className="space-y-3 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <h3 className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>
-              <Folder className="w-4 h-4 inline mr-2" />
-              Open Project
-            </h3>
-            {localActionsMessage && (
-              <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
-                {localActionsMessage}
-              </p>
-            )}
+          {/* Review Locally & Open Project: desktop app only (lib/native) */}
+          {hasNative && (
+            <div className="space-y-3 pt-4 border-t" style={{ borderColor: 'var(--color-border)' }}>
+              <h3 className="font-medium text-sm" style={{ color: 'var(--color-text-primary)' }}>
+                <Folder className="w-4 h-4 inline mr-2" />
+                Open Project
+              </h3>
+              {localActionsMessage && (
+                <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
+                  {localActionsMessage}
+                </p>
+              )}
 
-            {/* Review Locally: open worktree in Cursor or VS Code */}
-            <Card
-              className="p-4 transition-colors"
-              style={{
-                background: 'var(--color-surface)',
-                borderColor: 'var(--color-border)',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-info)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-border)';
-              }}
-            >
-              <div className="space-y-3">
-                <div>
-                  <h4
-                    className="text-sm font-medium flex items-center gap-2"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    <Code2 className="w-4 h-4" />
-                    Review Locally
-                  </h4>
-                  <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-                    Open the worktree in Cursor or VS Code to review changes
-                  </p>
-                </div>
-                {editorsLoading ? (
-                  <div
-                    className="flex items-center gap-2 text-xs"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                  >
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Detecting editors…
-                  </div>
-                ) : availableEditors.length === 0 ? (
-                  <>
-                    <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                      No IDE found.
-                    </p>
-                    <Button
-                      disabled
-                      size="sm"
-                      className="flex-1 sm:flex-initial text-xs"
-                      style={{
-                        background: 'var(--color-surface-hover)',
-                        color: 'var(--color-text-secondary)',
-                        borderColor: 'var(--color-border)',
-                        cursor: 'not-allowed',
-                      }}
+              {/* Review Locally: open worktree in Cursor or VS Code */}
+              <Card
+                className="p-4 transition-colors"
+                style={{
+                  background: 'var(--color-surface)',
+                  borderColor: 'var(--color-border)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-info)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-border)';
+                }}
+              >
+                <div className="space-y-3">
+                  <div>
+                    <h4
+                      className="text-sm font-medium flex items-center gap-2"
+                      style={{ color: 'var(--color-text-primary)' }}
                     >
+                      <Code2 className="w-4 h-4" />
                       Review Locally
-                    </Button>
-                  </>
-                ) : (
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    {availableEditors.length > 1 ? (
-                      <Select
-                        value={selectedEditorId ?? ''}
-                        onValueChange={(v) =>
-                          setSelectedEditorId(v === 'cursor' || v === 'vscode' ? v : null)
-                        }
-                      >
-                        <SelectTrigger className="w-full sm:w-[180px] h-9 text-xs">
-                          <SelectValue placeholder="Choose editor" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableEditors.map((e) => (
-                            <SelectItem
-                              key={e.id}
-                              value={e.id}
-                              className="text-xs flex items-center gap-2"
-                            >
-                              <Code2 className="w-3.5 h-3.5" />
-                              {e.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <div
-                        className="flex items-center gap-2 px-2 py-1.5 rounded text-xs"
+                    </h4>
+                    <p className="text-xs mt-1" style={{ color: 'var(--color-text-secondary)' }}>
+                      Open the worktree in Cursor or VS Code to review changes
+                    </p>
+                  </div>
+                  {editorsLoading ? (
+                    <div
+                      className="flex items-center gap-2 text-xs"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Detecting editors…
+                    </div>
+                  ) : availableEditors.length === 0 ? (
+                    <>
+                      <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                        No IDE found.
+                      </p>
+                      <Button
+                        disabled
+                        size="sm"
+                        className="flex-1 sm:flex-initial text-xs"
                         style={{
                           background: 'var(--color-surface-hover)',
-                          color: 'var(--color-text-primary)',
+                          color: 'var(--color-text-secondary)',
+                          borderColor: 'var(--color-border)',
+                          cursor: 'not-allowed',
                         }}
                       >
-                        <Code2 className="w-3.5 h-3.5" />
-                        {selectedEditor?.label ?? 'Editor'}
-                      </div>
-                    )}
-                    <Button
-                      onClick={handleOpenInEditor}
-                      disabled={isOpeningEditor || !canUseLocalActions || !selectedEditorId}
-                      size="sm"
-                      className="flex-1 sm:flex-initial text-xs"
-                      style={{
-                        background: 'var(--color-primary)',
-                        color: 'var(--color-primary-text)',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'var(--color-primary-hover)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'var(--color-primary)';
-                      }}
-                    >
-                      {isOpeningEditor
-                        ? 'Opening…'
-                        : `Open in ${selectedEditor?.label ?? 'Editor'}`}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </Card>
+                        Review Locally
+                      </Button>
+                    </>
+                  ) : (
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      {availableEditors.length > 1 ? (
+                        <Select
+                          value={selectedEditorId ?? ''}
+                          onValueChange={(v) =>
+                            setSelectedEditorId(v === 'cursor' || v === 'vscode' ? v : null)
+                          }
+                        >
+                          <SelectTrigger className="w-full sm:w-[180px] h-9 text-xs">
+                            <SelectValue placeholder="Choose editor" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableEditors.map((e) => (
+                              <SelectItem
+                                key={e.id}
+                                value={e.id}
+                                className="text-xs flex items-center gap-2"
+                              >
+                                <Code2 className="w-3.5 h-3.5" />
+                                {e.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div
+                          className="flex items-center gap-2 px-2 py-1.5 rounded text-xs"
+                          style={{
+                            background: 'var(--color-surface-hover)',
+                            color: 'var(--color-text-primary)',
+                          }}
+                        >
+                          <Code2 className="w-3.5 h-3.5" />
+                          {selectedEditor?.label ?? 'Editor'}
+                        </div>
+                      )}
+                      <Button
+                        onClick={handleOpenInEditor}
+                        disabled={isOpeningEditor || !canUseLocalActions || !selectedEditorId}
+                        size="sm"
+                        className="flex-1 sm:flex-initial text-xs"
+                        style={{
+                          background: 'var(--color-primary)',
+                          color: 'var(--color-primary-text)',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'var(--color-primary-hover)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'var(--color-primary)';
+                        }}
+                      >
+                        {isOpeningEditor
+                          ? 'Opening…'
+                          : `Open in ${selectedEditor?.label ?? 'Editor'}`}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </Card>
 
-            <Card
-              className="p-4 cursor-pointer transition-colors"
-              style={{
-                background: 'var(--color-surface)',
-                borderColor: 'var(--color-border)',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-info)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-border)';
-              }}
-            >
-              <div className="space-y-2">
-                <h4 className="text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                  File Explorer
-                </h4>
-                <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-                  Browse files
-                </p>
-                <Button
-                  onClick={handleOpenFolder}
-                  disabled={openingFolder || !canUseLocalActions}
-                  size="sm"
-                  variant="outline"
-                  className="w-full text-xs mt-2"
-                  style={{
-                    background: 'var(--color-surface-hover)',
-                    color: 'var(--color-text-primary)',
-                    borderColor: 'var(--color-border)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--color-background)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'var(--color-surface-hover)';
-                  }}
-                >
-                  {openingFolder ? 'Opening…' : 'Open'}
-                </Button>
-              </div>
-            </Card>
-          </div>
+              <Card
+                className="p-4 cursor-pointer transition-colors"
+                style={{
+                  background: 'var(--color-surface)',
+                  borderColor: 'var(--color-border)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-info)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-border)';
+                }}
+              >
+                <div className="space-y-2">
+                  <h4
+                    className="text-xs font-medium"
+                    style={{ color: 'var(--color-text-primary)' }}
+                  >
+                    File Explorer
+                  </h4>
+                  <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    Browse files
+                  </p>
+                  <Button
+                    onClick={handleOpenFolder}
+                    disabled={openingFolder || !canUseLocalActions}
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs mt-2"
+                    style={{
+                      background: 'var(--color-surface-hover)',
+                      color: 'var(--color-text-primary)',
+                      borderColor: 'var(--color-border)',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--color-background)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'var(--color-surface-hover)';
+                    }}
+                  >
+                    {openingFolder ? 'Opening…' : 'Open'}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
 
           {/* Task Info */}
           <div className="pt-2 border-t" style={{ borderColor: 'var(--color-border)' }}>

@@ -21,16 +21,20 @@ interface TaskState {
   deleteTask: (taskId: string) => Promise<void>;
 }
 
+/** The task-list request currently out, if any. */
+let inFlight: Promise<void> | null = null;
+
 export const useTaskStore = create<TaskState>((set, _get) => ({
   tasks: [],
   isLoading: false,
   error: null,
 
-  loadTasks: async () => {
+  loadTasks: () => {
+    // The board polls every few seconds; a poll that arrives while a load is still out joins it
+    // instead of starting a second request.
+    if (inFlight) return inFlight;
     set({ isLoading: true, error: null });
-    const doLoad = async (attempt = 0): Promise<void> => {
-      const maxRetries = 2; // 3 total attempts: 0, 1, 2
-      const retryDelays = [1000, 2500]; // Give a backend that is still starting a moment
+    inFlight = (async () => {
       try {
         const response = await apiFetch('/api/tasks/list');
         if (!response.ok) {
@@ -39,18 +43,15 @@ export const useTaskStore = create<TaskState>((set, _get) => ({
         const tasks = await response.json();
         set({ tasks, isLoading: false });
       } catch (error) {
-        if (attempt < maxRetries) {
-          const delay = retryDelays[attempt] ?? 1500;
-          setTimeout(() => doLoad(attempt + 1), delay);
-        } else {
-          set({
-            error: error instanceof Error ? error.message : 'Unknown error',
-            isLoading: false,
-          });
-        }
+        set({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          isLoading: false,
+        });
+      } finally {
+        inFlight = null;
       }
-    };
-    doLoad();
+    })();
+    return inFlight;
   },
 
   createTask: async (taskData) => {
