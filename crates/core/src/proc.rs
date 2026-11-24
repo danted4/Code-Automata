@@ -31,12 +31,29 @@ pub(crate) struct TreeChild {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// The `PATH` every child process gets, once set (see [`set_child_path`]).
+static CHILD_PATH: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+
+/// Give every child process from now on this `PATH`: the login shell's, which the app resolves
+/// at start (`Binaries::from_login_shell`). An app started from the Dock or Finder has only the
+/// system's minimal `PATH`, so without this a `git push` would run the repository's pre-push hook
+/// (husky calling `yarn` or `node`) without the user's tools. Only the first call counts; until
+/// then, and in tests, children inherit this process's `PATH`.
+pub fn set_child_path(path: std::ffi::OsString) {
+    let _ = CHILD_PATH.set(path);
+}
+
 /// A command for a program run in the background. Every process this crate starts is made here
-/// (a test in `tests/no_console_windows.rs` checks): on Windows a GUI app, which has no console
-/// of its own, would otherwise open a console window for each `git`, agent or check it runs.
+/// (a test in `tests/no_console_windows.rs` checks):
+///
+/// * it gets the `PATH` from [`set_child_path`], if one was set;
+/// * on Windows it gets no console window, which a GUI app, having no console of its own, would
+///   otherwise open for each `git`, agent or check it runs.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = Command::new(program);
+    if let Some(path) = CHILD_PATH.get() {
+        cmd.env("PATH", path);
+    }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd

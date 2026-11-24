@@ -71,6 +71,10 @@ impl Server {
                     return;
                 }
             };
+            // git (and the hooks it runs), checks and editors get the same PATH as the agents.
+            if let Some(path) = bins.path_var() {
+                ca_core::proc::set_child_path(path.to_owned());
+            }
             let mock = mock_config();
             if let Some((agent, _)) = &mock {
                 bins = bins.with_override(ca_core::Provider::Mock, agent);

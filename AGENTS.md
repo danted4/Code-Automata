@@ -77,7 +77,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml` fail on a
 
 **Desktop-only actions** (folder picker, open in editor, reveal in file manager) go through `ui/src/lib/native.ts`, which calls the app's commands (`crates/app/src/native.rs`). In a plain browser it is `null` and the UI hides those actions.
 
-**Child processes** are created with `ca_core::proc::command`, never `Command::new`: on Windows it sets `CREATE_NO_WINDOW`, without which the GUI app opens a console window per `git` or agent run. `crates/core/tests/no_console_windows.rs` fails on a plain `Command::new` in shipped code.
+**Child processes** are created with `ca_core::proc::command`, never `Command::new`: it gives them the login shell's `PATH` once the app has resolved it (`proc::set_child_path`; a Dock-launched app otherwise has the system's minimal `PATH`, and git hooks such as husky's `yarn` fail), and on Windows it sets `CREATE_NO_WINDOW`, without which the GUI app opens a console window per `git` or agent run. `crates/core/tests/no_console_windows.rs` fails on a plain `Command::new` in shipped code.
 
 **UI data flow.** `lib/api` (typed calls, generated types) → Zustand stores, kept current by the project's event stream (`store/project-sync.ts`; no polling) → components. What a task shows (badge, buttons, progress) comes from pure functions in `lib/task-view.ts` and siblings, each with a Vitest test; keep business logic out of components.
 

@@ -95,6 +95,10 @@ async fn run(args: Args) -> Result<(), String> {
         return Err("--mock-scenario needs --allow-mock".into());
     }
     let mut bins = Binaries::from_login_shell().await;
+    // git (and the hooks it runs) and checks get the same PATH as the agents.
+    if let Some(path) = bins.path_var() {
+        ca_core::proc::set_child_path(path.to_owned());
+    }
     if args.allow_mock {
         let mock = std::env::var_os("CODE_AUTOMATA_MOCK_AGENT")
             .map(std::path::PathBuf::from)
