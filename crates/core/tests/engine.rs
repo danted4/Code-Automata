@@ -381,10 +381,12 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
              case \"$1 $2\" in\n\
              \"pr view\") if [ -f {made} ]; then echo https://github.com/example/repo/pull/7; else echo 'no pull requests found' >&2; exit 1; fi ;;\n\
              \"pr create\") echo \"$@\" > {args}; touch {made}; echo https://github.com/example/repo/pull/7 ;;\n\
+             \"pr edit\") echo \"$@\" > {edited} ;;\n\
              *) exit 2 ;;\n\
              esac\n",
             made = made.display(),
-            args = env.path("gh-args").display()
+            args = env.path("gh-args").display(),
+            edited = env.path("gh-edited").display()
         ),
     )
     .unwrap();
@@ -456,6 +458,11 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     );
     assert_eq!(commits_since(&wt, &base), 1);
     assert!(!env.path("gh-args").exists(), "no second `gh pr create`");
+    let edited = std::fs::read_to_string(env.path("gh-edited")).unwrap();
+    assert!(
+        edited.contains("pr edit") && edited.contains("--body"),
+        "{edited}"
+    );
 }
 
 fn fake_gh(env: &Env, create: &str) -> PathBuf {
@@ -1128,4 +1135,32 @@ async fn one_bad_task_does_not_stop_the_project_opening() {
         "{:?}",
         engine.reconcile_problems()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn commands_during_a_running_task_answer_promptly() {
+    let env = Env::new().await;
+    let agent = env.agent(3, vec![hang_once(&env, "(dev-2)", vec![])]);
+    let engine = env.engine().await;
+    let task = engine.create_task("Busy", "", agent, false).await.unwrap();
+    engine.start(&task.id).await.unwrap();
+    // Hit it repeatedly while it moves from planning through dev-1 to dev-2, between-step gaps
+    // included: every call must answer within the settle bound, never wait for the task.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        let began = std::time::Instant::now();
+        let r = engine.skip_subtask(&task.id, "dev-3").await;
+        assert!(
+            began.elapsed() < Duration::from_secs(8),
+            "a command waited {:?}",
+            began.elapsed()
+        );
+        match r {
+            Err(e) if e.to_string().contains("pause the task") => {}
+            Err(e) if e.to_string().contains("no subtask") => {} // still planning
+            Err(e) => panic!("unexpected error: {e}"),
+            Ok(_) => break,
+        }
+    }
+    engine.pause(&task.id).await.unwrap();
 }

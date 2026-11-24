@@ -358,8 +358,9 @@ impl Engine {
     }
 
     /// For commands that must not change a task under a working agent. A driver that is only
-    /// passing through (between steps, or leaving after deciding to wait) is waited for; a task
-    /// with an agent or checks actually running is refused.
+    /// passing through (leaving after deciding to wait) is given a few seconds to finish; a task
+    /// that is still running after that, or has an agent or checks working, is refused rather
+    /// than waited for (that could be the rest of the task).
     async fn settle(&self, id: &str, action: &str) -> Result<Task> {
         if self.is_running(id) {
             let task = self.inner.load(id).await?;
@@ -368,7 +369,7 @@ impl Engine {
                     "pause the task before {action}"
                 )));
             }
-            self.wait_idle(id).await;
+            let _ = tokio::time::timeout(SETTLE_WAIT, self.wait_idle(id)).await;
         }
         let task = self.inner.load(id).await?;
         if self.is_running(id) || task.has_active_run() {
@@ -494,8 +495,12 @@ impl Engine {
     /// (in the same agent session when there is one); any other step starts again.
     pub async fn resume(&self, id: &str) -> Result<()> {
         if self.is_running(id) {
-            self.spawn_driver(id);
-            return Ok(());
+            let task = self.inner.load(id).await?;
+            if task.has_active_run() {
+                return Ok(()); // already running
+            }
+            // A driver on its way out (for example after a pause): let it finish, then resume.
+            self.settle(id, "resuming").await?;
         }
         self.inner
             .update(id, |t| {
@@ -639,6 +644,9 @@ impl Engine {
         }
     }
 }
+
+/// How long a command waits for a driver that is between steps or on its way out.
+const SETTLE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn require_plan_ready(t: &Task) -> Result<()> {
     if t.phase != Phase::Planning || t.planning.stage != PlanningStage::PlanReady {

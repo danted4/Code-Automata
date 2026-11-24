@@ -65,7 +65,23 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<String> {
     .await?;
 
     if let Some(pr) = &task.pull_request {
-        return Ok(pr.url.clone()); // already open; the push updated it
+        // Already open: the push updated the code; bring the description up to date too.
+        if let Err(e) = gh_output(
+            inner,
+            &gh,
+            &wt,
+            &["pr", "edit", &pr.url, "--body", &body(&task)],
+        )
+        .await
+        {
+            inner.emit(super::EngineEvent::Error {
+                task_id: id.to_string(),
+                message: format!(
+                    "the pull request's code was updated but its description was not: {e}"
+                ),
+            });
+        }
+        return Ok(pr.url.clone());
     }
     let url = match existing_pr(inner, &gh, &wt, &branch).await {
         Some(url) => url,
@@ -134,13 +150,21 @@ fn first_url(text: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// The URL of an open PR for `branch`, if there is one.
+/// The URL of an open PR for `branch`, if there is one. A closed or merged one does not count.
 async fn existing_pr(inner: &Inner, gh: &PathBuf, wt: &Path, branch: &str) -> Option<String> {
     let out = gh_output(
         inner,
         gh,
         wt,
-        &["pr", "view", branch, "--json", "url", "--jq", ".url"],
+        &[
+            "pr",
+            "view",
+            branch,
+            "--json",
+            "url,state",
+            "--jq",
+            r#"select(.state == "OPEN") | .url"#,
+        ],
     )
     .await
     .ok()?;
