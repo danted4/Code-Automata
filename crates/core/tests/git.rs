@@ -471,3 +471,34 @@ async fn squash_accepts_a_tag_as_base() {
         info.base_commit.unwrap()
     );
 }
+
+#[tokio::test]
+async fn code_automata_state_is_excluded_from_git_status() {
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    let wts = Worktrees::new(project.clone());
+    let store = ca_core::TaskStore::new(&project);
+    store
+        .create(ca_core::Task::new(
+            "t",
+            "",
+            ca_core::AgentConfig::new(ca_core::Provider::Mock),
+        ))
+        .await
+        .unwrap();
+    wts.create("task-14").await.unwrap();
+
+    assert!(
+        git(&repo.path, &["status", "--porcelain"]).is_empty(),
+        "main checkout shows .code-automata as untracked"
+    );
+    assert!(
+        !std::fs::read_to_string(repo.path.join(".gitignore"))
+            .is_ok_and(|t| t.contains("code-automata"))
+    );
+
+    // Idempotent: the line is added once.
+    project.ensure_git_exclude().await.unwrap();
+    let exclude = std::fs::read_to_string(repo.path.join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.matches("/.code-automata/").count(), 1, "{exclude}");
+}

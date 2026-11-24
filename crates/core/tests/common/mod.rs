@@ -37,7 +37,6 @@ impl TempRepo {
         git(&path, &["config", "user.email", "test@example.com"]);
         git(&path, &["config", "commit.gpgsign", "false"]);
         std::fs::write(path.join("README.md"), "# test\n").unwrap();
-        std::fs::write(path.join(".gitignore"), ".code-automata/\n").unwrap();
         git(&path, &["add", "-A"]);
         git(&path, &["commit", "-q", "-m", "init"]);
         TempRepo { _dir: dir, path }

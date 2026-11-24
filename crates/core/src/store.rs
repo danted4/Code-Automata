@@ -47,6 +47,7 @@ pub struct TaskList {
 
 #[derive(Debug)]
 pub struct TaskStore {
+    project: ProjectDir,
     tasks_dir: PathBuf,
     locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
 }
@@ -54,6 +55,7 @@ pub struct TaskStore {
 impl TaskStore {
     pub fn new(project: &ProjectDir) -> Self {
         TaskStore {
+            project: project.clone(),
             tasks_dir: project.tasks_dir(),
             locks: StdMutex::new(HashMap::new()),
         }
@@ -128,6 +130,7 @@ impl TaskStore {
             return Err(CoreError::TaskExists(task.id));
         }
         task.validate()?;
+        self.project.ensure_git_exclude().await?;
         write_json_atomic(&path, &task).await?;
         Ok(task)
     }

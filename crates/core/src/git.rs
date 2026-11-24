@@ -329,6 +329,7 @@ impl Worktrees {
                 format!("branch {branch} already exists; delete it first or use another task id"),
             ));
         }
+        self.project.ensure_git_exclude().await?;
         let base = self.base_path();
         tokio::fs::create_dir_all(&base)
             .await
