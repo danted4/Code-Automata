@@ -1,0 +1,7 @@
+# Leave tooling out of GitHub's language bar: the e2e suite and build configs (JavaScript),
+# the Vite entry page and the theme stylesheet. None of it is application code.
+ui/e2e/** linguist-detectable=false
+ui/*.config.js linguist-detectable=false
+ui/*.config.mjs linguist-detectable=false
+ui/index.html linguist-detectable=false
+ui/src/globals.css linguist-detectable=false
