@@ -22,6 +22,9 @@ pub struct Preflight {
     pub binary: Option<PathBuf>,
     /// How `binary` was found.
     pub source: Option<BinarySource>,
+    /// The file the user chose for this provider, if any, even when it no longer works (then
+    /// `binary` is None and `problem` says so): the UI offers to go back to finding it.
+    pub chosen: Option<PathBuf>,
     pub version: Option<String>,
     /// `None` when the login state could not be determined.
     pub logged_in: Option<bool>,
@@ -49,10 +52,14 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
         provider,
         binary: None,
         source: None,
+        chosen: None,
         version: None,
         logged_in: None,
         problem: None,
     };
+    if provider != Provider::Mock {
+        report.chosen = bins.chosen_paths().remove(&provider);
+    }
     let (binary, source) = match bins.find(provider) {
         Ok(found) => found,
         Err(e) => {

@@ -5,9 +5,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Loader2, RotateCcw } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { CliPathChooser } from '@/components/tasks/cli-path-chooser';
-import { Button } from '@/components/ui/button';
 import { api, errorMessage } from '@/lib/api';
 import type { ProviderInfo } from '@/lib/api/types/ProviderInfo';
 import { readiness } from '@/lib/agent-form';
@@ -17,8 +16,8 @@ const muted = { color: 'var(--color-text-muted)' };
 
 export function AgentClis() {
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+  /** Loading the list failed; errors of a choice show beside that agent. */
   const [error, setError] = useState<string | null>(null);
-  const [clearing, setClearing] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,17 +36,6 @@ export function AgentClis() {
 
   const replace = (info: ProviderInfo) =>
     setProviders((list) => list?.map((p) => (p.provider === info.provider ? info : p)) ?? list);
-
-  const findAgain = async (info: ProviderInfo) => {
-    setClearing(info.provider);
-    try {
-      replace(await api.cliPaths.choose(info.provider, null));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setClearing(null);
-    }
-  };
 
   if (error) {
     return (
@@ -96,20 +84,12 @@ export function AgentClis() {
                 {p.problem}
               </p>
             )}
-            <CliPathChooser provider={info.provider} label={info.label} onChosen={replace} />
-            {p.source === 'chosen' && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={clearing === info.provider}
-                onClick={() => void findAgain(info)}
-                data-testid={`agent-cli-find-again-${info.provider}`}
-              >
-                <RotateCcw className="h-4 w-4" />
-                Find it automatically
-              </Button>
-            )}
+            <CliPathChooser
+              provider={info.provider}
+              label={info.label}
+              chosen={p.chosen}
+              onChosen={replace}
+            />
           </div>
         );
       })}

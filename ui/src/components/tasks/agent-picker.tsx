@@ -239,7 +239,13 @@ export function AgentPicker({ state, value, onChange, lockedReason }: AgentPicke
               ? `Using a different ${selected.label} install? Choose its file:`
               : `Installed somewhere the app does not look? Choose the ${selected.label} file:`}
           </p>
-          <CliPathChooser provider={selected.provider} label={selected.label} onChosen={replace} />
+          <CliPathChooser
+            key={selected.provider}
+            provider={selected.provider}
+            label={selected.label}
+            chosen={selected.preflight?.chosen ?? null}
+            onChosen={replace}
+          />
         </div>
       )}
 

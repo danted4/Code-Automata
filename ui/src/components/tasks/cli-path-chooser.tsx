@@ -1,11 +1,13 @@
 /**
  * Choose an agent's CLI file by hand: a path field, a file picker in the desktop app, and "Use this
  * file". The server checks the file and answers with the agent checked again, which is handed to
- * `onChosen`. Used where an agent is reported missing and in Settings.
+ * `onChosen`. With a saved choice (`chosen`), "Find it automatically" goes back to finding the
+ * file, which is the way out when a chosen file stops working. Used where an agent is reported
+ * missing and in Settings.
  */
 
 import { useState } from 'react';
-import { FolderOpen, Loader2 } from 'lucide-react';
+import { FolderOpen, Loader2, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { api, errorMessage } from '@/lib/api';
@@ -17,10 +19,12 @@ import { native } from '@/lib/native';
 type Props = {
   provider: Provider;
   label: string;
+  /** The file chosen for this agent, if any, even when it no longer works. */
+  chosen: string | null;
   onChosen: (info: ProviderInfo) => void;
 };
 
-export function CliPathChooser({ provider, label, onChosen }: Props) {
+export function CliPathChooser({ provider, label, chosen, onChosen }: Props) {
   const [path, setPath] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -44,10 +48,28 @@ export function CliPathChooser({ provider, label, onChosen }: Props) {
   };
 
   const browse = async () => {
-    const picked = await native?.pickFile(`Choose the ${label} CLI file`);
+    let picked: string | null | undefined;
+    try {
+      picked = await native?.pickFile(`Choose the ${label} CLI file`);
+    } catch (e) {
+      setError(errorMessage(e));
+      return;
+    }
     if (picked) {
       setPath(picked);
       await save(picked);
+    }
+  };
+
+  const findAgain = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      onChosen(await api.cliPaths.choose(provider, null));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -95,6 +117,19 @@ export function CliPathChooser({ provider, label, onChosen }: Props) {
           Use this file
         </Button>
       </div>
+      {chosen && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={saving}
+          onClick={() => void findAgain()}
+          data-testid={`cli-path-find-again-${provider}`}
+        >
+          <RotateCcw className="h-4 w-4" />
+          Find it automatically
+        </Button>
+      )}
       {error && (
         <p
           className="text-xs"

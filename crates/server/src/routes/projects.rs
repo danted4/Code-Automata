@@ -85,9 +85,12 @@ pub async fn cli_paths(State(state): State<Arc<AppState>>) -> Json<Vec<CliPath>>
 /// shows the result at once.
 pub async fn choose_cli(
     State(state): State<Arc<AppState>>,
-    Path(provider): Path<Provider>,
+    Path(provider): Path<String>,
     Body(req): Body<ChooseCliRequest>,
 ) -> Result<Json<ProviderInfo>, ApiError> {
+    // Parsed here, not by axum, so an unknown name gets the API's JSON error.
+    let provider: Provider = serde_json::from_value(serde_json::Value::String(provider))
+        .map_err(|_| ApiError::bad_request("no such agent"))?;
     let label = offered(&state)
         .into_iter()
         .find(|(p, _)| *p == provider && *p != Provider::Mock)

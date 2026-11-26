@@ -6,7 +6,12 @@ export type Preflight = { provider: Provider, binary: string | null,
 /**
  * How `binary` was found.
  */
-source: BinarySource | null, version: string | null, 
+source: BinarySource | null, 
+/**
+ * The file the user chose for this provider, if any, even when it no longer works (then
+ * `binary` is None and `problem` says so): the UI offers to go back to finding it.
+ */
+chosen: string | null, version: string | null, 
 /**
  * `None` when the login state could not be determined.
  */

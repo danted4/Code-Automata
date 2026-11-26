@@ -15,11 +15,14 @@
 //! An agent CLI is looked for, in order:
 //!
 //! 1. in the file the user chose for it (`ChosenPaths`, kept per machine);
-//! 2. in its own installer's folders (`install_locations`), before `PATH`: someone who moved from
+//! 2. in its own installer's folder (`install_locations`), before `PATH`: someone who moved from
 //!    an npm install (often under nvm) to the native one with `claude install` can still have the
-//!    old npm copy earlier on `PATH`, and the older local install was reached through a shell
-//!    alias, which no `PATH` search sees;
-//! 3. on the `PATH`.
+//!    old npm copy earlier on `PATH`. Only names the installer itself writes there, so an
+//!    unrelated program cannot be taken for an agent;
+//! 3. on the `PATH`;
+//! 4. in folders of older installs (`legacy_locations`), after `PATH` so a current copy on `PATH`
+//!    wins over one left behind: the older Claude Code local install was reached through a shell
+//!    alias, which no `PATH` search sees.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -62,19 +65,30 @@ pub fn binary_name(provider: Provider) -> &'static str {
     }
 }
 
-/// The files each provider's own installer puts its CLI in, relative to the home folder, in the
-/// order they are tried. Checked before `PATH` (see the module docs).
+/// The files each provider's current installer puts its CLI in, relative to the home folder, in
+/// the order they are tried. Checked before `PATH` (see the module docs).
 pub fn install_locations(provider: Provider, home: &Path) -> Vec<PathBuf> {
     let relative: &[&str] = match provider {
-        // The native installer (`claude install`), then the older local install that a shell
-        // alias pointed at.
+        // The native installer (`claude install`).
         Provider::Claude if cfg!(windows) => &[".local/bin/claude.exe"],
-        Provider::Claude => &[".local/bin/claude", ".claude/local/claude"],
+        Provider::Claude => &[".local/bin/claude"],
+        // Cursor's installer links both `agent` and `cursor-agent` to the same file; `agent` is
+        // too common a name to trust ahead of PATH, so only the specific one is used here.
         Provider::Cursor if cfg!(windows) => &[],
-        Provider::Cursor => &[".local/bin/agent", ".local/bin/cursor-agent"],
+        Provider::Cursor => &[".local/bin/cursor-agent"],
         Provider::Amp if cfg!(windows) => &[],
-        Provider::Amp => &[".local/bin/amp", ".amp/bin/amp"],
+        Provider::Amp => &[".amp/bin/amp"],
         Provider::Mock => &[],
+    };
+    relative.iter().map(|r| home.join(r)).collect()
+}
+
+/// Files of older installs, relative to the home folder: tried after `PATH`.
+pub fn legacy_locations(provider: Provider, home: &Path) -> Vec<PathBuf> {
+    let relative: &[&str] = match provider {
+        // The older Claude Code local install, reached through a shell alias.
+        Provider::Claude if !cfg!(windows) => &[".claude/local/claude"],
+        _ => &[],
     };
     relative.iter().map(|r| home.join(r)).collect()
 }
@@ -114,17 +128,18 @@ struct ChosenPathsFile {
 
 impl ChosenPaths {
     /// Load the choices saved in `file`, which is also where changes go. A missing file means no
-    /// choices; one that cannot be read is reported and replaced by the next change.
+    /// choices. One that cannot be read (damaged, or from a newer version) is moved aside to
+    /// `<file>.unreadable-<ms>` and reported, so the next change does not overwrite it.
     pub async fn load(file: PathBuf) -> Self {
         let paths = match tokio::fs::read(&file).await {
             Ok(bytes) => match serde_json::from_slice::<ChosenPathsFile>(&bytes) {
                 Ok(saved) if saved.schema == 1 => saved.paths,
                 Ok(saved) => {
-                    log::warn!("{}: unknown schema {}", file.display(), saved.schema);
+                    set_aside(&file, &format!("unknown schema {}", saved.schema)).await;
                     BTreeMap::new()
                 }
                 Err(e) => {
-                    log::warn!("{}: {e}", file.display());
+                    set_aside(&file, &e.to_string()).await;
                     BTreeMap::new()
                 }
             },
@@ -141,6 +156,7 @@ impl ChosenPaths {
         }
     }
 
+    /// The choice for one provider, whether or not the file still works.
     pub fn get(&self, provider: Provider) -> Option<PathBuf> {
         self.read().get(&provider).cloned()
     }
@@ -176,6 +192,19 @@ impl ChosenPaths {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
         Ok(())
+    }
+}
+
+async fn set_aside(file: &Path, why: &str) {
+    let mut aside = file.as_os_str().to_owned();
+    aside.push(format!(".unreadable-{}", crate::util::now_ms()));
+    match tokio::fs::rename(file, &aside).await {
+        Ok(()) => log::warn!(
+            "{}: {why}; moved to {} and starting with no chosen CLI files",
+            file.display(),
+            Path::new(&aside).display()
+        ),
+        Err(e) => log::warn!("{}: {why}; could not move it aside: {e}", file.display()),
     }
 }
 
@@ -269,6 +298,19 @@ impl Binaries {
             cmd.env("PATH", search);
         }
         match tokio::time::timeout(VERSION_TIMEOUT, cmd.output()).await {
+            // Claude Code names itself in its version ("2.1.0 (Claude Code)"), so another program
+            // chosen by mistake is caught here. Cursor's and Amp's print only a number.
+            Ok(Ok(out))
+                if out.status.success()
+                    && provider == Provider::Claude
+                    && !String::from_utf8_lossy(&out.stdout).contains("Claude Code") =>
+            {
+                Err(CoreError::Invalid(format!(
+                    "{} is not Claude Code: its --version says {:?}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stdout).trim()
+                )))
+            }
             Ok(Ok(out)) if out.status.success() => Ok(()),
             Ok(Ok(out)) => Err(CoreError::Invalid(format!(
                 "{} --version failed: {}",
@@ -292,7 +334,10 @@ impl Binaries {
     /// app started from the Dock or Finder.
     pub async fn from_login_shell() -> Self {
         if cfg!(windows) {
-            return Self::from_env();
+            return Binaries {
+                home: home_dir(),
+                ..Self::from_env()
+            };
         }
         let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/zsh"));
         let is_fish = Path::new(&shell).file_name().is_some_and(|n| n == "fish");
@@ -343,6 +388,11 @@ impl Binaries {
         })
     }
 
+    /// The home folder whose install folders are searched, if any.
+    pub fn home(&self) -> Option<&Path> {
+        self.home.as_deref()
+    }
+
     /// The `PATH` to give agent processes.
     pub fn path_var(&self) -> Option<&OsStr> {
         self.search_path.as_deref()
@@ -386,8 +436,17 @@ impl Binaries {
         {
             return Ok((path, BinarySource::InstallFolder));
         }
-        self.search(name)
-            .map(|path| (path, BinarySource::Path))
+        if let Some(path) = self.search(name) {
+            return Ok((path, BinarySource::Path));
+        }
+        self.home
+            .as_deref()
+            .and_then(|home| {
+                legacy_locations(provider, home)
+                    .into_iter()
+                    .find(|p| is_executable(p))
+            })
+            .map(|path| (path, BinarySource::InstallFolder))
             .ok_or_else(|| {
                 CoreError::Invalid(format!(
                     "`{name}` was not found in its install folder or on PATH; install it, or \
@@ -508,6 +567,31 @@ mod tests {
             .map(|n| n.into_string().unwrap())
             .collect();
         assert_eq!(exact, ["gh.exe", "gh.exe.exe"]);
+    }
+
+    #[tokio::test]
+    async fn the_app_searches_the_install_folders_on_every_os() {
+        // Windows has no login shell step; the home folder must still be set there.
+        let bins = Binaries::from_login_shell().await;
+        assert!(bins.home().is_some());
+        assert_eq!(bins.home().map(Path::to_path_buf), home_dir());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_native_install_wins_on_windows_too() {
+        let home = tempfile::tempdir().unwrap();
+        let native = home.path().join(".local/bin/claude.exe");
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+        std::fs::write(&native, "").unwrap();
+        // An old npm shim on PATH.
+        let npm = tempfile::tempdir().unwrap();
+        std::fs::write(npm.path().join("claude.cmd"), "@echo off").unwrap();
+        let bins = Binaries::from_search_path(npm.path().into()).with_home(home.path());
+        assert_eq!(
+            bins.find(Provider::Claude).unwrap(),
+            (native, BinarySource::InstallFolder)
+        );
     }
 
     #[test]

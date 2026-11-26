@@ -1008,9 +1008,14 @@ async fn an_agent_cli_file_can_be_chosen_and_cleared() {
             json!({ "path": cli.to_str().unwrap() }),
         ),
         ("/api/cli-paths/amp", json!({ "file": "x" })),
+        ("/api/cli-paths/nope", json!({ "path": null })),
     ] {
         let (status, body) = send("PUT", uri, Some(body)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert!(
+            body["error"].is_string(),
+            "not the API's JSON error: {uri}: {body}"
+        );
     }
     let (_, list) = send("GET", "/api/cli-paths", None).await;
     assert_eq!(list[2]["path"], cli.to_str().unwrap());

@@ -8,7 +8,7 @@ All notable changes to Code-Automata are documented here.
 
 ### Fixed
 
-- **Agent CLIs installed outside your shell's PATH are found.** Each agent is looked for in its own install folder (for Claude Code, `~/.local/bin` from `claude install` and the older `~/.claude/local`) before the PATH, so an old npm copy left behind under nvm no longer hides the native install. When nothing is found, or the login state of the copy found cannot be read, you can choose the file yourself, right in the agent picker or under Settings → Agent CLIs on this computer. The choice is kept for the computer and applies to every project.
+- **Agent CLIs installed outside your shell's PATH are found.** Each agent is looked for in its own install folder (for Claude Code, `~/.local/bin` from `claude install`) before the PATH, so an old npm copy left behind under nvm no longer hides the native install; the older `~/.claude/local` install, reached through a shell alias, is found after the PATH. When nothing is found, or the login state of the copy found cannot be read, you can choose the file yourself, right in the agent picker or under Settings → Agent CLIs on this computer. The choice is kept for the computer and applies to every project.
 - The agent picker says how each CLI was found (install folder, PATH or chosen by you), and a copy too old to report its login is named with its path and version.
 
 ---

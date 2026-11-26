@@ -52,6 +52,39 @@ fn the_older_local_install_reached_by_an_alias_is_found() {
 }
 
 #[test]
+fn a_current_copy_on_path_wins_over_the_older_local_install() {
+    // 3.0.0 found this one on PATH; a copy of the old local install left behind must not win.
+    let home = tempfile::tempdir().unwrap();
+    script(&home.path().join(".claude/local/claude"), "echo old");
+    let path = tempfile::tempdir().unwrap();
+    let current = script(&path.path().join("claude"), "echo current");
+    let bins = Binaries::from_search_path(path.path().into()).with_home(home.path());
+    assert_eq!(
+        bins.find(Provider::Claude).unwrap(),
+        (current, BinarySource::Path)
+    );
+}
+
+#[test]
+fn only_cursors_own_name_is_trusted_ahead_of_path() {
+    let home = tempfile::tempdir().unwrap();
+    // Some other program called `agent` in ~/.local/bin is not taken for Cursor's.
+    script(&home.path().join(".local/bin/agent"), "echo other");
+    let path = tempfile::tempdir().unwrap();
+    let on_path = script(&path.path().join("agent"), "echo cursor");
+    let bins = Binaries::from_search_path(path.path().into()).with_home(home.path());
+    assert_eq!(
+        bins.find(Provider::Cursor).unwrap(),
+        (on_path, BinarySource::Path)
+    );
+    let cursor = script(&home.path().join(".local/bin/cursor-agent"), "echo cursor");
+    assert_eq!(
+        bins.find(Provider::Cursor).unwrap(),
+        (cursor, BinarySource::InstallFolder)
+    );
+}
+
+#[test]
 fn a_dangling_link_in_the_install_folder_is_skipped() {
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join(".local/bin");
@@ -111,6 +144,11 @@ async fn a_chosen_file_wins_and_is_saved() {
     let message = bins.find(Provider::Claude).unwrap_err().to_string();
     assert!(message.contains("choose it again"), "{message}");
 
+    // Preflight still names the choice, so the UI can offer to go back to finding it.
+    let report = check(Provider::Claude, &bins).await;
+    assert_eq!(report.binary, None);
+    assert_eq!(report.chosen.as_deref(), Some(chosen.as_path()));
+
     // Going back to finding it.
     bins.choose(Provider::Claude, None).await.unwrap();
     assert_eq!(
@@ -119,6 +157,26 @@ async fn a_chosen_file_wins_and_is_saved() {
     );
     let reloaded = Binaries::default().with_chosen_paths(ChosenPaths::load(file).await);
     assert!(reloaded.chosen_paths().is_empty());
+}
+
+#[tokio::test]
+async fn an_unreadable_choices_file_is_moved_aside_not_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("cli-paths.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let chosen = ChosenPaths::load(file.clone()).await;
+    assert!(chosen.all().is_empty());
+    assert!(!file.exists());
+    let aside: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.starts_with("cli-paths.json.unreadable-"))
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(&aside[0])).unwrap(),
+        "{ not json"
+    );
 }
 
 #[tokio::test]
@@ -152,6 +210,14 @@ async fn only_a_runnable_file_can_be_chosen() {
         .await
         .unwrap_err();
     assert!(fails.to_string().contains("bad install"), "{fails}");
+
+    // Another program that answers --version is not Claude Code.
+    let git_like = script(&dir.path().join("git"), "echo 'git version 2.50.0'");
+    let wrong = bins
+        .choose(Provider::Claude, Some(git_like))
+        .await
+        .unwrap_err();
+    assert!(wrong.to_string().contains("is not Claude Code"), "{wrong}");
 
     let mock = script(&dir.path().join("mock"), "echo 1");
     assert!(bins.choose(Provider::Mock, Some(mock)).await.is_err());
