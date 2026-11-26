@@ -224,18 +224,29 @@ describe('pullRequestAction', () => {
   });
 
   it('words the toast from what the server did', () => {
-    expect(pullRequestToast('t', false, { url, host: 'github', note: null })).toEqual({
+    expect(pullRequestToast('t', null, { url, host: 'github', note: null })).toEqual({
       title: 'Pull request opened',
       description: url,
       warn: false,
     });
-    expect(pullRequestToast('t', true, { url, host: 'gitlab', note: null }).title).toBe(
-      'Merge request updated'
+    const mr = 'https://gitlab.corp/g/r/-/merge_requests/1';
+    expect(
+      pullRequestToast('t', { url: mr, host: 'gitlab' }, { url: mr, host: 'gitlab', note: null })
+        .title
+    ).toBe('Merge request updated');
+    // A pre-3.0.1 record is GitHub.
+    expect(pullRequestToast('t', { url }, { url, host: 'github', note: null }).title).toBe(
+      'Pull request updated'
     );
-    const pushed = pullRequestToast('t', false, { url: null, host: 'other', note: null });
+    // A pushed branch that now gets a GitHub PR: opened, not updated.
+    const page = 'https://github.com/o/r/pull/new/x';
+    expect(
+      pullRequestToast('t', { url: page, host: 'other' }, { url, host: 'github', note: null }).title
+    ).toBe('Pull request opened');
+    const pushed = pullRequestToast('t', null, { url: null, host: 'other', note: null });
     expect(pushed.title).toBe('Branch pushed');
     expect(pushed.description).toContain('code-automata/t');
-    const noted = pullRequestToast('t', false, { url: null, host: 'other', note: 'only pushed' });
+    const noted = pullRequestToast('t', null, { url: null, host: 'other', note: 'only pushed' });
     expect(noted).toEqual({ title: 'Branch pushed', description: 'only pushed', warn: true });
   });
 

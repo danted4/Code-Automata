@@ -5,6 +5,7 @@
 
 import type { Checks } from '@/lib/api/types/Checks';
 import type { PrHost } from '@/lib/api/types/PrHost';
+import type { PullRequest } from '@/lib/api/types/PullRequest';
 import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
@@ -214,14 +215,18 @@ function capitalize(s: string): string {
 
 /**
  * The toast after Create or Update, from what the server did (the host is only known then): a
- * pushed branch is never called an opened pull request. `warn` when the server added a note.
+ * pushed branch is never called an opened pull request, and a request is "updated" only if the
+ * task already had one on the same host (a pushed branch that now gets a GitHub PR is "opened").
+ * `warn` when the server added a note.
  */
 export function pullRequestToast(
   taskId: string,
-  wasOpen: boolean,
+  previous: PullRequest | null,
   result: PullRequestResponse
 ): { title: string; description: string; warn: boolean } {
   const noun = requestNoun(result.host);
+  const wasOpen =
+    previous !== null && previous.url !== null && (previous.host ?? 'github') === result.host;
   const title = noun ? `${capitalize(noun)} ${wasOpen ? 'updated' : 'opened'}` : 'Branch pushed';
   const description =
     result.note ??

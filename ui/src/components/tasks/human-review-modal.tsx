@@ -91,7 +91,7 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
     try {
       const pr = await api.tasks.pullRequest(task.id);
       setCreated(pr);
-      const t = pullRequestToast(task.id, prAction.kind !== 'create', pr);
+      const t = pullRequestToast(task.id, task.pullRequest ?? null, pr);
       (t.warn ? toast.warning : toast.success)(t.title, { description: t.description });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));

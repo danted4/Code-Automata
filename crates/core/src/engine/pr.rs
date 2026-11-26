@@ -154,14 +154,16 @@ async fn pr_host(inner: &Inner, wt: &Path) -> Result<(PrHost, Option<String>)> {
                 "the repository has no `origin` remote to push the task's branch to".into(),
             )
         })?;
-    let Some(mut name) = remote_host(&url) else {
+    let Some(raw) = remote_host_as_written(&url) else {
         // A local folder: nothing to open a pull request on.
         return Ok((PrHost::Other, None));
     };
+    let mut name = raw.to_ascii_lowercase();
     // An SSH host alias (`git@github-work:org/repo.git`, for a second account) stands for the
-    // host named in ~/.ssh/config.
+    // host named in ~/.ssh/config. `Host` patterns are case-sensitive, so the alias goes to ssh
+    // as written.
     if is_ssh_url(&url)
-        && let Some(real) = ssh_hostname(inner, &name).await
+        && let Some(real) = ssh_hostname(inner, &raw).await
     {
         name = real;
     }
@@ -204,6 +206,9 @@ async fn gh_has_login(inner: &Inner, gh: &Path, host: &str) -> bool {
 
 /// The real host behind an SSH host alias, from `ssh -G` (which only reads the SSH config).
 async fn ssh_hostname(inner: &Inner, alias: &str) -> Option<String> {
+    if !safe_ssh_alias(alias) {
+        return None;
+    }
     let mut cmd = crate::proc::command("ssh");
     cmd.args(["-G", alias])
         .stdin(std::process::Stdio::null())
@@ -219,6 +224,11 @@ async fn ssh_hostname(inner: &Inner, alias: &str) -> Option<String> {
         return None;
     }
     hostname_from_ssh_config(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Never let a remote URL pass an option to ssh (git refuses such hosts too).
+pub fn safe_ssh_alias(alias: &str) -> bool {
+    !alias.is_empty() && !alias.starts_with('-')
 }
 
 /// The `hostname` line of `ssh -G` output.
@@ -241,9 +251,15 @@ pub fn is_ssh_url(url: &str) -> bool {
     }
 }
 
-/// The host part of a remote URL: `https://[user@]host[:port]/path`, `ssh://[user@]host[:port]/
-/// path` or scp-like `[user@]host:path`. None for a local path or `file://`.
+/// The host part of a remote URL, lowercased (see `remote_host_as_written`).
 pub fn remote_host(url: &str) -> Option<String> {
+    remote_host_as_written(url).map(|h| h.to_ascii_lowercase())
+}
+
+/// The host part of a remote URL as written: `https://[user@]host[:port]/path`,
+/// `ssh://[user@]host[:port]/path` or scp-like `[user@]host:path`. None for a local path or
+/// `file://`.
+pub fn remote_host_as_written(url: &str) -> Option<String> {
     let url = url.trim();
     let authority = if let Some((scheme, rest)) = url.split_once("://") {
         if scheme.eq_ignore_ascii_case("file") {
@@ -266,7 +282,7 @@ pub fn remote_host(url: &str) -> Option<String> {
     } else {
         host.split(':').next()?
     };
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    (!host.is_empty()).then(|| host.to_string())
 }
 
 /// The host a remote URL names, when its name says it (see `detect_host_name`).
@@ -727,6 +743,18 @@ mod tests {
             Some(PrHost::Github)
         );
         assert_eq!(hostname_from_ssh_config("user git\nport 22\n"), None);
+        assert!(safe_ssh_alias("github-work"));
+        assert!(!safe_ssh_alias("-oProxyCommand=x"));
+        assert!(!safe_ssh_alias(""));
+        // ssh `Host` patterns are case-sensitive: the alias keeps its case for ssh.
+        assert_eq!(
+            remote_host_as_written("git@GitHub-Work:org/repo.git").as_deref(),
+            Some("GitHub-Work")
+        );
+        assert_eq!(
+            remote_host("git@GitHub-Work:org/repo.git").as_deref(),
+            Some("github-work")
+        );
     }
 
     #[test]
