@@ -2,6 +2,7 @@ fn main() {
     // The page may call only these commands; capabilities/main.json allows each one.
     let commands = &[
         "pick_folder",
+        "pick_file",
         "available_editors",
         "path_exists",
         "open_in_editor",

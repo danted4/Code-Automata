@@ -64,7 +64,7 @@ impl fmt::Display for Phase {
 
 /// Which CLI agent runs the task.
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Claude,

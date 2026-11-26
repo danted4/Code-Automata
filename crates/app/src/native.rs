@@ -53,6 +53,19 @@ pub async fn pick_folder(app: AppHandle) -> Option<String> {
     Some(path.to_string_lossy().into_owned())
 }
 
+/// A file picker (an agent's CLI); `None` when cancelled. Only the chosen path is returned; the
+/// server checks the file before using it.
+#[tauri::command]
+pub async fn pick_file(app: AppHandle, title: String) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_title(title).pick_file(move |file| {
+        let _ = tx.send(file);
+    });
+    let file = rx.await.ok()??;
+    let path = file.into_path().ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub async fn available_editors(server: State<'_, Server>) -> Result<Vec<Editor>, String> {
     let bins = server.bins().await?;

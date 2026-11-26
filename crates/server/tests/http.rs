@@ -954,6 +954,75 @@ async fn settings_round_trip_with_the_default_prompts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake CLI is a shell script
+async fn an_agent_cli_file_can_be_chosen_and_cleared() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Harness::new(true);
+    let send = |method: &str, uri: &str, body: Option<Value>| {
+        let req = h.request(method, uri, None, body);
+        h.send(req)
+    };
+    let (status, list) = send("GET", "/api/cli-paths", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let providers: Vec<_> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["provider"].as_str().unwrap())
+        .collect();
+    // The mock agent's file is never chosen, even when it is offered.
+    assert_eq!(providers, ["claude", "cursor", "amp"]);
+    assert!(list[0]["path"].is_null());
+
+    let cli = h.files.path().join("my-amp");
+    std::fs::write(
+        &cli,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 9.9.9 ;; *) echo 'Signed in as x' ;; esac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (status, info) = send(
+        "PUT",
+        "/api/cli-paths/amp",
+        Some(json!({ "path": cli.to_str().unwrap() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["preflight"]["source"], "chosen");
+    assert_eq!(info["preflight"]["binary"], cli.to_str().unwrap());
+    assert_eq!(info["preflight"]["version"], "9.9.9");
+    let (_, list) = send("GET", "/api/cli-paths", None).await;
+    assert_eq!(list[2]["path"], cli.to_str().unwrap());
+
+    // Not an executable, not a full path, the mock agent: 400, and nothing changes.
+    let notes = h.files.path().join("notes.txt");
+    std::fs::write(&notes, "x").unwrap();
+    for (uri, body) in [
+        (
+            "/api/cli-paths/amp",
+            json!({ "path": notes.to_str().unwrap() }),
+        ),
+        ("/api/cli-paths/amp", json!({ "path": "amp" })),
+        (
+            "/api/cli-paths/mock",
+            json!({ "path": cli.to_str().unwrap() }),
+        ),
+        ("/api/cli-paths/amp", json!({ "file": "x" })),
+    ] {
+        let (status, body) = send("PUT", uri, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+    }
+    let (_, list) = send("GET", "/api/cli-paths", None).await;
+    assert_eq!(list[2]["path"], cli.to_str().unwrap());
+
+    let (status, info) = send("PUT", "/api/cli-paths/amp", Some(json!({ "path": null }))).await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_ne!(info["preflight"]["source"], "chosen");
+    let (_, list) = send("GET", "/api/cli-paths", None).await;
+    assert!(list[2]["path"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn two_projects_run_at_once_and_skip_works() {
     let h = Harness::new(true);
     let (a, b) = (Repo::new().await, Repo::new().await);

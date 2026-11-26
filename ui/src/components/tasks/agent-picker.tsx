@@ -14,12 +14,16 @@ import type { Preflight } from '@/lib/api/types/Preflight';
 import type { Provider } from '@/lib/api/types/Provider';
 import type { ProviderInfo } from '@/lib/api/types/ProviderInfo';
 import { type AgentDraft, readiness, suggestedMode, takesMode } from '@/lib/agent-form';
+import { offerCliChoice, sourceText } from '@/lib/cli-path';
+import { CliPathChooser } from './cli-path-chooser';
 
 export type ProvidersState = {
   /** Null while loading. */
   providers: ProviderInfo[] | null;
   error: string | null;
   retry: () => void;
+  /** Put one provider's fresh check in place (after its CLI file was chosen). */
+  replace: (info: ProviderInfo) => void;
 };
 
 /** The server's providers with their preflight, fetched when the calling component mounts. */
@@ -51,6 +55,8 @@ export function useProviders(): ProvidersState {
       setError(null);
       setAttempt((a) => a + 1);
     },
+    replace: (info) =>
+      setProviders((list) => list?.map((p) => (p.provider === info.provider ? info : p)) ?? list),
   };
 }
 
@@ -86,6 +92,7 @@ function ReadinessDetails({ row }: { row: Row }) {
         {p.binary ? (
           <>
             <span className="font-mono">{p.binary}</span>
+            {sourceText(p.source) ? ` (${sourceText(p.source)})` : ''}
             {p.version ? ` · ${p.version}` : ''} · {loginText(p.loggedIn)}
           </>
         ) : (
@@ -113,7 +120,7 @@ type AgentPickerProps = {
 };
 
 export function AgentPicker({ state, value, onChange, lockedReason }: AgentPickerProps) {
-  const { providers, error, retry } = state;
+  const { providers, error, retry, replace } = state;
   const locked = Boolean(lockedReason);
   const list = providers ? rows(providers, value.provider) : [];
   const selected = list.find((r) => r.provider === value.provider);
@@ -223,6 +230,17 @@ export function AgentPicker({ state, value, onChange, lockedReason }: AgentPicke
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           {selected.label} is not ready. Its runs will fail until that is fixed.
         </p>
+      )}
+
+      {!locked && selected && offerCliChoice(selected.preflight) && (
+        <div className="space-y-1">
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            {selected.preflight?.binary
+              ? `Using a different ${selected.label} install? Choose its file:`
+              : `Installed somewhere the app does not look? Choose the ${selected.label} file:`}
+          </p>
+          <CliPathChooser provider={selected.provider} label={selected.label} onChosen={replace} />
+        </div>
       )}
 
       {value.provider && (

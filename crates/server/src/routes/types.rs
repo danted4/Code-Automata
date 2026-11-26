@@ -35,6 +35,24 @@ pub struct ProviderInfo {
     pub preflight: Preflight,
 }
 
+/// The CLI file the user chose for an agent, if any (kept per machine, not per project).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliPath {
+    pub provider: Provider,
+    pub label: String,
+    pub path: Option<PathBuf>,
+}
+
+/// `PUT /api/cli-paths/:provider`: the file to use, or `null` to find it again.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChooseCliRequest {
+    pub path: Option<PathBuf>,
+}
+
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

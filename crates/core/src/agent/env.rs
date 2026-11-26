@@ -11,13 +11,29 @@
 //!
 //! On Windows a GUI app gets the user's full `PATH` from the environment, so there is no login
 //! shell step, and a name is searched with each `PATHEXT` extension (`claude.exe`, `claude.cmd`).
+//!
+//! An agent CLI is looked for, in order:
+//!
+//! 1. in the file the user chose for it (`ChosenPaths`, kept per machine);
+//! 2. in its own installer's folders (`install_locations`), before `PATH`: someone who moved from
+//!    an npm install (often under nvm) to the native one with `claude install` can still have the
+//!    old npm copy earlier on `PATH`, and the older local install was reached through a shell
+//!    alias, which no `PATH` search sees;
+//! 3. on the `PATH`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::task::Provider;
+
+/// How long a chosen file may take to answer `--version`.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 const START: &str = "__CODE_AUTOMATA_PATH_START__";
 const END: &str = "__CODE_AUTOMATA_PATH_END__";
@@ -46,30 +62,228 @@ pub fn binary_name(provider: Provider) -> &'static str {
     }
 }
 
+/// The files each provider's own installer puts its CLI in, relative to the home folder, in the
+/// order they are tried. Checked before `PATH` (see the module docs).
+pub fn install_locations(provider: Provider, home: &Path) -> Vec<PathBuf> {
+    let relative: &[&str] = match provider {
+        // The native installer (`claude install`), then the older local install that a shell
+        // alias pointed at.
+        Provider::Claude if cfg!(windows) => &[".local/bin/claude.exe"],
+        Provider::Claude => &[".local/bin/claude", ".claude/local/claude"],
+        Provider::Cursor if cfg!(windows) => &[],
+        Provider::Cursor => &[".local/bin/agent", ".local/bin/cursor-agent"],
+        Provider::Amp if cfg!(windows) => &[],
+        Provider::Amp => &[".local/bin/amp", ".amp/bin/amp"],
+        Provider::Mock => &[],
+    };
+    relative.iter().map(|r| home.join(r)).collect()
+}
+
+/// How a provider's CLI was found.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BinarySource {
+    /// The file the user chose for it.
+    Chosen,
+    /// Set by the program (the mock agent, a test's binary).
+    Configured,
+    /// The provider's own install folder.
+    InstallFolder,
+    /// The `PATH`.
+    Path,
+}
+
+/// The CLI file the user chose for each provider, shared by every clone of the `Binaries` that
+/// holds it, so a choice reaches the engines already open. Saved to a file when there is one.
+#[derive(Debug, Clone, Default)]
+pub struct ChosenPaths {
+    paths: Arc<RwLock<BTreeMap<Provider, PathBuf>>>,
+    file: Option<Arc<PathBuf>>,
+    /// Serialises changes, so two at once cannot save an older map last.
+    writing: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// The file `ChosenPaths` is saved in.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChosenPathsFile {
+    schema: u32,
+    paths: BTreeMap<Provider, PathBuf>,
+}
+
+impl ChosenPaths {
+    /// Load the choices saved in `file`, which is also where changes go. A missing file means no
+    /// choices; one that cannot be read is reported and replaced by the next change.
+    pub async fn load(file: PathBuf) -> Self {
+        let paths = match tokio::fs::read(&file).await {
+            Ok(bytes) => match serde_json::from_slice::<ChosenPathsFile>(&bytes) {
+                Ok(saved) if saved.schema == 1 => saved.paths,
+                Ok(saved) => {
+                    log::warn!("{}: unknown schema {}", file.display(), saved.schema);
+                    BTreeMap::new()
+                }
+                Err(e) => {
+                    log::warn!("{}: {e}", file.display());
+                    BTreeMap::new()
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => {
+                log::warn!("{}: {e}", file.display());
+                BTreeMap::new()
+            }
+        };
+        ChosenPaths {
+            paths: Arc::new(RwLock::new(paths)),
+            file: Some(Arc::new(file)),
+            writing: Arc::default(),
+        }
+    }
+
+    pub fn get(&self, provider: Provider) -> Option<PathBuf> {
+        self.read().get(&provider).cloned()
+    }
+
+    pub fn all(&self) -> BTreeMap<Provider, PathBuf> {
+        self.read().clone()
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, BTreeMap<Provider, PathBuf>> {
+        // A writer cannot panic while holding the lock (it only inserts), so a poisoned lock
+        // still holds a whole map.
+        self.paths
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn set(&self, provider: Provider, path: Option<PathBuf>) -> Result<()> {
+        let _writing = self.writing.lock().await;
+        let mut next = self.all();
+        match path {
+            Some(path) => next.insert(provider, path),
+            None => next.remove(&provider),
+        };
+        if let Some(file) = &self.file {
+            let saved = ChosenPathsFile {
+                schema: 1,
+                paths: next.clone(),
+            };
+            crate::store::write_json_atomic(file, &saved).await?;
+        }
+        *self
+            .paths
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+        Ok(())
+    }
+}
+
 /// Where to find each provider's CLI.
 #[derive(Debug, Clone, Default)]
 pub struct Binaries {
     search_path: Option<OsString>,
+    /// The home folder whose install folders are searched; none in tests unless set.
+    home: Option<PathBuf>,
+    chosen: ChosenPaths,
     overrides: HashMap<Provider, PathBuf>,
     tools: HashMap<String, PathBuf>,
 }
 
+/// The user's home folder, from the environment.
+fn home_dir() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
 impl Binaries {
-    /// Search this process's own `PATH`. Right for tests and for an app started from a terminal.
+    /// Search this process's own `PATH` only (no install folders). Right for tests and for an app
+    /// started from a terminal.
     pub fn from_env() -> Self {
         Binaries {
             search_path: std::env::var_os("PATH"),
-            overrides: HashMap::new(),
-            tools: HashMap::new(),
+            ..Binaries::default()
         }
     }
 
-    /// Search exactly this `PATH`-style list of folders.
+    /// Search exactly this `PATH`-style list of folders (no install folders).
     pub fn from_search_path(path: OsString) -> Self {
         Binaries {
             search_path: Some(path),
-            overrides: HashMap::new(),
-            tools: HashMap::new(),
+            ..Binaries::default()
+        }
+    }
+
+    /// Also search the install folders under `home` (`from_login_shell` uses the real one).
+    pub fn with_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.home = Some(home.into());
+        self
+    }
+
+    /// Use, and save changes to, these chosen CLI files.
+    pub fn with_chosen_paths(mut self, chosen: ChosenPaths) -> Self {
+        self.chosen = chosen;
+        self
+    }
+
+    /// The CLI file the user chose for each provider.
+    pub fn chosen_paths(&self) -> BTreeMap<Provider, PathBuf> {
+        self.chosen.all()
+    }
+
+    /// Choose the CLI file for `provider`, or go back to finding it (`None`). The file must be an
+    /// absolute path to an executable that answers `--version`.
+    pub async fn choose(&self, provider: Provider, path: Option<PathBuf>) -> Result<()> {
+        if provider == Provider::Mock {
+            return Err(CoreError::Invalid(
+                "the mock agent's file cannot be chosen".into(),
+            ));
+        }
+        if let Some(path) = &path {
+            self.check_chosen(provider, path).await?;
+        }
+        self.chosen.set(provider, path).await
+    }
+
+    async fn check_chosen(&self, provider: Provider, path: &Path) -> Result<()> {
+        let name = binary_name(provider);
+        if !path.is_absolute() {
+            return Err(CoreError::Invalid(format!(
+                "{} is not a full path; give the whole path to the {name} file",
+                path.display()
+            )));
+        }
+        if !is_executable(path) {
+            return Err(CoreError::Invalid(format!(
+                "{} is not an executable file",
+                path.display()
+            )));
+        }
+        let mut cmd = crate::proc::command(path);
+        cmd.arg("--version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        if let Some(search) = &self.search_path {
+            cmd.env("PATH", search);
+        }
+        match tokio::time::timeout(VERSION_TIMEOUT, cmd.output()).await {
+            Ok(Ok(out)) if out.status.success() => Ok(()),
+            Ok(Ok(out)) => Err(CoreError::Invalid(format!(
+                "{} --version failed: {}",
+                path.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))),
+            Ok(Err(e)) => Err(CoreError::Invalid(format!(
+                "{} could not be run: {e}",
+                path.display()
+            ))),
+            Err(_) => Err(CoreError::Invalid(format!(
+                "{} --version did not answer within {} seconds",
+                path.display(),
+                VERSION_TIMEOUT.as_secs()
+            ))),
         }
     }
 
@@ -102,8 +316,8 @@ impl Binaries {
         };
         Binaries {
             search_path: path.or_else(|| std::env::var_os("PATH")),
-            overrides: HashMap::new(),
-            tools: HashMap::new(),
+            home: home_dir(),
+            ..Binaries::default()
         }
     }
 
@@ -135,23 +349,51 @@ impl Binaries {
     }
 
     pub fn locate(&self, provider: Provider) -> Result<PathBuf> {
+        self.find(provider).map(|(path, _)| path)
+    }
+
+    /// The provider's CLI and how it was found (see the module docs for the order).
+    pub fn find(&self, provider: Provider) -> Result<(PathBuf, BinarySource)> {
+        let name = binary_name(provider);
         if let Some(path) = self.overrides.get(&provider) {
             return if is_executable(path) {
-                Ok(path.clone())
+                Ok((path.clone(), BinarySource::Configured))
             } else {
                 Err(CoreError::Invalid(format!(
-                    "the configured {} binary {} is not an executable file",
-                    binary_name(provider),
+                    "the configured {name} binary {} is not an executable file",
                     path.display()
                 )))
             };
         }
-        let name = binary_name(provider);
-        self.search(name).ok_or_else(|| {
-            CoreError::Invalid(format!(
-                "`{name}` was not found on PATH; install it or set its path in settings"
-            ))
-        })
+        if provider != Provider::Mock
+            && let Some(path) = self.chosen.get(provider)
+        {
+            // A chosen file that went away is reported, not silently replaced by another copy.
+            return if is_executable(&path) {
+                Ok((path, BinarySource::Chosen))
+            } else {
+                Err(CoreError::Invalid(format!(
+                    "the {name} file you chose, {}, is not an executable file any more; choose \
+                     it again",
+                    path.display()
+                )))
+            };
+        }
+        if let Some(home) = &self.home
+            && let Some(path) = install_locations(provider, home)
+                .into_iter()
+                .find(|p| is_executable(p))
+        {
+            return Ok((path, BinarySource::InstallFolder));
+        }
+        self.search(name)
+            .map(|path| (path, BinarySource::Path))
+            .ok_or_else(|| {
+                CoreError::Invalid(format!(
+                    "`{name}` was not found in its install folder or on PATH; install it, or \
+                     choose its file"
+                ))
+            })
     }
 
     /// The first executable called `name` on the search path.

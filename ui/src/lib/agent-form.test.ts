@@ -16,6 +16,7 @@ function preflight(over: Partial<Preflight> = {}): Preflight {
   return {
     provider: 'claude',
     binary: '/usr/local/bin/claude',
+    source: 'path',
     version: '1.0.0',
     loggedIn: true,
     problem: null,

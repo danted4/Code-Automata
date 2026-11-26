@@ -1,7 +1,7 @@
 //! `ca-server`: the HTTP server on its own, for development and the UI's end-to-end tests.
 //!
 //! ```text
-//! ca-server [--port N] [--token T] [--allow-mock [--mock-scenario FILE]]
+//! ca-server [--port N] [--token T] [--cli-paths FILE] [--allow-mock [--mock-scenario FILE]]
 //! ```
 //!
 //! Prints `listening on http://127.0.0.1:<port>` and `token <token>`, one per line, once it
@@ -10,11 +10,15 @@
 //! With `--allow-mock`, the mock agent is offered. It is found through `CODE_AUTOMATA_MOCK_AGENT`,
 //! else next to this binary (`cargo build` puts `mock-agent` there). `--mock-scenario` is the
 //! scenario a mock task plays when it names none, as tasks created from the UI do.
+//!
+//! `--cli-paths` is the file that keeps the agent CLI files chosen in the UI (the app keeps it in
+//! its data folder). Without it, a choice lasts until the server stops.
 
 use std::process::ExitCode;
 
 use ca_core::Provider;
 use ca_core::agent::Binaries;
+use ca_core::agent::env::ChosenPaths;
 use ca_server::{AppState, Config, new_token, serve};
 
 struct Args {
@@ -22,6 +26,7 @@ struct Args {
     token: Option<String>,
     allow_mock: bool,
     mock_scenario: Option<std::path::PathBuf>,
+    cli_paths: Option<std::path::PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -30,6 +35,7 @@ fn parse_args() -> Result<Args, String> {
         token: None,
         allow_mock: false,
         mock_scenario: None,
+        cli_paths: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -54,9 +60,16 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|e| format!("--mock-scenario {value:?}: {e}"))?;
                 args.mock_scenario = Some(path);
             }
+            "--cli-paths" => {
+                let value = it.next().ok_or("--cli-paths needs a file")?;
+                let path = std::path::absolute(&value)
+                    .map_err(|e| format!("--cli-paths {value:?}: {e}"))?;
+                args.cli_paths = Some(path);
+            }
             "-h" | "--help" => {
                 return Err(
-                    "usage: ca-server [--port N] [--token T] [--allow-mock [--mock-scenario FILE]]"
+                    "usage: ca-server [--port N] [--token T] [--cli-paths FILE] \
+                     [--allow-mock [--mock-scenario FILE]]"
                         .into(),
                 );
             }
@@ -95,6 +108,9 @@ async fn run(args: Args) -> Result<(), String> {
         return Err("--mock-scenario needs --allow-mock".into());
     }
     let mut bins = Binaries::from_login_shell().await;
+    if let Some(file) = args.cli_paths {
+        bins = bins.with_chosen_paths(ChosenPaths::load(file).await);
+    }
     // git (and the hooks it runs) and checks get the same PATH as the agents.
     if let Some(path) = bins.path_var() {
         ca_core::proc::set_child_path(path.to_owned());

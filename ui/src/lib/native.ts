@@ -1,5 +1,5 @@
 /**
- * Desktop-only actions: the folder picker, finding installed editors, opening a worktree.
+ * Desktop-only actions: the folder and file pickers, finding installed editors, opening a worktree.
  *
  * In the desktop app these are its own commands (`crates/app/src/native.rs`), which check every
  * path against the projects the server has open. In a plain browser (`yarn dev`, the e2e suite)
@@ -21,6 +21,8 @@ export type OpenEditorResult = { success: boolean; error?: string };
 
 export interface NativeApi {
   openFolderDialog: () => Promise<string | null>;
+  /** A file picker (an agent's CLI); null when cancelled. */
+  pickFile: (title: string) => Promise<string | null>;
   getAvailableEditors: () => Promise<AvailableEditor[]>;
   pathExists: (path: string) => Promise<boolean>;
   openEditorAtPath: (
@@ -44,6 +46,7 @@ export function tauriNative(call: Invoke): NativeApi {
   };
   return {
     openFolderDialog: () => call<string | null>('pick_folder'),
+    pickFile: (title) => call<string | null>('pick_file', { title }),
     getAvailableEditors: () => call<AvailableEditor[]>('available_editors'),
     pathExists: (path) => call<boolean>('path_exists', { path }),
     // The app checks the folder against every open project, so the project is not sent.

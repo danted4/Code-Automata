@@ -69,6 +69,7 @@ fn main() {
         .manage(Quit::default())
         .invoke_handler(tauri::generate_handler![
             native::pick_folder,
+            native::pick_file,
             native::available_editors,
             native::path_exists,
             native::open_in_editor,

@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "allow-pick-folder",
+    "allow-pick-file",
     "allow-available-editors",
     "allow-path-exists",
     "allow-open-in-editor",

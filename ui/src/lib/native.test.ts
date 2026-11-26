@@ -20,6 +20,7 @@ describe('native', () => {
   it('maps each action to the app command and its argument names', async () => {
     const { call, calls } = fakeInvoke({
       pick_folder: '/repo',
+      pick_file: '/home/me/.local/bin/claude',
       available_editors: [{ id: 'cursor', label: 'Cursor', available: true }],
       path_exists: true,
       open_in_editor: { success: true },
@@ -27,6 +28,7 @@ describe('native', () => {
     });
     const api = tauriNative(call);
     expect(await api.openFolderDialog()).toBe('/repo');
+    expect(await api.pickFile('Choose the claude file')).toBe('/home/me/.local/bin/claude');
     expect(await api.getAvailableEditors()).toEqual([
       { id: 'cursor', label: 'Cursor', available: true },
     ]);
@@ -35,6 +37,7 @@ describe('native', () => {
     expect(await api.openFolder('/repo/wt')).toEqual({ success: true });
     expect(calls).toEqual([
       ['pick_folder', undefined],
+      ['pick_file', { title: 'Choose the claude file' }],
       ['available_editors', undefined],
       ['path_exists', { path: '/repo/wt' }],
       ['open_in_editor', { worktreePath: '/repo/wt', editorId: 'vscode' }],

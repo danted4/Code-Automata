@@ -4,11 +4,13 @@
 
 import { request } from './client';
 import type { AgentConfig } from './types/AgentConfig';
+import type { CliPath } from './types/CliPath';
 import type { Answer } from './types/Answer';
 import type { DeleteReport } from './types/DeleteReport';
 import type { DiskUsage } from './types/DiskUsage';
 import type { OpenProjectResponse } from './types/OpenProjectResponse';
 import type { Phase } from './types/Phase';
+import type { Provider } from './types/Provider';
 import type { ProviderInfo } from './types/ProviderInfo';
 import type { PullRequestResponse } from './types/PullRequestResponse';
 import type { RunLogInfo } from './types/RunLogInfo';
@@ -27,6 +29,17 @@ export const api = {
   openProject: (path: string) =>
     request<OpenProjectResponse>('POST', '/api/projects/open', { body: { path }, project: path }),
   providers: () => request<ProviderInfo[]>('GET', '/api/providers', { project: null }),
+
+  /** The agent CLI files chosen by hand, kept for this computer (not per project). */
+  cliPaths: {
+    list: () => request<CliPath[]>('GET', '/api/cli-paths', { project: null }),
+    /** `null` goes back to finding the file. Answers with the agent checked again. */
+    choose: (provider: Provider, path: string | null) =>
+      request<ProviderInfo>('PUT', `/api/cli-paths/${encodeURIComponent(provider)}`, {
+        body: { path },
+        project: null,
+      }),
+  },
 
   tasks: {
     list: () => request<TaskList>('GET', '/api/tasks'),

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use ca_core::agent::Binaries;
 use ca_server::{AppState, Config};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::{SetOnce, oneshot};
 
 /// The origin the app's own page is served from.
@@ -71,6 +71,15 @@ impl Server {
                     return;
                 }
             };
+            // The agent CLI files chosen in the UI, kept for this machine.
+            match app.path().app_data_dir() {
+                Ok(dir) => {
+                    bins = bins.with_chosen_paths(
+                        ca_core::agent::env::ChosenPaths::load(dir.join("cli-paths.json")).await,
+                    );
+                }
+                Err(e) => log::warn!("no app data folder, chosen CLI files are not kept: {e}"),
+            }
             // git (and the hooks it runs), checks and editors get the same PATH as the agents.
             if let Some(path) = bins.path_var() {
                 ca_core::proc::set_child_path(path.to_owned());

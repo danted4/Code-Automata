@@ -20,6 +20,11 @@ pub fn api() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/projects/open", post(projects::open))
         .route("/api/providers", get(projects::providers))
+        .route("/api/cli-paths", get(projects::cli_paths))
+        .route(
+            "/api/cli-paths/{provider}",
+            axum::routing::put(projects::choose_cli),
+        )
         .route("/api/events", get(events::stream))
         .route("/api/tasks", get(tasks::list).post(tasks::create))
         .route(

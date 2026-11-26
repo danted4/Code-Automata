@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use ca_core::Provider;
 use ca_core::agent::preflight;
 
 use super::Body;
-use super::types::{OpenProjectRequest, OpenProjectResponse, ProviderInfo};
+use super::types::{
+    ChooseCliRequest, CliPath, OpenProjectRequest, OpenProjectResponse, ProviderInfo,
+};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -26,14 +28,7 @@ pub async fn open(
 /// The agents a task can use, in the order the UI offers them, each with whether it is installed
 /// and logged in.
 pub async fn providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderInfo>> {
-    let mut offered = vec![
-        (Provider::Claude, "Claude Code"),
-        (Provider::Cursor, "Cursor"),
-        (Provider::Amp, "Amp"),
-    ];
-    if state.config.allow_mock {
-        offered.push((Provider::Mock, "Mock (tests)"));
-    }
+    let offered = offered(&state);
     // Each check starts a CLI and may take a second, so they run at once.
     let handles: Vec<_> = offered
         .iter()
@@ -55,4 +50,58 @@ pub async fn providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderI
         });
     }
     Json(providers)
+}
+
+/// The agents offered, in the order the UI shows them.
+fn offered(state: &AppState) -> Vec<(Provider, &'static str)> {
+    let mut offered = vec![
+        (Provider::Claude, "Claude Code"),
+        (Provider::Cursor, "Cursor"),
+        (Provider::Amp, "Amp"),
+    ];
+    if state.config.allow_mock {
+        offered.push((Provider::Mock, "Mock (tests)"));
+    }
+    offered
+}
+
+/// The CLI file chosen for each agent whose file can be chosen (all but the mock agent).
+pub async fn cli_paths(State(state): State<Arc<AppState>>) -> Json<Vec<CliPath>> {
+    let chosen = state.config.bins.chosen_paths();
+    Json(
+        offered(&state)
+            .into_iter()
+            .filter(|(provider, _)| *provider != Provider::Mock)
+            .map(|(provider, label)| CliPath {
+                provider,
+                label: label.to_string(),
+                path: chosen.get(&provider).cloned(),
+            })
+            .collect(),
+    )
+}
+
+/// Choose an agent's CLI file (or go back to finding it), then check the agent again so the UI
+/// shows the result at once.
+pub async fn choose_cli(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<Provider>,
+    Body(req): Body<ChooseCliRequest>,
+) -> Result<Json<ProviderInfo>, ApiError> {
+    let label = offered(&state)
+        .into_iter()
+        .find(|(p, _)| *p == provider && *p != Provider::Mock)
+        .map(|(_, label)| label)
+        .ok_or_else(|| ApiError::bad_request("this agent's file cannot be chosen"))?;
+    let bins = &state.config.bins;
+    bins.choose(provider, req.path).await.map_err(|e| match e {
+        // A file that is not a usable CLI is a bad request, not a state conflict.
+        ca_core::CoreError::Invalid(message) => ApiError::bad_request(message),
+        other => other.into(),
+    })?;
+    Ok(Json(ProviderInfo {
+        provider,
+        label: label.to_string(),
+        preflight: preflight::check(provider, bins).await,
+    }))
 }

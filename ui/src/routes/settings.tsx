@@ -1,12 +1,14 @@
 /**
  * Settings Page: the open project's engine settings (`.code-automata/settings.json`): checks,
  * concurrency, timeouts, rework rounds, triage on resume and the two editable prompt templates.
- * The whole `Settings` object is saved at once; the server validates it.
+ * The whole `Settings` object is saved at once; the server validates it. The agent CLI files
+ * (`AgentClis`) belong to the computer and apply at once.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Plus, RotateCcw, Save, Settings as SettingsIcon, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { AgentClis } from '@/components/settings/agent-clis';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -384,6 +386,15 @@ export default function SettingsPage() {
                 data-testid="settings-triage"
               />
             </div>
+          </Section>
+
+          <Section title="Agent CLIs on this computer">
+            <p className="text-sm" style={secondary}>
+              Where each agent's command-line tool is. The app looks in each tool's install folder,
+              then on your shell's PATH; choose a file here if it finds the wrong one or none.
+              Applies to every project at once; no Save needed.
+            </p>
+            <AgentClis />
           </Section>
 
           <Section title="Timeouts">

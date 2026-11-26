@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::Binaries;
+use super::env::BinarySource;
 use crate::task::{AgentConfig, Provider};
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -19,6 +20,8 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct Preflight {
     pub provider: Provider,
     pub binary: Option<PathBuf>,
+    /// How `binary` was found.
+    pub source: Option<BinarySource>,
     pub version: Option<String>,
     /// `None` when the login state could not be determined.
     pub logged_in: Option<bool>,
@@ -45,18 +48,20 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
     let mut report = Preflight {
         provider,
         binary: None,
+        source: None,
         version: None,
         logged_in: None,
         problem: None,
     };
-    let binary = match bins.locate(provider) {
-        Ok(path) => path,
+    let (binary, source) = match bins.find(provider) {
+        Ok(found) => found,
         Err(e) => {
             report.problem = Some(e.to_string());
             return report;
         }
     };
     report.binary = Some(binary.clone());
+    report.source = Some(source);
     if provider == Provider::Mock {
         report.logged_in = Some(true);
         return report;
@@ -117,7 +122,18 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
     report.problem = match logged_in {
         Some(true) => None,
         Some(false) => Some(format!("not logged in: {how_to_fix}")),
-        None => Some(format!("could not check the login: {how_to_fix}")),
+        // Often an old version without the status command (an npm copy left behind by a move
+        // to the native install), so the file is named.
+        None => Some(format!(
+            "could not read the login state from {}{}: {how_to_fix}, or update it, or choose \
+             another file",
+            binary.display(),
+            report
+                .version
+                .as_deref()
+                .map(|v| format!(" ({v})"))
+                .unwrap_or_default()
+        )),
     };
     report
 }
