@@ -110,6 +110,8 @@ pub struct PullRequestResponse {
     /// (the branch is pushed).
     pub url: Option<String>,
     pub host: PrHost,
+    /// Something to tell the user although it worked (the branch was only pushed, say).
+    pub note: Option<String>,
 }
 
 /// The editable part of the two prompts a user can change, as shipped.

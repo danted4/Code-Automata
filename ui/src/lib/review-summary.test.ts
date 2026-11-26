@@ -4,6 +4,7 @@ import type { Task } from '@/lib/api/types/Task';
 import {
   lastDevCheckpoint,
   pullRequestAction,
+  pullRequestToast,
   reviewSummary,
   taskBranch,
   unresolvedHeading,
@@ -178,7 +179,11 @@ describe('pullRequestAction', () => {
   });
 
   it('counts a PR just opened here as up to date until the task reloads', () => {
-    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), { url, host: 'github' });
+    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), {
+      url,
+      host: 'github',
+      note: null,
+    });
     expect(a.kind).toBe('current');
     expect(a.linkLabel).toBe('Open pull request');
   });
@@ -197,6 +202,43 @@ describe('pullRequestAction', () => {
     expect(pullRequestAction(old, null).linkLabel).toBe('Open pull request');
   });
 
+  it('never calls a pushed branch a pull request', () => {
+    const at = (host: 'github' | 'gitlab' | 'other', url: string | null, newest: string) =>
+      pullRequestAction(
+        task({
+          subtasks: [dev('d1', 'a1'), dev('d2', newest)],
+          pullRequest: { url, host, pushedCheckpoint: 'a2' },
+        }),
+        null
+      );
+    const otherCurrent = at('other', null, 'a2');
+    expect(otherCurrent.help).toContain('is pushed with all');
+    expect(otherCurrent.help).not.toMatch(/pull request has/);
+    const otherUpdate = at('other', 'https://host/o/r/compare/x', 'a3');
+    expect(otherUpdate.label).toBe('Push again');
+    expect(otherUpdate.done).toBe('Branch pushed');
+    expect(otherUpdate.help).not.toMatch(/^The pull request/);
+    expect(at('gitlab', url, 'a3').label).toBe('Update merge request');
+    expect(at('gitlab', url, 'a2').help).toBe('The merge request has all of the task’s work.');
+    expect(at('github', url, 'a3').done).toBe('Pull request updated');
+  });
+
+  it('words the toast from what the server did', () => {
+    expect(pullRequestToast('t', false, { url, host: 'github', note: null })).toEqual({
+      title: 'Pull request opened',
+      description: url,
+      warn: false,
+    });
+    expect(pullRequestToast('t', true, { url, host: 'gitlab', note: null }).title).toBe(
+      'Merge request updated'
+    );
+    const pushed = pullRequestToast('t', false, { url: null, host: 'other', note: null });
+    expect(pushed.title).toBe('Branch pushed');
+    expect(pushed.description).toContain('code-automata/t');
+    const noted = pullRequestToast('t', false, { url: null, host: 'other', note: 'only pushed' });
+    expect(noted).toEqual({ title: 'Branch pushed', description: 'only pushed', warn: true });
+  });
+
   it('updates a pushed branch whose host printed no link, and says so', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('rework-1', 'a2')],
@@ -210,6 +252,7 @@ describe('pullRequestAction', () => {
     const fresh = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), {
       url: null,
       host: 'other',
+      note: null,
     });
     expect(fresh.kind).toBe('current');
     expect(fresh.pushedNote).not.toBeNull();

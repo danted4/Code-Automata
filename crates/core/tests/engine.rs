@@ -508,7 +508,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
 /// Open (or update) the task's PR and return its link.
 #[cfg(unix)]
 async fn pr_url(engine: &Engine, id: &str) -> String {
-    let pr = engine.create_pull_request(id).await.unwrap();
+    let pr = engine.create_pull_request(id).await.unwrap().pull_request;
     pr.url.expect("the PR has a link")
 }
 
@@ -664,7 +664,7 @@ async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
         "View merge request for the branch:\n  https://gitlab.corp/g/r/-/merge_requests/12",
         true,
     );
-    let pr = engine.create_pull_request(&id).await.unwrap();
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
     assert_eq!(pr.host, Some(ca_core::PrHost::Gitlab));
     assert_eq!(
         pr.url.as_deref(),
@@ -680,15 +680,67 @@ async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
     );
     assert!(!env.path("pr-made").exists(), "gh ran");
 
-    // The next push (an update) carries no options and keeps the merge request.
-    let pr = engine.create_pull_request(&id).await.unwrap();
+    // The next push (an update) sends the options again, so GitLab refreshes the description or
+    // reopens a merge request that was closed; the link stays. (It may also send nothing at all:
+    // a re-squash in the same second is the same commit.)
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
     assert_eq!(
         pr.url.as_deref(),
         Some("https://gitlab.corp/g/r/-/merge_requests/12")
     );
-    assert_eq!(push_options(&env, 1), "");
+    let second = push_options(&env, 1);
+    assert!(
+        second.is_empty() || second.contains("merge_request.create"),
+        "{second}"
+    );
     let t = engine.get_task(&id).await.unwrap().unwrap();
     assert_eq!(t.pull_request.unwrap().host, Some(ca_core::PrHost::Gitlab));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the remote hook is a shell script
+async fn gitlab_that_reports_no_merge_request_is_an_error_not_up_to_date() {
+    let env = Env::new().await;
+    let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Gitlab)).await;
+    remote_says(&env, "thanks", true);
+    let err = engine.create_pull_request(&id).await.unwrap_err();
+    assert!(
+        err.to_string().contains("printed no merge request"),
+        "{err}"
+    );
+    assert!(
+        engine
+            .get_task(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .pull_request
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake gh and the remote hook are shell scripts
+async fn a_link_from_another_host_is_not_taken_for_a_github_pr() {
+    let env = Env::new().await;
+    fake_gh(&env, "echo https://github.com/example/repo/pull/9");
+    let (engine, id) = reviewed_task_on(&env, true, None).await;
+    remote_says(
+        &env,
+        "Create a pull request:\n  https://github.com/example/repo/pull/new/x",
+        false,
+    );
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    assert_eq!(pr.host, Some(ca_core::PrHost::Other));
+    // Then the project says GitHub: the kept page is not an open PR, so gh opens one.
+    use_github(&engine).await;
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    assert_eq!(pr.host, Some(ca_core::PrHost::Github));
+    assert_eq!(
+        pr.url.as_deref(),
+        Some("https://github.com/example/repo/pull/9")
+    );
+    assert!(env.path("pr-made").exists(), "gh pr create did not run");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -724,7 +776,7 @@ async fn other_hosts_get_the_branch_pushed_and_their_own_link() {
         "Create pull request for code-automata/x:\n  https://bitbucket.org/o/r/pull-requests/new?source=x",
         false,
     );
-    let pr = engine.create_pull_request(&id).await.unwrap();
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
     assert_eq!(pr.host, Some(ca_core::PrHost::Other));
     assert_eq!(
         pr.url.as_deref(),
@@ -743,7 +795,7 @@ async fn a_host_that_prints_no_link_still_gets_the_branch() {
     let env = Env::new().await;
     let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Other)).await;
     remote_says(&env, "thanks", false);
-    let pr = engine.create_pull_request(&id).await.unwrap();
+    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
     assert_eq!(pr.url, None);
     let t = engine.get_task(&id).await.unwrap().unwrap();
     let recorded = t.pull_request.unwrap();

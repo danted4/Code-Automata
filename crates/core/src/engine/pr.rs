@@ -31,10 +31,19 @@ use crate::git::{self, Worktrees};
 use crate::task::{Phase, PrHost, PullRequest, SubtaskKind, SubtaskStatus, Task};
 
 const NETWORK: Duration = Duration::from_secs(90);
-/// Asking the GitHub CLI whether it knows a host reads its config; no network.
-const GH_HOST_CHECK: Duration = Duration::from_secs(15);
+/// Local checks while detecting the host (`gh auth token`, `ssh -G`): config files only.
+const LOCAL_CHECK: Duration = Duration::from_secs(10);
 
-pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PullRequest> {
+/// What opening or updating a pull request did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrOutcome {
+    /// The record now on the task.
+    pub pull_request: PullRequest,
+    /// Something the user should know although it worked (the branch was only pushed, say).
+    pub note: Option<String>,
+}
+
+pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrOutcome> {
     let task = inner
         .store
         .load(id)
@@ -58,7 +67,7 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PullRequest> {
     let branch = Worktrees::branch_for(id);
 
     // Everything that can fail without changing anything comes first: the host, and gh for it.
-    let host = pr_host(inner, &wt).await?;
+    let (host, mut note) = pr_host(inner, &wt).await?;
     let gh = match host {
         PrHost::Github => Some(inner.bins.locate_tool("gh")?),
         PrHost::Gitlab | PrHost::Other => None,
@@ -89,13 +98,18 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PullRequest> {
             let url = github(inner, &gh, &wt, &branch, &task, previous.as_ref()).await?;
             (PrHost::Github, Some(url))
         }
-        (PrHost::Gitlab, _) => gitlab(inner, &wt, &branch, &task, previous.as_ref()).await?,
+        (PrHost::Gitlab, _) => {
+            let (host, url, gitlab_note) =
+                gitlab(inner, &wt, &branch, &task, previous.as_ref()).await?;
+            note = gitlab_note.or(note);
+            (host, url)
+        }
         _ => {
             let out = push(&wt, &branch, &[]).await?;
-            let url = link_from_push(&out)
-                .map(|l| l.url)
-                .or_else(|| previous.and_then(|p| p.url));
-            (PrHost::Other, url)
+            (
+                PrHost::Other,
+                better_link(link_from_push(&out), previous.as_ref()),
+            )
         }
     };
     let record = PullRequest {
@@ -110,13 +124,28 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PullRequest> {
             Ok(())
         })
         .await?;
-    Ok(record)
+    Ok(PrOutcome {
+        pull_request: record,
+        note,
+    })
 }
 
-/// The host from the project setting, else detected from `origin`.
-async fn pr_host(inner: &Inner, wt: &Path) -> Result<PrHost> {
+/// The link to keep: an existing request the push reported, else the link already kept, else a
+/// page for opening one. A weaker link never replaces a stronger one.
+fn better_link(found: Option<PushLink>, previous: Option<&PullRequest>) -> Option<String> {
+    match found {
+        Some(link) if link.opened => Some(link.url),
+        found => previous
+            .and_then(|p| p.url.clone())
+            .or(found.map(|l| l.url)),
+    }
+}
+
+/// The host from the project setting, else detected from `origin`, with a note for the user
+/// when a remote host fell back to push only.
+async fn pr_host(inner: &Inner, wt: &Path) -> Result<(PrHost, Option<String>)> {
     if let Some(host) = inner.settings().pull_request_host {
-        return Ok(host);
+        return Ok((host, None));
     }
     let url = git::run_git(wt, &["remote", "get-url", "origin"])
         .await
@@ -125,30 +154,91 @@ async fn pr_host(inner: &Inner, wt: &Path) -> Result<PrHost> {
                 "the repository has no `origin` remote to push the task's branch to".into(),
             )
         })?;
-    if let Some(host) = detect_host(&url) {
-        return Ok(host);
-    }
-    // GitHub Enterprise: a host the GitHub CLI is logged in to.
-    if let (Some(name), Ok(gh)) = (remote_host(&url), inner.bins.locate_tool("gh"))
-        && gh_knows_host(inner, &gh, &name).await
+    let Some(mut name) = remote_host(&url) else {
+        // A local folder: nothing to open a pull request on.
+        return Ok((PrHost::Other, None));
+    };
+    // An SSH host alias (`git@github-work:org/repo.git`, for a second account) stands for the
+    // host named in ~/.ssh/config.
+    if is_ssh_url(&url)
+        && let Some(real) = ssh_hostname(inner, &name).await
     {
-        return Ok(PrHost::Github);
+        name = real;
     }
-    Ok(PrHost::Other)
+    if let Some(host) = detect_host_name(&name) {
+        return Ok((host, None));
+    }
+    // GitHub Enterprise: a host the GitHub CLI has a login for.
+    if let Ok(gh) = inner.bins.locate_tool("gh")
+        && gh_has_login(inner, &gh, &name).await
+    {
+        return Ok((PrHost::Github, None));
+    }
+    Ok((
+        PrHost::Other,
+        Some(format!(
+            "{name} is not github.com or a GitLab address and the GitHub CLI has no login for it, \
+             so the branch was only pushed. If it is GitHub Enterprise or GitLab, choose it under \
+             Settings → Pull requests."
+        )),
+    ))
 }
 
-async fn gh_knows_host(inner: &Inner, gh: &Path, host: &str) -> bool {
+/// Whether the GitHub CLI has a login for `host`, from its config alone: `gh auth token` reads
+/// the stored token without asking the host (`gh auth status` would). The token is never read.
+async fn gh_has_login(inner: &Inner, gh: &Path, host: &str) -> bool {
     let mut cmd = crate::proc::command(gh);
-    cmd.args(["auth", "status", "--hostname", host])
+    cmd.args(["auth", "token", "--hostname", host])
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     if let Some(p) = inner.bins.path_var() {
         cmd.env("PATH", p);
     }
     matches!(
-        tokio::time::timeout(GH_HOST_CHECK, cmd.output()).await,
-        Ok(Ok(out)) if out.status.success()
+        tokio::time::timeout(LOCAL_CHECK, cmd.status()).await,
+        Ok(Ok(status)) if status.success()
     )
+}
+
+/// The real host behind an SSH host alias, from `ssh -G` (which only reads the SSH config).
+async fn ssh_hostname(inner: &Inner, alias: &str) -> Option<String> {
+    let mut cmd = crate::proc::command("ssh");
+    cmd.args(["-G", alias])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    if let Some(p) = inner.bins.path_var() {
+        cmd.env("PATH", p);
+    }
+    let out = tokio::time::timeout(LOCAL_CHECK, cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    hostname_from_ssh_config(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The `hostname` line of `ssh -G` output.
+pub fn hostname_from_ssh_config(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix("hostname "))
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+}
+
+/// An `ssh://` or scp-like (`user@host:path`) remote, where the host can be an SSH alias.
+pub fn is_ssh_url(url: &str) -> bool {
+    let url = url.trim();
+    match url.split_once("://") {
+        Some((scheme, _)) => {
+            scheme.eq_ignore_ascii_case("ssh") || scheme.eq_ignore_ascii_case("git+ssh")
+        }
+        None => remote_host(url).is_some(),
+    }
 }
 
 /// The host part of a remote URL: `https://[user@]host[:port]/path`, `ssh://[user@]host[:port]/
@@ -179,14 +269,19 @@ pub fn remote_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-/// The host a remote URL names, when its name says it: github.com, gitlab.com, or a host with
-/// "gitlab" in its name. None otherwise (a self-hosted GitHub Enterprise or GitLab under another
-/// name, any other host, a local path).
+/// The host a remote URL names, when its name says it (see `detect_host_name`).
 pub fn detect_host(url: &str) -> Option<PrHost> {
-    let host = remote_host(url)?;
+    detect_host_name(&remote_host(url)?)
+}
+
+/// github.com, or gitlab.com and hosts with a name part that starts with "gitlab"
+/// (`gitlab.corp`, `gitlab2.example.com`). None otherwise: a self-hosted GitHub Enterprise or
+/// GitLab under another name, any other host.
+pub fn detect_host_name(host: &str) -> Option<PrHost> {
+    let host = host.to_ascii_lowercase();
     if host == "github.com" || host.ends_with(".github.com") {
         Some(PrHost::Github)
-    } else if host.split(['.', '-']).any(|part| part == "gitlab") || host.contains("gitlab") {
+    } else if host.split('.').any(|part| part.starts_with("gitlab")) {
         Some(PrHost::Gitlab)
     } else {
         None
@@ -201,9 +296,10 @@ pub struct PushLink {
     pub opened: bool,
 }
 
-/// The pull request link in a push's output: an existing pull or merge request first, else the
-/// first link the remote printed (a page for opening one). Only `remote:` lines count, so a URL
-/// in a hook's own output is not taken for the host's.
+/// The pull request link in a push's output: an existing pull or merge request first, else a page
+/// for opening one (`pull/new`, `merge_requests/new`, `pull-requests/new`, `compare`). Other links
+/// (a policy page, a security notice) are ignored. Only `remote:` lines count, so a URL in a
+/// hook's own output is not taken for the host's.
 pub fn link_from_push(output: &str) -> Option<PushLink> {
     let links: Vec<String> = output
         .lines()
@@ -233,9 +329,21 @@ pub fn link_from_push(output: &str) -> Option<PushLink> {
             opened: true,
         });
     }
+    let create_page = |url: &str| {
+        let path = url.split(['?', '#']).next().unwrap_or(url);
+        [
+            "/pull/new/",
+            "/merge_requests/new",
+            "/pull-requests/new",
+            "/compare/",
+            "/pulls/new",
+        ]
+        .iter()
+        .any(|p| path.contains(p))
+    };
     links
         .into_iter()
-        .next()
+        .find(|u| create_page(u))
         .map(|url| PushLink { url, opened: false })
 }
 
@@ -270,7 +378,11 @@ async fn github(
     task: &Task,
     previous: Option<&PullRequest>,
 ) -> Result<String> {
-    if let Some(url) = previous.and_then(|p| p.url.clone()) {
+    // Only a link recorded for GitHub is a GitHub PR (records from before 3.0.1 have no host).
+    let open = previous
+        .filter(|p| matches!(p.host, None | Some(PrHost::Github)))
+        .and_then(|p| p.url.clone());
+    if let Some(url) = open {
         // Already open: the push updated the code; bring the description up to date too.
         if let Err(e) = gh_output(inner, gh, wt, &["pr", "edit", &url, "--body", &body(task)]).await
         {
@@ -293,38 +405,56 @@ async fn github(
     }
 }
 
-/// Open the merge request with push options on the first push; later pushes update it. If GitLab
-/// printed no merge request (an older GitLab that ignores the options), the branch is still
-/// pushed and the task keeps the page GitLab printed for opening one, as for any other host.
+/// Push with the merge request options every time. GitLab opens the merge request for the branch
+/// if none is open (the first push, or after the last one was closed or merged) and updates the
+/// open one's title and description otherwise, then prints its link. (GitLab's handling of an
+/// open merge request is from its docs and memory; no real GitLab was tried, see the 3.0.1
+/// notes.)
+///
+/// - A merge request link: recorded as GitLab.
+/// - No link, but one recorded before: the push sent nothing new (the branch already had the
+///   squash), so the merge request is unchanged.
+/// - Only a page for opening one (an older GitLab that ignores the options): the branch is pushed,
+///   recorded as "other" with that page, and the user is told.
+/// - No link at all: an error, and nothing is recorded, so the UI does not call it up to date.
 async fn gitlab(
     inner: &Inner,
     wt: &Path,
     branch: &str,
     task: &Task,
     previous: Option<&PullRequest>,
-) -> Result<(PrHost, Option<String>)> {
-    let opened_before = previous.filter(|p| p.host == Some(PrHost::Gitlab) && p.url.is_some());
-    let options = if opened_before.is_some() {
-        Vec::new()
-    } else {
-        let main = inner.worktrees.main_branch().await;
-        vec![
-            "merge_request.create".to_string(),
-            format!("merge_request.target={main}"),
-            format!("merge_request.title={}", one_line(&task.title, 250)),
-            format!(
-                "merge_request.description={}",
-                one_line(&gitlab_description(task), 2000)
-            ),
-        ]
-    };
+) -> Result<(PrHost, Option<String>, Option<String>)> {
+    let main = inner.worktrees.main_branch().await;
+    let options = vec![
+        "merge_request.create".to_string(),
+        format!("merge_request.target={main}"),
+        format!("merge_request.title={}", one_line(&task.title, 250)),
+        format!(
+            "merge_request.description={}",
+            one_line(&gitlab_description(task), 2000)
+        ),
+    ];
     let out = push(wt, branch, &options).await?;
-    match link_from_push(&out) {
-        Some(link) if link.opened => Ok((PrHost::Gitlab, Some(link.url))),
-        _ if opened_before.is_some() => {
-            Ok((PrHost::Gitlab, opened_before.and_then(|p| p.url.clone())))
-        }
-        link => Ok((PrHost::Other, link.map(|l| l.url))),
+    let recorded = previous
+        .filter(|p| p.host == Some(PrHost::Gitlab))
+        .and_then(|p| p.url.clone());
+    match (link_from_push(&out), recorded) {
+        (Some(link), _) if link.opened => Ok((PrHost::Gitlab, Some(link.url), None)),
+        (None, Some(url)) => Ok((PrHost::Gitlab, Some(url), None)),
+        (Some(page), _) => Ok((
+            PrHost::Other,
+            Some(page.url),
+            Some(
+                "the branch is pushed, but GitLab did not open the merge request (an older \
+                 GitLab may ignore push options); open it with the link"
+                    .into(),
+            ),
+        )),
+        (None, None) => Err(CoreError::Invalid(format!(
+            "{branch} is pushed, but GitLab printed no merge request. If the branch was already \
+             up to date there, nothing was sent for GitLab to act on. Open the merge request on \
+             GitLab, or set Pull requests to Other in Settings."
+        ))),
     }
 }
 
@@ -489,6 +619,8 @@ mod tests {
             ("https://gitlab.com/g/r.git", Some(PrHost::Gitlab)),
             ("git@gitlab.example.com:g/r.git", Some(PrHost::Gitlab)),
             ("https://git.example.com/gitlab/r.git", None),
+            ("https://gitlab2.example.com/g/r.git", Some(PrHost::Gitlab)),
+            ("https://notgitlab-mirror.corp/g/r.git", None),
             ("https://code.corp/x.git", None),
             ("https://bitbucket.org/o/r.git", None),
             ("/srv/git/repo.git", None),
@@ -532,11 +664,69 @@ mod tests {
             remote:   https://bitbucket.org/o/r/pull-requests/new?source=code-automata/t1&t=1\n";
         let link = link_from_push(bitbucket).unwrap();
         assert!(!link.opened && link.url.starts_with("https://bitbucket.org/"));
+        // Gitea: a page for opening one.
+        let gitea_new = "remote: Create a new pull request for 'code-automata/t1':\n\
+            remote:   https://gitea.corp/o/r/compare/main...code-automata/t1\n";
+        assert!(!link_from_push(gitea_new).unwrap().opened);
+        // A policy page or a security notice is not a pull request link.
+        let notice = "remote: GitHub found 2 vulnerabilities on o/r's default branch:\n\
+            remote:      https://github.com/o/r/security/dependabot\n\
+            remote: Push policy: https://wiki.corp/push-rules\n";
+        assert_eq!(link_from_push(notice), None);
         // A URL in a hook's own output is not the host's.
         assert_eq!(
             link_from_push("see https://example.com/docs\nEverything up-to-date\n"),
             None
         );
+    }
+
+    #[test]
+    fn a_weaker_link_never_replaces_a_kept_one() {
+        let kept = PullRequest {
+            url: Some("https://gitea.corp/o/r/pulls/3".into()),
+            host: Some(PrHost::Other),
+            pushed_checkpoint: None,
+        };
+        let page = |opened| PushLink {
+            url: if opened {
+                "https://gitea.corp/o/r/pulls/4".into()
+            } else {
+                "https://gitea.corp/o/r/compare/main...b".into()
+            },
+            opened,
+        };
+        assert_eq!(
+            better_link(Some(page(false)), Some(&kept)).as_deref(),
+            Some("https://gitea.corp/o/r/pulls/3")
+        );
+        assert_eq!(
+            better_link(Some(page(true)), Some(&kept)).as_deref(),
+            Some("https://gitea.corp/o/r/pulls/4")
+        );
+        assert_eq!(
+            better_link(None, Some(&kept)).as_deref(),
+            Some("https://gitea.corp/o/r/pulls/3")
+        );
+        assert_eq!(
+            better_link(Some(page(false)), None).as_deref(),
+            Some("https://gitea.corp/o/r/compare/main...b")
+        );
+        assert_eq!(better_link(None, None), None);
+    }
+
+    #[test]
+    fn ssh_aliases_are_recognised_and_resolved_from_ssh_g_output() {
+        assert!(is_ssh_url("git@github-work:org/repo.git"));
+        assert!(is_ssh_url("ssh://git@github-work/org/repo.git"));
+        assert!(!is_ssh_url("https://github.com/o/r.git"));
+        assert!(!is_ssh_url("/srv/git/repo.git"));
+        let out = "user git\nhostname github.com\nport 22\nidentityfile ~/.ssh/work\n";
+        assert_eq!(hostname_from_ssh_config(out).as_deref(), Some("github.com"));
+        assert_eq!(
+            detect_host_name(&hostname_from_ssh_config(out).unwrap()),
+            Some(PrHost::Github)
+        );
+        assert_eq!(hostname_from_ssh_config("user git\nport 22\n"), None);
     }
 
     #[test]

@@ -6,4 +6,8 @@ export type PullRequestResponse = {
  * The pull request, or the host's page for opening one; None when the host printed no link
  * (the branch is pushed).
  */
-url: string | null, host: PrHost, };
+url: string | null, host: PrHost, 
+/**
+ * Something to tell the user although it worked (the branch was only pushed, say).
+ */
+note: string | null, };

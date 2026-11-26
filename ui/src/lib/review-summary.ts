@@ -159,26 +159,75 @@ export function pullRequestAction(
   };
   const pushed = pr ? (pr.pushedCheckpoint ?? null) : null;
   const current = pr ? pushed !== null && pushed === newestDevCheckpoint(task) : true;
+  const noun = requestNoun(host);
   if (current) {
     return {
       kind: 'current',
       ...link,
       label: 'Up to date',
       busyLabel: '',
-      help: 'The pull request has all of the task’s work.',
+      help: noun
+        ? `The ${noun} has all of the task’s work.`
+        : `${branch} is pushed with all of the task’s work.${url ? ' Open the pull request on your host with the link.' : ''}`,
       progress: '',
       done: '',
     };
   }
+  if (!noun) {
+    return {
+      kind: 'update',
+      ...link,
+      label: 'Push again',
+      busyLabel: 'Pushing…',
+      help: `Work done since ${branch} was last pushed (a rework round or a new plan) is not on it yet. Pushing again squashes everything into its one commit and pushes it; a pull request opened from the branch picks it up.`,
+      progress: 'Squashing and pushing. This can take a minute.',
+      done: 'Branch pushed',
+    };
+  }
+  const Noun = capitalize(noun);
   return {
     kind: 'update',
     ...link,
-    label: 'Update pull request',
-    busyLabel: 'Updating pull request…',
-    help: `Work done since the pull request was last pushed (a rework round or a new plan) is not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
-    progress: 'Squashing and pushing to the pull request. This can take a minute.',
-    done: 'Pull request updated',
+    label: `Update ${noun}`,
+    busyLabel: `Updating ${noun}…`,
+    help: `Work done since the ${noun} was last pushed (a rework round or a new plan) is not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,
+    progress: `Squashing and pushing to the ${noun}. This can take a minute.`,
+    done: `${Noun} updated`,
   };
+}
+
+/** What the host calls it, or null on a host where Code-Automata only pushes the branch. */
+function requestNoun(host: PrHost): string | null {
+  switch (host) {
+    case 'github':
+      return 'pull request';
+    case 'gitlab':
+      return 'merge request';
+    case 'other':
+      return null;
+  }
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * The toast after Create or Update, from what the server did (the host is only known then): a
+ * pushed branch is never called an opened pull request. `warn` when the server added a note.
+ */
+export function pullRequestToast(
+  taskId: string,
+  wasOpen: boolean,
+  result: PullRequestResponse
+): { title: string; description: string; warn: boolean } {
+  const noun = requestNoun(result.host);
+  const title = noun ? `${capitalize(noun)} ${wasOpen ? 'updated' : 'opened'}` : 'Branch pushed';
+  const description =
+    result.note ??
+    result.url ??
+    `${taskBranch(taskId)} is pushed; open the pull request on your host`;
+  return { title, description, warn: result.note !== null };
 }
 
 /** The task's branch. */

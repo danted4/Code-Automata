@@ -765,7 +765,7 @@ impl Engine {
     }
 
     /// Open the task's pull request, or push new work to the one already open.
-    pub async fn create_pull_request(&self, id: &str) -> Result<crate::task::PullRequest> {
+    pub async fn create_pull_request(&self, id: &str) -> Result<pr::PrOutcome> {
         let lock = self.pr_lock(id);
         let _guard = lock.lock().await;
         self.settle(id, "opening a pull request").await?;

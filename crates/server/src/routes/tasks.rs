@@ -188,10 +188,12 @@ pub async fn pull_request(
     Project(engine): Project,
     Path(id): Path<String>,
 ) -> ApiResult<PullRequestResponse> {
-    let pr = engine.create_pull_request(&id).await?;
+    let outcome = engine.create_pull_request(&id).await?;
+    let pr = outcome.pull_request;
     Ok(Json(PullRequestResponse {
         url: pr.url,
         host: pr.host.unwrap_or(PrHost::Github),
+        note: outcome.note,
     }))
 }
 

@@ -41,7 +41,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
 import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
-import { pullRequestAction, reviewSummary, taskBranch, worktreePath } from '@/lib/review-summary';
+import {
+  pullRequestAction,
+  pullRequestToast,
+  reviewSummary,
+  taskBranch,
+  worktreePath,
+} from '@/lib/review-summary';
 import { PHASE_LABELS } from '@/lib/task-view';
 import { useProjectStore } from '@/store/project-store';
 import { act, useTask, useTaskStore } from '@/store/task-store';
@@ -85,9 +91,8 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
     try {
       const pr = await api.tasks.pullRequest(task.id);
       setCreated(pr);
-      toast.success(prAction.done, {
-        description: pr.url ?? `${branch} is pushed; open the pull request on your host`,
-      });
+      const t = pullRequestToast(task.id, prAction.kind !== 'create', pr);
+      (t.warn ? toast.warning : toast.success)(t.title, { description: t.description });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));
       } catch {
