@@ -397,6 +397,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     let engine = Engine::open(env.project.clone(), env.bins().with_tool("gh", &gh))
         .await
         .unwrap();
+    use_github(&engine).await;
 
     let task = engine
         .create_task("Paging", "Add paging", agent, false)
@@ -427,7 +428,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         .status()
         .unwrap();
 
-    let url = engine.create_pull_request(&task.id).await.unwrap();
+    let url = pr_url(&engine, &task.id).await;
     assert_eq!(url, "https://github.com/example/repo/pull/7");
     assert!(hook_ran.exists(), "the pre-push hook did not run");
     assert_eq!(commits_since(&wt, &base), 1, "checkpoints squashed");
@@ -443,7 +444,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         "{args}"
     );
     assert_eq!(
-        engine.create_pull_request(&task.id).await.unwrap(),
+        pr_url(&engine, &task.id).await,
         url,
         "asking again returns the same PR"
     );
@@ -470,7 +471,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     );
     assert!(!current(&t), "not pushed yet: the PR lacks the rework");
     std::fs::remove_file(env.path("gh-args")).unwrap();
-    assert_eq!(engine.create_pull_request(&task.id).await.unwrap(), url);
+    assert_eq!(pr_url(&engine, &task.id).await, url);
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert!(current(&t), "updated: the PR holds the rework too");
     assert_eq!(
@@ -494,7 +495,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     assert_eq!(t.phase, Phase::HumanReview);
     assert!(t.pull_request.is_some(), "a replan keeps the PR");
     assert!(!current(&t), "the replan's new work is not in the PR");
-    assert_eq!(engine.create_pull_request(&task.id).await.unwrap(), url);
+    assert_eq!(pr_url(&engine, &task.id).await, url);
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert!(current(&t), "updated after the replan");
     assert_eq!(
@@ -502,6 +503,26 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
         git(&wt, &["rev-parse", "HEAD"])
     );
     assert_eq!(commits_since(&wt, &base), 1);
+}
+
+/// Open (or update) the task's PR and return its link.
+#[cfg(unix)]
+async fn pr_url(engine: &Engine, id: &str) -> String {
+    let pr = engine.create_pull_request(id).await.unwrap();
+    pr.url.expect("the PR has a link")
+}
+
+/// The test remotes are local folders, which name no host: say it is GitHub, as a project
+/// would for a GitHub Enterprise host whose name says nothing.
+#[cfg(unix)]
+async fn use_github(engine: &Engine) {
+    engine
+        .save_settings(Settings {
+            pull_request_host: Some(ca_core::PrHost::Github),
+            ..engine.settings()
+        })
+        .await
+        .unwrap();
 }
 
 #[cfg(unix)]
@@ -528,6 +549,17 @@ fn fake_gh(env: &Env, create: &str) -> PathBuf {
 
 #[cfg(unix)]
 async fn reviewed_task_with_remote(env: &Env, dev_writes: bool) -> (Engine, String) {
+    reviewed_task_on(env, dev_writes, Some(ca_core::PrHost::Github)).await
+}
+
+/// A reviewed task whose project pushes to a local bare remote, with `host` as the pull request
+/// setting (None: detect, which a local folder makes "other").
+#[cfg(unix)]
+async fn reviewed_task_on(
+    env: &Env,
+    dev_writes: bool,
+    host: Option<ca_core::PrHost>,
+) -> (Engine, String) {
     let remote = env.path("remote.git");
     git(
         env.files.path(),
@@ -545,6 +577,13 @@ async fn reviewed_task_with_remote(env: &Env, dev_writes: bool) -> (Engine, Stri
     let agent = env.agent(1, extra);
     let gh = env.path("gh");
     let engine = Engine::open(env.project.clone(), env.bins().with_tool("gh", &gh))
+        .await
+        .unwrap();
+    engine
+        .save_settings(Settings {
+            pull_request_host: host,
+            ..engine.settings()
+        })
         .await
         .unwrap();
     let task = engine.create_task("PR", "", agent, false).await.unwrap();
@@ -569,10 +608,147 @@ async fn a_pr_that_gh_made_but_failed_to_report_is_still_found() {
     let env = Env::new().await;
     fake_gh(&env, "echo 'timeout talking to GitHub' >&2; exit 1");
     let (engine, id) = reviewed_task_with_remote(&env, true).await;
-    let url = engine.create_pull_request(&id).await.unwrap();
+    let url = pr_url(&engine, &id).await;
     assert_eq!(url, "https://github.com/example/repo/pull/9");
     let t = engine.get_task(&id).await.unwrap().unwrap();
-    assert_eq!(t.pull_request.unwrap().url, url);
+    assert_eq!(t.pull_request.unwrap().url.as_deref(), Some(url.as_str()));
+}
+
+/// A remote hook that prints `lines` the way a host does (git shows them as `remote:` lines) and
+/// records the push options it got, one per line, in `options-<n>` (n counts pushes).
+#[cfg(unix)]
+fn remote_says(env: &Env, lines: &str, push_options: bool) {
+    let remote = env.path("remote.git");
+    if push_options {
+        git(&remote, &["config", "receive.advertisePushOptions", "true"]);
+    }
+    let hook = remote.join("hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh
+             cat > /dev/null
+             n=$(ls {dir} | grep -c '^options-')
+             out={dir}/options-$n
+             : > $out
+             i=0
+             while [ $i -lt ${{GIT_PUSH_OPTION_COUNT:-0}} ]; do eval \"echo \\$GIT_PUSH_OPTION_$i\" >> $out; i=$((i+1)); done
+             printf '%s\\n' \"{lines}\" >&2
+",
+            dir = env.files.path().display(),
+        ),
+    )
+    .unwrap();
+    std::process::Command::new("chmod")
+        .args(["+x", hook.to_str().unwrap()])
+        .status()
+        .unwrap();
+}
+
+/// The push options of push `n`; empty when that push never reached the hook (a re-squash in
+/// the same second makes the same commit, and git sends nothing).
+#[cfg(unix)]
+fn push_options(env: &Env, n: usize) -> String {
+    std::fs::read_to_string(env.path(&format!("options-{n}"))).unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the remote hook is a shell script
+async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
+    let env = Env::new().await;
+    // gh would fail the test if it ran.
+    fake_gh(&env, "echo should-not-run > /dev/null; exit 9");
+    let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Gitlab)).await;
+    remote_says(
+        &env,
+        "View merge request for the branch:\n  https://gitlab.corp/g/r/-/merge_requests/12",
+        true,
+    );
+    let pr = engine.create_pull_request(&id).await.unwrap();
+    assert_eq!(pr.host, Some(ca_core::PrHost::Gitlab));
+    assert_eq!(
+        pr.url.as_deref(),
+        Some("https://gitlab.corp/g/r/-/merge_requests/12")
+    );
+    let first = push_options(&env, 0);
+    assert!(first.contains("merge_request.create"), "{first}");
+    assert!(first.contains("merge_request.target=main"), "{first}");
+    assert!(first.contains("merge_request.title=PR"), "{first}");
+    assert!(
+        first.contains("merge_request.description=") && first.contains("Opened by Code-Automata"),
+        "{first}"
+    );
+    assert!(!env.path("pr-made").exists(), "gh ran");
+
+    // The next push (an update) carries no options and keeps the merge request.
+    let pr = engine.create_pull_request(&id).await.unwrap();
+    assert_eq!(
+        pr.url.as_deref(),
+        Some("https://gitlab.corp/g/r/-/merge_requests/12")
+    );
+    assert_eq!(push_options(&env, 1), "");
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(t.pull_request.unwrap().host, Some(ca_core::PrHost::Gitlab));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the remote hook is a shell script
+async fn a_remote_without_push_options_is_named_when_set_to_gitlab() {
+    let env = Env::new().await;
+    let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Gitlab)).await;
+    remote_says(&env, "hello", false);
+    let err = engine.create_pull_request(&id).await.unwrap_err();
+    assert!(
+        err.to_string().contains("set Pull requests to Other"),
+        "{err}"
+    );
+    assert!(
+        engine
+            .get_task(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .pull_request
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the remote hook is a shell script
+async fn other_hosts_get_the_branch_pushed_and_their_own_link() {
+    let env = Env::new().await;
+    // A local remote names no host: detected as "other", gh is not needed.
+    let (engine, id) = reviewed_task_on(&env, true, None).await;
+    remote_says(
+        &env,
+        "Create pull request for code-automata/x:\n  https://bitbucket.org/o/r/pull-requests/new?source=x",
+        false,
+    );
+    let pr = engine.create_pull_request(&id).await.unwrap();
+    assert_eq!(pr.host, Some(ca_core::PrHost::Other));
+    assert_eq!(
+        pr.url.as_deref(),
+        Some("https://bitbucket.org/o/r/pull-requests/new?source=x")
+    );
+    let branch = format!("code-automata/{id}");
+    assert_eq!(
+        git(&env.path("remote.git"), &["rev-parse", &branch]),
+        git(&env.worktree(&id), &["rev-parse", "HEAD"])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the remote hook is a shell script
+async fn a_host_that_prints_no_link_still_gets_the_branch() {
+    let env = Env::new().await;
+    let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Other)).await;
+    remote_says(&env, "thanks", false);
+    let pr = engine.create_pull_request(&id).await.unwrap();
+    assert_eq!(pr.url, None);
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    let recorded = t.pull_request.unwrap();
+    assert_eq!(recorded.host, Some(ca_core::PrHost::Other));
+    assert!(recorded.pushed_checkpoint.is_some());
 }
 
 // 5 ------------------------------------------------------------------------------------------
@@ -1020,6 +1196,16 @@ async fn a_failed_session_resume_starts_fresh_next_time_and_the_agent_cannot_cha
         },
     )
     .await;
+    // The pid is recorded at spawn, before the agent writes; a slow runner (Windows CI) could
+    // pause it before the partial work exists, and then there is nothing for the prompt to show.
+    let half = env.worktree(&task.id).join("half.txt");
+    for _ in 0..200 {
+        if half.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(half.exists(), "the agent never wrote its partial work");
     engine.pause(&task.id).await.unwrap();
 
     let mut patch = serde_json::Map::new();
@@ -1337,7 +1523,7 @@ async fn a_done_tasks_worktree_can_be_removed_and_comes_back_on_reopen() {
     assert_eq!(git(&wt, &["rev-parse", "HEAD"]), tip);
     assert_eq!(git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), branch);
     assert_eq!(
-        engine.create_pull_request(&id).await.unwrap(),
+        pr_url(&engine, &id).await,
         "https://github.com/example/repo/pull/9"
     );
 

@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use ca_core::engine::Engine;
 use ca_core::engine::runlog::{RunLogInfo, RunLogLine};
-use ca_core::{Provider, Task, TaskList};
+use ca_core::{PrHost, Provider, Task, TaskList};
 use serde_json::{Map, Value};
 
 use super::types::{
@@ -188,8 +188,11 @@ pub async fn pull_request(
     Project(engine): Project,
     Path(id): Path<String>,
 ) -> ApiResult<PullRequestResponse> {
-    let url = engine.create_pull_request(&id).await?;
-    Ok(Json(PullRequestResponse { url }))
+    let pr = engine.create_pull_request(&id).await?;
+    Ok(Json(PullRequestResponse {
+        url: pr.url,
+        host: pr.host.unwrap_or(PrHost::Github),
+    }))
 }
 
 pub async fn runs(Project(engine): Project, Path(id): Path<String>) -> ApiResult<Vec<RunLogInfo>> {

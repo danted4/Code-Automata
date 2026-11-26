@@ -24,6 +24,7 @@ import {
   validateForm,
   withChecksMode,
   type ChecksMode,
+  type PrHostMode,
   type SettingsForm,
   type TimeoutKey,
 } from '@/lib/settings-form';
@@ -48,6 +49,25 @@ const CHECK_MODES: { value: ChecksMode; label: string; hint: string }[] = [
   },
   { value: 'none', label: 'No checks', hint: 'AI review goes straight to the QA subtasks.' },
   { value: 'custom', label: 'These commands', hint: 'Run in the task worktree, in order.' },
+];
+
+const PR_HOSTS: { value: PrHostMode; label: string; hint: string }[] = [
+  {
+    value: 'detect',
+    label: 'Detect from the remote',
+    hint: 'github.com and GitHub Enterprise hosts the GitHub CLI knows use GitHub; gitlab.com and hosts named like it use GitLab; anything else is pushed only.',
+  },
+  { value: 'github', label: 'GitHub', hint: 'Opened with the GitHub CLI (gh).' },
+  {
+    value: 'gitlab',
+    label: 'GitLab',
+    hint: 'Opened by git itself with push options, no CLI needed. GitLab 11.10 or later, self-hosted included.',
+  },
+  {
+    value: 'other',
+    label: 'Other: push only',
+    hint: 'The branch is pushed; the link your host prints for opening a pull request is kept.',
+  },
 ];
 
 const TIMEOUTS: { key: TimeoutKey; label: string; hint: string }[] = [
@@ -386,6 +406,35 @@ export default function SettingsPage() {
                 data-testid="settings-triage"
               />
             </div>
+          </Section>
+
+          <Section title="Pull requests">
+            <p className="text-sm" style={secondary}>
+              How Create pull request opens one after pushing the task&rsquo;s branch.
+            </p>
+            <RadioGroup
+              value={form.pullRequestHost}
+              onValueChange={(v) => update({ pullRequestHost: v as PrHostMode })}
+              data-testid="settings-pr-host"
+              className="gap-3"
+            >
+              {PR_HOSTS.map((h) => (
+                <div key={h.value} className="flex items-start gap-2">
+                  <RadioGroupItem
+                    value={h.value}
+                    id={`pr-host-${h.value}`}
+                    data-testid={`settings-pr-host-${h.value}`}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor={`pr-host-${h.value}`} className="cursor-pointer space-y-0.5">
+                    <span className="block text-sm font-medium">{h.label}</span>
+                    <span className="block text-xs font-normal" style={muted}>
+                      {h.hint}
+                    </span>
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
           </Section>
 
           <Section title="Agent CLIs on this computer">

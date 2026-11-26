@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::project::ProjectDir;
+use crate::task::PrHost;
 
 pub const SETTINGS_SCHEMA: u32 = 1;
 
@@ -101,6 +102,10 @@ pub struct Settings {
     pub triage_on_resume: bool,
     #[serde(default, skip_serializing_if = "is_default_prompts")]
     pub prompts: PromptOverrides,
+    /// How pull requests are opened. `None` means detect it from the `origin` remote; set it for
+    /// a self-hosted GitLab whose address does not say "gitlab".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_host: Option<PrHost>,
 }
 
 fn default_concurrency() -> u32 {
@@ -123,6 +128,7 @@ impl Default for Settings {
             rework_limit: default_rework_limit(),
             triage_on_resume: false,
             prompts: PromptOverrides::default(),
+            pull_request_host: None,
         }
     }
 }

@@ -294,12 +294,30 @@ impl Review {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PullRequest {
-    pub url: String,
+    /// The pull (merge) request, or on a host Code-Automata cannot open one on, the page the host
+    /// printed for opening it. None when the host printed no link (the branch is pushed).
+    pub url: Option<String>,
+    /// Where it was opened. None in task files from before 3.0.1, which were all GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<PrHost>,
     /// The newest dev checkpoint when the branch was last pushed to this PR. Any later dev work (a
     /// rework round, a retried subtask, a replan's new run) has a different newest checkpoint, and
     /// the PR lacks it until it is updated (the UI says so). None in task files from before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pushed_checkpoint: Option<String>,
+}
+
+/// How a task's pull request is opened, from the repository's `origin`.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrHost {
+    /// With the GitHub CLI (`gh`): github.com and GitHub Enterprise.
+    Github,
+    /// With git push options, no CLI: gitlab.com and self-hosted GitLab (11.10 and later).
+    Gitlab,
+    /// Any other host: the branch is pushed and the host's own page opens the pull request.
+    Other,
 }
 
 impl Task {

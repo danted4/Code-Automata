@@ -59,6 +59,7 @@ Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-co
 ## Things to know
 
 - Agents work in a git worktree per task, and they can edit any file there, including your repository's git hooks (for example husky's `.husky/`). Code-Automata runs hooks as git normally does: `post-commit` and `prepare-commit-msg` on each checkpoint commit, `pre-push` when it creates or updates the pull request, with your login shell's `PATH`. Review hook changes in a task's diff before you push it.
+- Pull requests: on GitHub they are opened with the [GitHub CLI](https://cli.github.com/) (`gh`, logged in); on GitLab, including self-hosted 11.10 or later, git opens the merge request itself with push options, no CLI needed. Any other host gets the branch pushed and keeps the link the host prints for opening a pull request. The host is detected from `origin`; set it under Settings → Pull requests when the address does not say (a self-hosted GitLab, say).
 - The installers are not code-signed (see Install).
 
 ## Repository layout

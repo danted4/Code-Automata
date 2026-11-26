@@ -119,6 +119,16 @@ describe('prompts', () => {
     expect(r).toEqual({ settings: settings() });
   });
 
+  it('saves the pull request host only when it is not detected', () => {
+    expect(toForm(settings(), defaults).pullRequestHost).toBe('detect');
+    expect(save(settings(), (f) => (f.pullRequestHost = 'gitlab'))).toEqual({
+      settings: settings({ pullRequestHost: 'gitlab' }),
+    });
+    const set = settings({ pullRequestHost: 'other' });
+    expect(save(set)).toEqual({ settings: set });
+    expect(save(set, (f) => (f.pullRequestHost = 'detect'))).toEqual({ settings: settings() });
+  });
+
   it('keeps an edited prompt', () => {
     const r = save(settings(), (f) => (f.prompts.subtasks = 'Custom'));
     expect(r).toEqual({ settings: settings({ prompts: { subtasks: 'Custom' } }) });

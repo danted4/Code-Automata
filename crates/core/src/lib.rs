@@ -16,6 +16,6 @@ pub use error::{CoreError, Result};
 pub use project::ProjectDir;
 pub use store::{TaskList, TaskStore};
 pub use task::{
-    AgentConfig, Phase, PlanningStage, Provider, QaVerdict, Run, RunKind, RunState, Subtask,
-    SubtaskKind, SubtaskStatus, Task,
+    AgentConfig, Phase, PlanningStage, PrHost, Provider, QaVerdict, Run, RunKind, RunState,
+    Subtask, SubtaskKind, SubtaskStatus, Task,
 };

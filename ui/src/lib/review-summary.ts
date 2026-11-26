@@ -4,6 +4,8 @@
  */
 
 import type { Checks } from '@/lib/api/types/Checks';
+import type { PrHost } from '@/lib/api/types/PrHost';
+import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 
@@ -93,6 +95,10 @@ export function reviewSummary(task: Task): ReviewSummary {
 export type PullRequestAction = {
   kind: 'create' | 'update' | 'current';
   url: string | null;
+  /** The link's text: the request itself, or on another host its page for opening one. */
+  linkLabel: string;
+  /** Said when the branch is pushed but the host printed no link. */
+  pushedNote: string | null;
   label: string;
   busyLabel: string;
   help: string;
@@ -106,32 +112,57 @@ export function newestDevCheckpoint(task: Task): string | null {
   return devs.length ? (devs[devs.length - 1].checkpoint ?? null) : null;
 }
 
+function linkLabel(host: PrHost): string {
+  switch (host) {
+    case 'github':
+      return 'Open pull request';
+    case 'gitlab':
+      return 'Open merge request';
+    case 'other':
+      return 'Open the pull request page';
+  }
+}
+
 /**
  * Work done after the PR was last pushed (a rework round, a retried subtask, a replan's new run)
  * ends in a different newest checkpoint than the one the PR records, and is not in the PR until it
- * is pushed again. `createdUrl` is a PR just opened here, before the task reload shows it.
+ * is pushed again. `created` is a PR just opened here, before the task reload shows it. A task
+ * whose host printed no link still has a record (the branch is pushed), so it is updated, not
+ * created again.
  */
-export function pullRequestAction(task: Task, createdUrl: string | null): PullRequestAction {
+export function pullRequestAction(
+  task: Task,
+  created: PullRequestResponse | null
+): PullRequestAction {
   const branch = taskBranch(task.id);
   const pr = task.pullRequest ?? null;
-  const url = pr?.url ?? createdUrl;
-  if (!url) {
+  if (!pr && !created) {
     return {
       kind: 'create',
       url: null,
+      linkLabel: '',
+      pushedNote: null,
       label: 'Create pull request',
       busyLabel: 'Creating pull request…',
-      help: `Squash the checkpoints into one commit, push ${branch} and open a pull request with the GitHub CLI.`,
+      help: `Squash the checkpoints into one commit, push ${branch} and open a pull request: on GitHub with the GitHub CLI, on GitLab with git push options. On other hosts the branch is pushed and the host's link for opening one is kept.`,
       progress: 'Squashing, pushing and opening the pull request. This can take a minute.',
       done: 'Pull request opened',
     };
   }
+  const url = pr?.url ?? created?.url ?? null;
+  // Records from before 3.0.1 have no host; they were all GitHub.
+  const host = pr?.host ?? created?.host ?? 'github';
+  const link = {
+    url,
+    linkLabel: url ? linkLabel(host) : '',
+    pushedNote: url ? null : `${branch} is pushed. Open the pull request on your host.`,
+  };
   const pushed = pr ? (pr.pushedCheckpoint ?? null) : null;
   const current = pr ? pushed !== null && pushed === newestDevCheckpoint(task) : true;
   if (current) {
     return {
       kind: 'current',
-      url,
+      ...link,
       label: 'Up to date',
       busyLabel: '',
       help: 'The pull request has all of the task’s work.',
@@ -141,7 +172,7 @@ export function pullRequestAction(task: Task, createdUrl: string | null): PullRe
   }
   return {
     kind: 'update',
-    url,
+    ...link,
     label: 'Update pull request',
     busyLabel: 'Updating pull request…',
     help: `Work done since the pull request was last pushed (a rework round or a new plan) is not in it yet. Updating squashes everything into its one commit, pushes ${branch} and refreshes the description.`,

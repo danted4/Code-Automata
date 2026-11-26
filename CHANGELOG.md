@@ -9,6 +9,7 @@ All notable changes to Code-Automata are documented here.
 ### Fixed
 
 - **Agent CLIs installed outside your shell's PATH are found.** Each agent is looked for in its own install folder (for Claude Code, `~/.local/bin` from `claude install`) before the PATH, so an old npm copy left behind under nvm no longer hides the native install; the older `~/.claude/local` install, reached through a shell alias, is found after the PATH. When nothing is found, or the login state of the copy found cannot be read, you can choose the file yourself, right in the agent picker or under Settings → Agent CLIs on this computer. The choice is kept for the computer and applies to every project.
+- **Pull requests on GitLab and other hosts.** GitLab (gitlab.com and self-hosted, 11.10 or later) merge requests are opened by git itself with push options; no CLI is needed. Any other host gets the branch pushed, and the link the host prints for opening a pull request is kept on the task. The host is detected from `origin`, or set under Settings → Pull requests. GitHub still uses the GitHub CLI, which is now needed only for GitHub.
 - The agent picker says how each CLI was found (install folder, PATH or chosen by you), and a copy too old to report its login is named with its path and version.
 
 ---

@@ -946,10 +946,15 @@ pub async fn unpark_changes(worktree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run git with a time limit (for network commands such as push).
-pub(crate) async fn run_git_timeout(cwd: &Path, args: &[&str], limit: Duration) -> Result<String> {
-    let out = check(args, git_output(cwd, args, Some(limit)).await?)?;
-    Ok(String::from_utf8_lossy(&out).trim().to_string())
+/// Run git with a time limit and return what it printed on stdout and stderr together: a push's
+/// remote messages (a host's pull request link) are on stderr.
+pub(crate) async fn run_git_all(cwd: &Path, args: &[&str], limit: Duration) -> Result<String> {
+    let out = git_output(cwd, args, Some(limit)).await?;
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        return Err(git_error(args, stderr.trim().to_string()));
+    }
+    Ok(format!("{}{stderr}", String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Where `branch` left the main checkout's history: used to recover a task's base commit when its

@@ -40,6 +40,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
+import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
 import { pullRequestAction, reviewSummary, taskBranch, worktreePath } from '@/lib/review-summary';
 import { PHASE_LABELS } from '@/lib/task-view';
 import { useProjectStore } from '@/store/project-store';
@@ -55,14 +56,14 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   const task = useTask(taskId);
   const [busy, setBusy] = useState<Busy>(null);
   const [feedback, setFeedback] = useState('');
-  /** The url from a pull request created here, until the task reload shows it. */
-  const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  /** A pull request created here, until the task reload shows it. */
+  const [created, setCreated] = useState<PullRequestResponse | null>(null);
   const summary = useMemo(() => (task ? reviewSummary(task) : null), [task]);
   if (!task || !summary) return null;
 
   const branch = taskBranch(task.id);
   const inReview = task.phase === 'human_review';
-  const prAction = pullRequestAction(task, createdUrl);
+  const prAction = pullRequestAction(task, created);
   const prUrl = prAction.url;
 
   const setOpen = (next: boolean) => {
@@ -82,9 +83,11 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   const createPullRequest = async () => {
     setBusy('pr');
     try {
-      const { url } = await api.tasks.pullRequest(task.id);
-      setCreatedUrl(url);
-      toast.success(prAction.done, { description: url });
+      const pr = await api.tasks.pullRequest(task.id);
+      setCreated(pr);
+      toast.success(prAction.done, {
+        description: pr.url ?? `${branch} is pushed; open the pull request on your host`,
+      });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));
       } catch {
@@ -372,8 +375,17 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
                       data-testid="review-pr-link"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      Open pull request
+                      {prAction.linkLabel}
                     </a>
+                  )}
+                  {prAction.pushedNote && (
+                    <p
+                      className="text-sm"
+                      style={{ color: 'var(--color-text-primary)' }}
+                      data-testid="review-pr-pushed-note"
+                    >
+                      {prAction.pushedNote}
+                    </p>
                   )}
                   <p
                     className="text-xs"

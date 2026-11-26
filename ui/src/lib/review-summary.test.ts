@@ -178,7 +178,40 @@ describe('pullRequestAction', () => {
   });
 
   it('counts a PR just opened here as up to date until the task reloads', () => {
-    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), url);
+    const a = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), { url, host: 'github' });
     expect(a.kind).toBe('current');
+    expect(a.linkLabel).toBe('Open pull request');
+  });
+
+  it('names the link after the host', () => {
+    const at = (host: 'github' | 'gitlab' | 'other') =>
+      pullRequestAction(
+        task({ subtasks: [dev('d1', 'a1')], pullRequest: { url, host, pushedCheckpoint: 'a1' } }),
+        null
+      ).linkLabel;
+    expect(at('github')).toBe('Open pull request');
+    expect(at('gitlab')).toBe('Open merge request');
+    expect(at('other')).toBe('Open the pull request page');
+    // Before 3.0.1 there was no host: GitHub.
+    const old = task({ subtasks: [dev('d1', 'a1')], pullRequest: { url, pushedCheckpoint: 'a1' } });
+    expect(pullRequestAction(old, null).linkLabel).toBe('Open pull request');
+  });
+
+  it('updates a pushed branch whose host printed no link, and says so', () => {
+    const t = task({
+      subtasks: [dev('d1', 'a1'), dev('rework-1', 'a2')],
+      pullRequest: { url: null, host: 'other', pushedCheckpoint: 'a1' },
+    });
+    const a = pullRequestAction(t, null);
+    expect(a.kind).toBe('update');
+    expect(a.url).toBeNull();
+    expect(a.pushedNote).toContain(taskBranch(t.id));
+    // Just pushed here, before the reload: up to date, not "create" again.
+    const fresh = pullRequestAction(task({ subtasks: [dev('d1', 'a1')] }), {
+      url: null,
+      host: 'other',
+    });
+    expect(fresh.kind).toBe('current');
+    expect(fresh.pushedNote).not.toBeNull();
   });
 });

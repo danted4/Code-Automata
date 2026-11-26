@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use ca_core::agent::preflight::Preflight;
 use ca_core::engine::settings::Settings;
 use ca_core::task::Answer;
-use ca_core::{AgentConfig, Phase, Provider};
+use ca_core::{AgentConfig, Phase, PrHost, Provider};
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -106,7 +106,10 @@ pub struct PlanRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestResponse {
-    pub url: String,
+    /// The pull request, or the host's page for opening one; None when the host printed no link
+    /// (the branch is pushed).
+    pub url: Option<String>,
+    pub host: PrHost,
 }
 
 /// The editable part of the two prompts a user can change, as shipped.

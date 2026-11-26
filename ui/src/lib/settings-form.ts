@@ -6,12 +6,16 @@
  */
 
 import type { CheckCommand } from '@/lib/api/types/CheckCommand';
+import type { PrHost } from '@/lib/api/types/PrHost';
 import type { PromptDefaults } from '@/lib/api/types/PromptDefaults';
 import type { PromptOverrides } from '@/lib/api/types/PromptOverrides';
 import type { Settings } from '@/lib/api/types/Settings';
 
 /** `auto`: detect from the project (`checks` null); `none`: `[]`; `custom`: the list. */
 export type ChecksMode = 'auto' | 'none' | 'custom';
+
+/** `detect`: from the `origin` remote (`pullRequestHost` left out). */
+export type PrHostMode = 'detect' | PrHost;
 
 export const TIMEOUT_KEYS = ['idle', 'tool', 'total', 'check'] as const;
 export type TimeoutKey = (typeof TIMEOUT_KEYS)[number];
@@ -25,6 +29,7 @@ export type SettingsForm = {
   reworkLimit: string;
   triageOnResume: boolean;
   prompts: { plan: string; subtasks: string };
+  pullRequestHost: PrHostMode;
 };
 
 export type FormErrors = Partial<{
@@ -70,6 +75,7 @@ export function toForm(settings: Settings, defaults: PromptDefaults): SettingsFo
       plan: settings.prompts?.plan ?? defaults.plan,
       subtasks: settings.prompts?.subtasks ?? defaults.subtasks,
     },
+    pullRequestHost: settings.pullRequestHost ?? 'detect',
   };
 }
 
@@ -162,6 +168,7 @@ export function fromForm(
     settings.checks = form.checks.map((c) => ({ name: c.name.trim(), command: c.command.trim() }));
   }
   if (Object.keys(prompts).length > 0) settings.prompts = prompts;
+  if (form.pullRequestHost !== 'detect') settings.pullRequestHost = form.pullRequestHost;
   return { settings };
 }
 
