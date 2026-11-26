@@ -4,13 +4,22 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
-## 3.0.1 (unreleased)
+## 3.0.1
+
+Fixes from the first feedback on 3.0.0. If you have 3.0.0 installed, it offers this update when it starts.
 
 ### Fixed
 
 - **Agent CLIs installed outside your shell's PATH are found.** Each agent is looked for in its own install folder (for Claude Code, `~/.local/bin` from `claude install`) before the PATH, so an old npm copy left behind under nvm no longer hides the native install; the older `~/.claude/local` install, reached through a shell alias, is found after the PATH. When nothing is found, or the login state of the copy found cannot be read, you can choose the file yourself, right in the agent picker or under Settings → Agent CLIs on this computer. The choice is kept for the computer and applies to every project.
 - **Pull requests on GitLab and other hosts.** GitLab (gitlab.com and self-hosted, 11.10 or later) merge requests are opened by git itself with push options; no CLI is needed. Any other host gets the branch pushed, and the link the host prints for opening a pull request is kept on the task. The host is detected from `origin`, or set under Settings → Pull requests. GitHub still uses the GitHub CLI, which is now needed only for GitHub.
 - The agent picker says how each CLI was found (install folder, PATH or chosen by you), and a copy too old to report its login is named with its path and version.
+- A GitHub remote behind an SSH host alias (`git@github-work:org/repo.git`, for a second account) is recognised as GitHub.
+
+### Known limits
+
+- **GitLab has not been tried against a real GitLab.** That covers opening a merge request, updating it after rework, reopening after it was closed, and older versions that ignore push options. It is tested only against a local remote that answers like GitLab. If no merge request appears, the branch is still pushed: choose Settings → Pull requests → Other and open it on GitLab.
+- **Resolving an SSH host alias** (with `ssh -G`) is unit-tested but has not run end to end.
+- **This is the first release delivered by the in-app updater** (3.0.0 → 3.0.1). If the update fails, download the installer from this page.
 
 ---
 
