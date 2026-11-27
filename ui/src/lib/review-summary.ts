@@ -6,7 +6,8 @@
 import type { Checks } from '@/lib/api/types/Checks';
 import type { PrHost } from '@/lib/api/types/PrHost';
 import type { PullRequest } from '@/lib/api/types/PullRequest';
-import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
+import type { PrReport } from '@/lib/api/types/PrReport';
+import type { PrRow } from '@/lib/api/types/PrRow';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 
@@ -145,6 +146,16 @@ export function reviewSummary(task: Task): ReviewSummary {
   return { built, skipped, checks, checksStale, qa, unresolved, attention };
 }
 
+/** One repository's result just now, before the task reload shows its record. */
+export type PushedNow = { url: string | null; host: PrHost; note: string | null };
+
+/** A pushed row of a report as [`PushedNow`]; null for any other result. */
+export function pushedNow(row: PrRow | undefined): PushedNow | null {
+  if (row?.result.result !== 'pushed') return null;
+  const pr = row.result.pullRequest;
+  return { url: pr.url, host: pr.host ?? 'github', note: row.result.note };
+}
+
 /** The pull request section: open a PR, push new work to the open one, or nothing to do. */
 export type PullRequestAction = {
   kind: 'create' | 'update' | 'current';
@@ -180,16 +191,11 @@ function linkLabel(host: PrHost): string {
  */
 export function pullRequestAction(
   task: Task,
-  created: PullRequestResponse | null
+  created: PushedNow | null,
+  repo: string = primaryRepo(task)
 ): PullRequestAction {
   const branch = taskBranch(task.id);
-  // In a workspace the record shown is the first changed repository's that has one. Repositories
-  // with no record (never opened, or no remote, which leaves none) are left out of "up to date".
-  const workspace = !taskRepos(task).includes(ROOT_REPO) && taskRepos(task).length > 0;
-  const recorded = workspace
-    ? changedRepos(task).filter((r) => task.pullRequests?.[r])
-    : [primaryRepo(task)].filter((r) => task.pullRequests?.[r]);
-  const pr = recorded.length ? (task.pullRequests?.[recorded[0]] ?? null) : null;
+  const pr = task.pullRequests?.[repo] ?? null;
   if (!pr && !created) {
     return {
       kind: 'create',
@@ -211,12 +217,8 @@ export function pullRequestAction(
     linkLabel: url ? linkLabel(host) : '',
     pushedNote: url ? null : `${branch} is pushed. Open the pull request on your host.`,
   };
-  const upToDate = (repo: string) => {
-    const record = task.pullRequests?.[repo];
-    const pushed = record?.pushedCheckpoint ?? null;
-    return pushed !== null && pushed === newestDevCheckpoint(task, repo);
-  };
-  const current = pr ? recorded.every(upToDate) : true;
+  const pushed = pr ? (pr.pushedCheckpoint ?? null) : null;
+  const current = pr ? pushed !== null && pushed === newestDevCheckpoint(task, repo) : true;
   const noun = requestNoun(host);
   if (current) {
     return {
@@ -279,7 +281,7 @@ function capitalize(s: string): string {
 export function pullRequestToast(
   taskId: string,
   previous: PullRequest | null,
-  result: PullRequestResponse
+  result: PushedNow
 ): { title: string; description: string; warn: boolean } {
   const noun = requestNoun(result.host);
   const wasOpen =
@@ -297,13 +299,97 @@ export function taskBranch(taskId: string): string {
   return `code-automata/${taskId}`;
 }
 
-/** `<project root>/.code-automata/worktrees/<task id>`, or null without a project. */
+/**
+ * `<project root>/.code-automata/worktrees/<task id>`: the task's worktree, or in a workspace the
+ * folder holding them; with a workspace `repo`, that repository's worktree inside it. Null without
+ * a project.
+ */
 export function worktreePath(
   projectRoot: string | null | undefined,
-  taskId: string
+  taskId: string,
+  repo?: string
 ): string | null {
   if (!projectRoot) return null;
   const root = projectRoot.replace(/[/\\]+$/, '');
   const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
-  return [root, '.code-automata', 'worktrees', taskId].join(sep);
+  const parts = [root, '.code-automata', 'worktrees', taskId];
+  if (repo && repo !== ROOT_REPO) parts.push(repo);
+  return parts.join(sep);
+}
+
+/** One repository's row in a workspace task's pull request section. */
+export type RepoPrView =
+  | { repo: string; state: 'action'; action: PullRequestAction }
+  | { repo: string; state: 'no_changes' }
+  | { repo: string; state: 'no_remote'; branch: string }
+  | { repo: string; state: 'failed'; error: string };
+
+/**
+ * A row per repository of the task: what the last "Create pull requests" here said (a failure or
+ * a missing remote, which leave no record), else what the task file says.
+ */
+export function repoPrViews(task: Task, report: PrReport | null): RepoPrView[] {
+  const changed = changedRepos(task);
+  return taskRepos(task).map((repo): RepoPrView => {
+    const row = report?.rows.find((r) => r.repo === repo);
+    if (row?.result.result === 'failed') return { repo, state: 'failed', error: row.result.error };
+    if (row?.result.result === 'no_remote') {
+      return { repo, state: 'no_remote', branch: row.result.branch };
+    }
+    if (!changed.includes(repo)) return { repo, state: 'no_changes' };
+    return { repo, state: 'action', action: pullRequestAction(task, pushedNow(row), repo) };
+  });
+}
+
+/** The one button over a workspace's rows, or null when there is nothing to do. */
+export function repoPrButton(
+  views: RepoPrView[]
+): { kind: 'create' | 'update' | 'retry'; label: string; busyLabel: string } | null {
+  if (views.some((v) => v.state === 'failed')) {
+    return { kind: 'retry', label: 'Retry failed', busyLabel: 'Retrying…' };
+  }
+  const kinds = views.flatMap((v) => (v.state === 'action' ? [v.action.kind] : []));
+  if (kinds.includes('create')) {
+    return { kind: 'create', label: 'Create pull requests', busyLabel: 'Creating pull requests…' };
+  }
+  if (kinds.includes('update')) {
+    return { kind: 'update', label: 'Update pull requests', busyLabel: 'Updating pull requests…' };
+  }
+  return null;
+}
+
+/**
+ * The toast after "Create pull requests". A one-repository task gets [`pullRequestToast`]'s words
+ * (or, with no remote, says nothing was pushed); a workspace task gets a count.
+ */
+export function prReportToast(
+  task: Task,
+  report: PrReport
+): { title: string; description: string; warn: boolean } {
+  const [only] = report.rows;
+  if (report.rows.length === 1 && only.repo === ROOT_REPO) {
+    if (only.result.result === 'no_remote') {
+      return {
+        title: 'Nothing pushed',
+        description: `The repository has no remote; the work is on ${only.result.branch}.`,
+        warn: true,
+      };
+    }
+    const now = pushedNow(only);
+    if (now) return pullRequestToast(task.id, task.pullRequests?.[ROOT_REPO] ?? null, now);
+  }
+  const count = (state: PrRow['result']['result']) =>
+    report.rows.filter((r) => r.result.result === state);
+  const pushed = count('pushed');
+  const failed = count('failed');
+  const noRemote = count('no_remote');
+  const n = pushed.length;
+  const parts = [`${n} ${n === 1 ? 'repository' : 'repositories'} pushed`];
+  if (failed.length) parts.push(`failed: ${failed.map((r) => r.repo).join(', ')}`);
+  if (noRemote.length) parts.push(`no remote: ${noRemote.map((r) => r.repo).join(', ')}`);
+  return {
+    title: failed.length ? 'Some pull requests failed' : 'Pull requests updated',
+    description: parts.join('; '),
+    warn: failed.length > 0 || noRemote.length > 0 || pushed.some((r) => pushedNow(r)?.note),
+  };
 }

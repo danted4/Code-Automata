@@ -24,6 +24,9 @@ export function DeleteTaskModal({ taskId, open, onOpenChange }: TaskModalProps) 
   const task = useTask(taskId);
   const [deleting, setDeleting] = useState(false);
   if (!task) return null;
+  const repos = Object.keys(task.baseCommits ?? {})
+    .filter((r) => r !== '.')
+    .sort();
 
   const confirm = async () => {
     setDeleting(true);
@@ -53,9 +56,19 @@ export function DeleteTaskModal({ taskId, open, onOpenChange }: TaskModalProps) 
         </DialogHeader>
         <DialogBody>
           <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            This removes the task, its logs, its worktree and its branch{' '}
-            <code className="font-mono">code-automata/{task.id}</code>, including any work that is
-            not in a pull request. It cannot be undone.
+            {repos.length > 1 ? (
+              <>
+                This removes the task, its logs, its worktree in each of {repos.join(', ')} and its
+                branch <code className="font-mono">code-automata/{task.id}</code> in each of them,
+                including any work that is not in a pull request. It cannot be undone.
+              </>
+            ) : (
+              <>
+                This removes the task, its logs, its worktree and its branch{' '}
+                <code className="font-mono">code-automata/{task.id}</code>, including any work that
+                is not in a pull request. It cannot be undone.
+              </>
+            )}
           </p>
         </DialogBody>
         <DialogFooter>

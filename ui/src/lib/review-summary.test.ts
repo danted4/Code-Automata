@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PrRow } from '@/lib/api/types/PrRow';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 import {
@@ -8,6 +9,9 @@ import {
   primaryRepo,
   pullRequestAction,
   pullRequestToast,
+  prReportToast,
+  repoPrButton,
+  repoPrViews,
   reposToCheck,
   reviewSummary,
   taskBranch,
@@ -111,6 +115,10 @@ describe('reviewSummary', () => {
   });
 });
 
+function toastFor(result: PrRow['result']) {
+  return prReportToast(task({ baseCommits: { '.': 'b' } }), { rows: [{ repo: '.', result }] });
+}
+
 describe('reviewSummary in a workspace', () => {
   const ws = (over: Partial<Task>) =>
     task({
@@ -137,42 +145,50 @@ describe('reviewSummary in a workspace', () => {
     expect(reposToCheck(ws({}))).toEqual(['api', 'web']);
   });
 
-  it('takes the record of a changed repository that has one', () => {
+  it('gives each repository its own pull request row and one button', () => {
     const pr = (pushedCheckpoint: string) => ({
       url: 'u',
       host: 'github' as const,
       pushedCheckpoint,
     });
-    // Only web changed and has its PR: not "create" again, and up to date.
-    const t = task({
-      baseCommits: { api: 'a0', web: 'w0' },
-      subtasks: [sub({ checkpoints: { web: 'w1' } })],
-      pullRequests: { web: pr('w1') },
-    });
-    expect(pullRequestAction(t, null).kind).toBe('current');
-    expect(pullRequestAction(t, null).url).toBe('u');
-    // web has new work since: update.
-    const stale = task({ ...t, subtasks: [sub({ checkpoints: { web: 'w2' } })] });
-    expect(pullRequestAction(stale, null).kind).toBe('update');
-    // api changed too but has no record (no remote): left out.
-    const noRemote = task({ ...t, subtasks: [sub({ checkpoints: { web: 'w1', api: 'a1' } })] });
-    expect(pullRequestAction(noRemote, null).kind).toBe('current');
+    const views = repoPrViews(ws({ pullRequests: { api: pr('a1') } }), null);
+    expect(views.map((v) => [v.repo, v.state])).toEqual([
+      ['api', 'action'],
+      ['docs', 'no_changes'],
+      ['web', 'action'],
+    ]);
+    const kinds = views.flatMap((v) => (v.state === 'action' ? [v.action.kind] : []));
+    expect(kinds).toEqual(['current', 'create']);
+    expect(repoPrButton(views)?.label).toBe('Create pull requests');
+
+    // The last run here: web failed, docs has no remote. Failures leave no record, so they
+    // come from the report.
+    const report = {
+      rows: [
+        { repo: 'api', result: { result: 'pushed' as const, pullRequest: pr('a1'), note: null } },
+        { repo: 'docs', result: { result: 'no_remote' as const, branch: 'code-automata/task-1' } },
+        { repo: 'web', result: { result: 'failed' as const, error: 'hook said no' } },
+      ],
+    };
+    const after = repoPrViews(ws({ pullRequests: { api: pr('a1') } }), report);
+    expect(after.map((v) => v.state)).toEqual(['action', 'no_remote', 'failed']);
+    expect(repoPrButton(after)?.label).toBe('Retry failed');
+    const toast = prReportToast(ws({}), report);
+    expect(toast.title).toBe('Some pull requests failed');
+    expect(toast.description).toBe('1 repository pushed; failed: web; no remote: docs');
+    expect(toast.warn).toBe(true);
+
+    const done = repoPrViews(ws({ pullRequests: { api: pr('a1'), web: pr('w1') } }), null);
+    expect(repoPrButton(done)).toBeNull();
   });
 
-  it('is up to date only when every changed repository is', () => {
-    const pr = (pushedCheckpoint: string) => ({
-      url: 'u',
-      host: 'github' as const,
-      pushedCheckpoint,
+  it('says a one-repository task without a remote pushed nothing', () => {
+    const t = toastFor({ result: 'no_remote', branch: 'code-automata/task-1' });
+    expect(t).toEqual({
+      title: 'Nothing pushed',
+      description: 'The repository has no remote; the work is on code-automata/task-1.',
+      warn: true,
     });
-    // web has no record: until the per-repository rows (batch 3), a repository without one
-    // (never opened, or no remote) is left out rather than holding the button at "update".
-    const partly = ws({ pullRequests: { api: pr('a1') } });
-    expect(pullRequestAction(partly, null).kind).toBe('current');
-    const staleApi = ws({ pullRequests: { api: pr('a0'), web: pr('w1') } });
-    expect(pullRequestAction(staleApi, null).kind).toBe('update');
-    const both = ws({ pullRequests: { api: pr('a1'), web: pr('w1') } });
-    expect(pullRequestAction(both, null).kind).toBe('current');
   });
 });
 

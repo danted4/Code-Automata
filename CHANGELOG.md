@@ -4,6 +4,25 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 3.1.0 (unreleased)
+
+### New
+
+- **Workspaces: one task across several repositories.** Open a folder that is not a git repository itself but whose every folder is one (hidden folders are ignored), for example `~/work` holding `api/`, `web/` and `infra/`. Each task gets a worktree of every repository; the planner decides which ones the work touches and the card shows them. Each repository that changes is checked in its own worktree and gets its own pull request: Human Review lists one row per repository, "Create pull requests" goes through them all, keeps the ones that worked if another fails, and "Retry failed" finishes the rest. On GitHub each pull request lists the others.
+- **Agents in a workspace are told the layout**: which repositories there are, the `CLAUDE.md`, `AGENTS.md` and `.cursor/rules` of each and of the workspace folder, and that only files inside a repository are kept. Files an agent leaves directly in the task folder are removed after the run, and the run log says so.
+- **Changes tab** in the task details: the files the task changed in each repository, with lines added and removed.
+- **Settings per repository** in a workspace: check commands (else the repository's own saved commands from opening it alone, else detected; the page shows which) and how its pull requests are opened.
+- **Updates**: Settings → App updates can turn off the check at launch, and "Check for updates" looks now (it also offers a version that failed to install before).
+
+### Changed
+
+- **A folder inside a repository is no longer opened as that repository.** Open the repository's root (or the workspace folder). A folder is checked every time it is opened: if a workspace gains a folder that is not a repository, it is refused until the folder is moved out or made a repository; its tasks stay safe on disk.
+- **Task files move to a new format** (schema 2). 3.1 reads 3.0 task files and rewrites each the next time the task changes; after that, 3.0 can no longer show that task. The in-app updater never goes back to 3.0, so this only matters if you reinstall 3.0 by hand.
+- A repository without an `origin` remote is reported as such in Human Review ("No remote: the changes are on code-automata/…"), not as an error.
+- After a replan, resuming or skipping a halted subtask only undoes that run's own work, never the earlier plan's commits.
+
+---
+
 ## 3.0.1
 
 Fixes from the first feedback on 3.0.0. If you have 3.0.0 installed, it offers this update when it starts.

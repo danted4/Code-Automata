@@ -40,12 +40,16 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
-import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
+import type { PrReport } from '@/lib/api/types/PrReport';
 import {
-  primaryRepo,
+  ROOT_REPO,
+  prReportToast,
   pullRequestAction,
-  pullRequestToast,
+  pushedNow,
+  repoPrButton,
+  repoPrViews,
   reviewSummary,
+  type RepoPrView,
   taskBranch,
   worktreePath,
 } from '@/lib/review-summary';
@@ -63,15 +67,21 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   const task = useTask(taskId);
   const [busy, setBusy] = useState<Busy>(null);
   const [feedback, setFeedback] = useState('');
-  /** A pull request created here, until the task reload shows it. */
-  const [created, setCreated] = useState<PullRequestResponse | null>(null);
+  /** What "Create pull requests" last did here: links before the reload, failures, no remote. */
+  const [report, setReport] = useState<PrReport | null>(null);
   const summary = useMemo(() => (task ? reviewSummary(task) : null), [task]);
   if (!task || !summary) return null;
 
   const branch = taskBranch(task.id);
   const inReview = task.phase === 'human_review';
-  const prAction = pullRequestAction(task, created);
+  const repos = Object.keys(task.baseCommits ?? {});
+  const workspace = repos.length > 0 && !repos.includes(ROOT_REPO);
+  const onlyRow = report?.rows[0];
+  const prAction = pullRequestAction(task, pushedNow(onlyRow));
   const prUrl = prAction.url;
+  const noRemote = onlyRow?.result.result === 'no_remote' ? onlyRow.result.branch : null;
+  const repoViews = workspace ? repoPrViews(task, report) : [];
+  const repoButton = workspace ? repoPrButton(repoViews) : null;
 
   const setOpen = (next: boolean) => {
     if (!next) setFeedback('');
@@ -90,9 +100,9 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   const createPullRequest = async () => {
     setBusy('pr');
     try {
-      const pr = await api.tasks.pullRequest(task.id);
-      setCreated(pr);
-      const t = pullRequestToast(task.id, task.pullRequests?.[primaryRepo(task)] ?? null, pr);
+      const result = await api.tasks.pullRequests(task.id);
+      setReport(result);
+      const t = prReportToast(task, result);
       (t.warn ? toast.warning : toast.success)(t.title, { description: t.description });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));
@@ -367,84 +377,149 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
                   <GitPullRequest className="w-4 h-4" />
                   Pull request
                 </h3>
-                <Card
-                  className="p-4 space-y-3"
-                  style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-                >
-                  {prUrl && (
-                    <a
-                      href={prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 text-sm underline"
-                      style={{ color: 'var(--color-primary)' }}
-                      data-testid="review-pr-link"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      {prAction.linkLabel}
-                    </a>
-                  )}
-                  {prAction.pushedNote && (
-                    <p
-                      className="text-sm"
-                      style={{ color: 'var(--color-text-primary)' }}
-                      data-testid="review-pr-pushed-note"
-                    >
-                      {prAction.pushedNote}
-                    </p>
-                  )}
-                  <p
-                    className="text-xs"
-                    style={{ color: 'var(--color-text-secondary)' }}
-                    data-testid="review-pr-status"
+                {workspace ? (
+                  <Card
+                    className="p-4 space-y-3"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: 'var(--color-border)',
+                    }}
                   >
-                    {prAction.kind === 'current' && (
-                      <CheckCircle2
-                        className="inline w-3.5 h-3.5 mr-1 -mt-0.5"
-                        style={{ color: 'var(--color-success)' }}
-                      />
+                    <ul className="space-y-2" data-testid="review-pr-rows">
+                      {repoViews.map((view) => (
+                        <RepoPrRow key={view.repo} view={view} taskId={task.id} />
+                      ))}
+                    </ul>
+                    {repoButton && (
+                      <Button
+                        onClick={createPullRequest}
+                        disabled={busy !== null}
+                        size="sm"
+                        variant={repoButton.kind === 'create' ? 'default' : 'outline'}
+                        className="w-full text-xs"
+                        style={
+                          repoButton.kind === 'create'
+                            ? {
+                                background: 'var(--color-primary)',
+                                color: 'var(--color-primary-text)',
+                              }
+                            : undefined
+                        }
+                        data-testid="review-create-prs"
+                      >
+                        {busy === 'pr' ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {repoButton.busyLabel}
+                          </>
+                        ) : (
+                          repoButton.label
+                        )}
+                      </Button>
                     )}
-                    {prAction.help}
-                  </p>
-                  {prAction.kind !== 'current' && (
-                    <Button
-                      onClick={createPullRequest}
-                      disabled={busy !== null}
-                      size="sm"
-                      variant={prAction.kind === 'update' ? 'outline' : 'default'}
-                      className="w-full text-xs"
-                      style={
-                        prAction.kind === 'create'
-                          ? {
-                              background: 'var(--color-primary)',
-                              color: 'var(--color-primary-text)',
-                            }
-                          : undefined
-                      }
-                      data-testid={
-                        prAction.kind === 'create' ? 'review-create-pr' : 'review-update-pr'
-                      }
-                    >
-                      {busy === 'pr' ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {prAction.busyLabel}
-                        </>
-                      ) : (
-                        prAction.label
-                      )}
-                    </Button>
-                  )}
-                  {busy === 'pr' && (
+                    {busy === 'pr' && (
+                      <p
+                        className="text-xs"
+                        style={{ color: 'var(--color-text-muted)' }}
+                        data-testid="review-pr-progress"
+                      >
+                        Squashing and pushing each repository in turn. This can take a minute.
+                      </p>
+                    )}
+                  </Card>
+                ) : (
+                  <Card
+                    className="p-4 space-y-3"
+                    style={{
+                      background: 'var(--color-surface)',
+                      borderColor: 'var(--color-border)',
+                    }}
+                  >
+                    {prUrl && (
+                      <a
+                        href={prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 text-sm underline"
+                        style={{ color: 'var(--color-primary)' }}
+                        data-testid="review-pr-link"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        {prAction.linkLabel}
+                      </a>
+                    )}
+                    {noRemote && (
+                      <p
+                        className="text-sm"
+                        style={{ color: 'var(--color-warning)' }}
+                        data-testid="review-pr-no-remote"
+                      >
+                        The repository has no remote, so nothing was pushed. The work is on{' '}
+                        {noRemote}.
+                      </p>
+                    )}
+                    {prAction.pushedNote && (
+                      <p
+                        className="text-sm"
+                        style={{ color: 'var(--color-text-primary)' }}
+                        data-testid="review-pr-pushed-note"
+                      >
+                        {prAction.pushedNote}
+                      </p>
+                    )}
                     <p
                       className="text-xs"
-                      style={{ color: 'var(--color-text-muted)' }}
-                      data-testid="review-pr-progress"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                      data-testid="review-pr-status"
                     >
-                      {prAction.progress}
+                      {prAction.kind === 'current' && (
+                        <CheckCircle2
+                          className="inline w-3.5 h-3.5 mr-1 -mt-0.5"
+                          style={{ color: 'var(--color-success)' }}
+                        />
+                      )}
+                      {prAction.help}
                     </p>
-                  )}
-                </Card>
+                    {prAction.kind !== 'current' && (
+                      <Button
+                        onClick={createPullRequest}
+                        disabled={busy !== null}
+                        size="sm"
+                        variant={prAction.kind === 'update' ? 'outline' : 'default'}
+                        className="w-full text-xs"
+                        style={
+                          prAction.kind === 'create'
+                            ? {
+                                background: 'var(--color-primary)',
+                                color: 'var(--color-primary-text)',
+                              }
+                            : undefined
+                        }
+                        data-testid={
+                          prAction.kind === 'create' ? 'review-create-pr' : 'review-update-pr'
+                        }
+                      >
+                        {busy === 'pr' ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {prAction.busyLabel}
+                          </>
+                        ) : (
+                          prAction.label
+                        )}
+                      </Button>
+                    )}
+                    {busy === 'pr' && (
+                      <p
+                        className="text-xs"
+                        style={{ color: 'var(--color-text-muted)' }}
+                        data-testid="review-pr-progress"
+                      >
+                        {prAction.progress}
+                      </p>
+                    )}
+                  </Card>
+                )}
               </section>
 
               {native && <LocalReview nativeApi={native} taskId={task.id} />}
@@ -549,6 +624,85 @@ function Attention({ lines }: { lines: string[] }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+/** One repository's line in a workspace task's pull request section. */
+function RepoPrRow({ view, taskId }: { view: RepoPrView; taskId: string }) {
+  const projectPath = useProjectStore((s) => s.projectPath);
+  const path = worktreePath(projectPath, taskId, view.repo);
+  const muted = { color: 'var(--color-text-muted)' };
+  let detail: React.ReactNode;
+  switch (view.state) {
+    case 'no_changes':
+      detail = <span style={muted}>No changes</span>;
+      break;
+    case 'no_remote':
+      detail = (
+        <span style={{ color: 'var(--color-warning)' }}>
+          No remote: the changes are on {view.branch}
+        </span>
+      );
+      break;
+    case 'failed':
+      detail = <span style={{ color: 'var(--color-error)' }}>Failed: {view.error}</span>;
+      break;
+    case 'action': {
+      const a = view.action;
+      detail = (
+        <span className="flex flex-wrap items-center gap-2">
+          {a.url && (
+            <a
+              href={a.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 underline"
+              style={{ color: 'var(--color-primary)' }}
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              {a.linkLabel}
+            </a>
+          )}
+          <span style={muted}>
+            {a.kind === 'current'
+              ? 'Up to date'
+              : a.kind === 'update'
+                ? 'Not pushed yet: new work'
+                : 'No pull request yet'}
+          </span>
+        </span>
+      );
+      break;
+    }
+  }
+  return (
+    <li
+      className="flex flex-wrap items-center gap-2 text-xs"
+      data-testid={`review-pr-row-${view.repo}`}
+      data-state={view.state === 'action' ? view.action.kind : view.state}
+    >
+      <span className="font-mono font-medium" style={{ color: 'var(--color-text-primary)' }}>
+        {view.repo}/
+      </span>
+      {detail}
+      {native && path && view.state !== 'no_changes' && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto h-6 px-2 text-xs"
+          onClick={async () => {
+            const editors = await native!.getAvailableEditors().catch(() => []);
+            const editor = availableEditorsSorted(editors)[0];
+            const result = editor
+              ? await native!.openEditorAtPath(path, editor.id, projectPath)
+              : await native!.openFolder(path);
+            if (!result.success) toast.error(result.error ?? 'Could not open it');
+          }}
+        >
+          Open
+        </Button>
+      )}
+    </li>
   );
 }
 

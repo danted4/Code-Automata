@@ -353,5 +353,16 @@ function EventRow({ row }: { row: DisplayRow }) {
           Not started: {row.reason}
         </div>
       );
+    case 'note':
+      return (
+        <div
+          data-testid="run-event"
+          data-type="note"
+          className="italic"
+          style={{ color: 'var(--color-text-muted)' }}
+        >
+          {row.text}
+        </div>
+      );
   }
 }

@@ -85,3 +85,32 @@ export function cleanupSummary(removed: number, failed: number): string {
     removed === 0 ? 'No orphan worktrees removed' : `Removed ${removed} ${noun(removed)}`;
   return failed > 0 ? `${base}; ${failed} could not be removed` : base;
 }
+
+/** A task's worktrees as one card: in a workspace, one worktree per repository. */
+export type WorktreeGroup = WorktreeEntry & {
+  /** The repositories it has worktrees in (`.` for a one-repository project). */
+  repos: string[];
+};
+
+/**
+ * One entry per task: a workspace task has a worktree in each repository, shown and removed
+ * together. The path becomes the task's folder that holds them, and the state is the worst of
+ * them (unknown if any is unknown, else changed if any has changes).
+ */
+export function groupWorktrees(list: WorktreeEntry[]): WorktreeGroup[] {
+  const groups = new Map<string, WorktreeGroup>();
+  for (const w of list) {
+    const group = groups.get(w.taskId);
+    if (!group) {
+      const path =
+        w.repo === '.' ? w.path : w.path.replace(/[/\\]+$/, '').replace(/[/\\][^/\\]+$/, '');
+      groups.set(w.taskId, { ...w, path, repos: [w.repo] });
+      continue;
+    }
+    group.repos.push(w.repo);
+    const a = group.isDirty ?? null;
+    const b = w.isDirty ?? null;
+    group.isDirty = a === null || b === null ? null : a || b;
+  }
+  return [...groups.values()].map((g) => ({ ...g, repos: [...g.repos].sort() }));
+}

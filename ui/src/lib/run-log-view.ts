@@ -116,7 +116,8 @@ export type DisplayRow =
   | { type: 'tool_result'; summary: string; isError: boolean }
   | { type: 'stderr'; line: string }
   | { type: 'finished'; ok: boolean; label: string; detail: string | null }
-  | { type: 'abandoned'; reason: string };
+  | { type: 'abandoned'; reason: string }
+  | { type: 'note'; text: string };
 
 /** Keys whose value says best what a tool call does, in order of preference. */
 const SUMMARY_KEYS = [
@@ -201,6 +202,8 @@ export function logRows(lines: RunLogLine[]): DisplayRow[] {
       if (row) rows.push(row);
     } else if (line.line === 'abandoned') {
       rows.push({ type: 'abandoned', reason: line.reason });
+    } else if (line.line === 'note') {
+      rows.push({ type: 'note', text: line.text });
     }
   }
   return rows;

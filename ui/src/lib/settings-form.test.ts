@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { PromptDefaults } from '@/lib/api/types/PromptDefaults';
+import type { RepoChecks } from '@/lib/api/types/RepoChecks';
 import type { Settings } from '@/lib/api/types/Settings';
 import {
+  checkSourceText,
   checksMode,
   fromForm,
   hasErrors,
@@ -155,5 +157,71 @@ describe('schema and dirty state', () => {
     expect(isFormDirty({ ...form, triageOnResume: true }, s, defaults)).toBe(true);
     expect(isFormDirty({ ...form, reworkLimit: '' }, s, defaults)).toBe(true);
     expect(isFormDirty(withChecksMode(form, 'none'), s, defaults)).toBe(true);
+  });
+});
+
+describe('workspace repositories', () => {
+  const defaults = { plan: 'P', subtasks: 'S' };
+  const base: Settings = {
+    schema: 1,
+    maxConcurrentAgents: 12,
+    timeouts: { idleMinutes: 10, toolMinutes: 30, totalMinutes: 120, checkMinutes: 10 },
+    reworkLimit: 2,
+    triageOnResume: false,
+    repos: {
+      web: { checks: [{ name: 'lint', command: 'yarn lint' }] },
+      gone: { pullRequestHost: 'gitlab' },
+    },
+  };
+
+  it('has a row per repository, keeping one the settings name that is gone', () => {
+    const form = toForm(base, defaults, ['api', 'web']);
+    expect(Object.keys(form.repos)).toEqual(['api', 'gone', 'web']);
+    expect(form.repos.api).toEqual({ checksMode: 'auto', checks: [], pullRequestHost: 'detect' });
+    expect(form.repos.web.checksMode).toBe('custom');
+    expect(form.repos.gone.pullRequestHost).toBe('gitlab');
+    expect(isFormDirty(form, base, defaults)).toBe(false);
+  });
+
+  it('saves only repositories with something set', () => {
+    const form = toForm(base, defaults, ['api', 'web']);
+    form.repos.api = { ...form.repos.api, checksMode: 'none', pullRequestHost: 'github' };
+    form.repos.web = { ...form.repos.web, checksMode: 'auto' };
+    expect(isFormDirty(form, base, defaults)).toBe(true);
+    const out = fromForm(form, base, defaults);
+    expect('settings' in out && out.settings.repos).toEqual({
+      api: { checks: [], pullRequestHost: 'github' },
+      gone: { pullRequestHost: 'gitlab' },
+    });
+  });
+
+  it('names the repository whose checks are incomplete', () => {
+    const form = toForm(base, defaults, ['api', 'web']);
+    form.repos.api = {
+      checksMode: 'custom',
+      checks: [{ name: '', command: 'x' }],
+      pullRequestHost: 'detect',
+    };
+    const out = fromForm(form, base, defaults);
+    expect('errors' in out && out.errors.repoChecks).toEqual({
+      api: 'Every check needs a name and a command.',
+    });
+  });
+});
+
+describe('checkSourceText', () => {
+  it('says where the commands come from', () => {
+    const c = (source: RepoChecks['source'], commands: string[]): RepoChecks => ({
+      repo: 'api',
+      source,
+      commands: commands.map((command) => ({ name: command, command })),
+    });
+    expect(checkSourceText(c('detected', ['yarn lint']))).toBe('Now: yarn lint (detected)');
+    expect(checkSourceText(c('detected', []))).toBe('Now: none detected');
+    expect(checkSourceText(c('repo', ['make test']))).toBe(
+      "Now: make test (the repository's own settings)"
+    );
+    expect(checkSourceText(c('workspace', []))).toBe('Now: none (these settings)');
+    expect(checkSourceText(undefined)).toBe('Not in the workspace now.');
   });
 });

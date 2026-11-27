@@ -14,6 +14,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_settings;
 mod editors;
 mod native;
 mod paths;
@@ -74,6 +75,9 @@ fn main() {
             native::path_exists,
             native::open_in_editor,
             native::reveal_folder,
+            app_settings::get_app_settings,
+            app_settings::set_app_settings,
+            update::check_for_updates,
             smoke::smoke_report,
         ])
         .setup(|app| {

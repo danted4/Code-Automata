@@ -20,6 +20,7 @@ import {
   primaryAction,
   progress,
   PROVIDER_LABELS,
+  repoChips,
   reworkLabel,
   statusBadge,
   taskStatus,
@@ -74,6 +75,7 @@ export function TaskCard({ task }: { task: Task }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
 
   const status = taskStatus(task);
+  const chips = repoChips(task);
   const action = primaryAction(status);
   const badge = statusBadge(status);
   const rework = reworkLabel(task, reworkLimit);
@@ -173,6 +175,22 @@ export function TaskCard({ task }: { task: Task }) {
               </span>
             )}
           </div>
+          {chips.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1" data-testid="task-repos">
+              {chips.map((repo) => (
+                <span
+                  key={repo}
+                  className="px-1.5 py-0.5 rounded font-mono text-[10px]"
+                  style={{
+                    background: 'var(--color-surface-hover)',
+                    color: 'var(--color-text-secondary)',
+                  }}
+                >
+                  {repo}
+                </span>
+              ))}
+            </div>
+          )}
         </CardHeader>
 
         <CardContent className="pt-0 space-y-2">

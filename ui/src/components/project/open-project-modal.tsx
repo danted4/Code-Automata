@@ -18,7 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useProjectStore } from '@/store/project-store';
+import { useProjectStore, type ProjectInfo } from '@/store/project-store';
 import { api, errorMessage } from '@/lib/api';
 import { FolderOpen, FolderSearch } from 'lucide-react';
 import { native } from '@/lib/native';
@@ -29,8 +29,15 @@ interface OpenProjectModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** "workspace · 3 repositories", or "repository". */
+export function projectLabel(info: ProjectInfo): string {
+  if (info.kind === 'repo') return 'repository';
+  return `workspace · ${info.repos} ${info.repos === 1 ? 'repository' : 'repositories'}`;
+}
+
 export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) {
-  const { setProjectPath, addRecentPath, recentPaths } = useProjectStore();
+  const { setProjectPath, addRecentPath, recentPaths, projectInfo, setProjectInfo } =
+    useProjectStore();
   const [pathInput, setPathInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
@@ -46,11 +53,17 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
     setError(null);
 
     try {
-      // Opens (or finds) the project's engine; a subfolder opens its repository.
+      // Opens (or finds) the project's engine: a repository root, or a workspace folder.
       const opened = await api.openProject(trimmed);
       const root = String(opened.root);
       setProjectPath(root);
       addRecentPath(root);
+      setProjectInfo(root, { kind: opened.kind, repos: opened.repos.length });
+      if (opened.kind === 'workspace') {
+        toast.success(projectLabel({ kind: opened.kind, repos: opened.repos.length }), {
+          description: opened.repos.join(', '),
+        });
+      }
       if (opened.reconcileProblems.length > 0) {
         toast.warning(`Some tasks could not be checked: ${opened.reconcileProblems.join('; ')}`);
       }
@@ -102,7 +115,8 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
         <DialogHeader>
           <DialogTitle>Open Project</DialogTitle>
           <DialogDescription>
-            Enter the absolute path to your project directory. The project must be a git repository.
+            Enter the absolute path to a git repository&rsquo;s root, or to a folder whose every
+            folder is a git repository (a workspace: one task can change several of them).
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-4 py-4">
@@ -138,6 +152,14 @@ export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) 
                     <span className="truncate" title={path}>
                       {path.split(/[/\\]/).pop() || path}
                     </span>
+                    {projectInfo[path]?.kind === 'workspace' && (
+                      <span
+                        className="ml-1.5 text-xs shrink-0"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        {projectLabel(projectInfo[path])}
+                      </span>
+                    )}
                   </Button>
                 ))}
               </div>

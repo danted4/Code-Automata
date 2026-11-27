@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Run } from '@/lib/api/types/Run';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
-import { primaryAction, progress, reworkLabel, taskStatus } from './task-view';
+import { primaryAction, progress, repoChips, reworkLabel, taskStatus } from './task-view';
 
 function task(over: Partial<Task> = {}): Task {
   return {
@@ -114,5 +114,45 @@ describe('reworkLabel and progress', () => {
     ];
     expect(progress(task({ subtasks }), 'dev')).toEqual({ done: 2, total: 3 });
     expect(progress(task({ subtasks }), 'qa')).toEqual({ done: 0, total: 1 });
+  });
+});
+
+describe('repoChips', () => {
+  const ws = (over: Partial<Task>): Task => ({
+    schema: 2,
+    id: 't',
+    title: 't',
+    createdAt: 0,
+    updatedAt: 0,
+    phase: 'in_progress',
+    agent: { provider: 'mock' },
+    requirePlanApproval: false,
+    planning: { stage: 'approved' },
+    baseCommits: { api: 'a0', web: 'w0', docs: 'd0' },
+    ...over,
+  });
+  const dev = (repos: string[], checkpoints: Record<string, string> = {}) => ({
+    id: `d-${repos.join()}`,
+    kind: 'dev' as const,
+    title: 'x',
+    detail: 'x',
+    status: (Object.keys(checkpoints).length ? 'done' : 'pending') as 'done' | 'pending',
+    repos,
+    checkpoints,
+  });
+
+  it('shows the planned repositories, then the changed ones', () => {
+    expect(repoChips(ws({}))).toEqual([]);
+    expect(repoChips(ws({ subtasks: [dev(['web']), dev(['api', 'web'])] }))).toEqual([
+      'api',
+      'web',
+    ]);
+    expect(repoChips(ws({ subtasks: [dev(['web'], { docs: 'd1' }), dev(['api'])] }))).toEqual([
+      'docs',
+    ]);
+  });
+
+  it('shows nothing for a one-repository project', () => {
+    expect(repoChips(ws({ baseCommits: { '.': 'b' } }))).toEqual([]);
   });
 });

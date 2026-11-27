@@ -8,16 +8,23 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { ProjectKind } from '@/lib/api/types/ProjectKind';
+
+/** What a project folder was when last opened: a repository, or a workspace of N. */
+export type ProjectInfo = { kind: ProjectKind; repos: number };
 
 const MAX_RECENT_PROJECTS = 5;
 
 interface ProjectStore {
   projectPath: string | null;
   recentPaths: string[];
+  /** Kind of each project opened, by path (older stored state has none: shown as plain paths). */
+  projectInfo: Record<string, ProjectInfo>;
   /** Incremented when worktrees change; used to refresh sidebar count. Not persisted. */
   worktreeRefreshKey: number;
   setProjectPath: (path: string | null) => void;
   addRecentPath: (path: string) => void;
+  setProjectInfo: (path: string, info: ProjectInfo) => void;
   incrementWorktreeRefresh: () => void;
 }
 
@@ -26,6 +33,7 @@ export const useProjectStore = create<ProjectStore>()(
     (set) => ({
       projectPath: null,
       recentPaths: [],
+      projectInfo: {},
       worktreeRefreshKey: 0,
       setProjectPath: (path) => set({ projectPath: path }),
       addRecentPath: (path) =>
@@ -36,6 +44,8 @@ export const useProjectStore = create<ProjectStore>()(
           const updated = [trimmed, ...filtered].slice(0, MAX_RECENT_PROJECTS);
           return { recentPaths: updated };
         }),
+      setProjectInfo: (path, info) =>
+        set((state) => ({ projectInfo: { ...state.projectInfo, [path]: info } })),
       incrementWorktreeRefresh: () =>
         set((s) => ({ worktreeRefreshKey: (s.worktreeRefreshKey ?? 0) + 1 })),
     }),
@@ -44,6 +54,7 @@ export const useProjectStore = create<ProjectStore>()(
       partialize: (state) => ({
         projectPath: state.projectPath,
         recentPaths: state.recentPaths,
+        projectInfo: state.projectInfo,
       }),
     }
   )

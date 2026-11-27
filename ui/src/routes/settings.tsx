@@ -9,6 +9,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, Plus, RotateCcw, Save, Settings as SettingsIcon, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { AgentClis } from '@/components/settings/agent-clis';
+import { AppUpdates } from '@/components/settings/app-updates';
+import { RepoSettings } from '@/components/settings/repo-settings';
+import { native } from '@/lib/native';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -127,6 +130,11 @@ function Notice({ title, children }: { title: string; children?: React.ReactNode
   );
 }
 
+/** A workspace's repositories, from the settings response; none for a one-repository project. */
+function workspaceRepos(r: SettingsResponse): string[] {
+  return r.repoChecks.map((c) => c.repo).filter((n) => n !== '.');
+}
+
 export default function SettingsPage() {
   const projectPath = useProjectStore((s) => s.projectPath);
   const [loaded, setLoaded] = useState<SettingsResponse | null>(null);
@@ -144,7 +152,7 @@ export default function SettingsPage() {
       .then((r) => {
         if (id !== loadId.current) return;
         setLoaded(r);
-        setForm(toForm(r.settings, r.promptDefaults));
+        setForm(toForm(r.settings, r.promptDefaults, workspaceRepos(r)));
         setShowErrors(false);
       })
       .catch((e) => {
@@ -209,7 +217,7 @@ export default function SettingsPage() {
     try {
       const response = await api.settings.save(result.settings);
       setLoaded(response);
-      setForm(toForm(response.settings, response.promptDefaults));
+      setForm(toForm(response.settings, response.promptDefaults, workspaceRepos(response)));
       setShowErrors(false);
       useSyncStore.getState().setSettings(response.settings);
       toast.success('Settings saved');
@@ -221,7 +229,7 @@ export default function SettingsPage() {
   };
 
   const discard = () => {
-    setForm(toForm(settings, promptDefaults));
+    setForm(toForm(settings, promptDefaults, workspaceRepos(loaded)));
     setShowErrors(false);
   };
 
@@ -275,86 +283,113 @@ export default function SettingsPage() {
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-3xl mx-auto space-y-6">
-          <Section title="Checks">
-            <p className="text-sm" style={secondary}>
-              Commands AI review runs before the QA subtasks. A failing check starts a rework round.
-            </p>
-            <RadioGroup
-              value={form.checksMode}
-              onValueChange={(v) => setForm(withChecksMode(form, v as ChecksMode))}
-              data-testid="settings-checks-mode"
-              className="gap-3"
-            >
-              {CHECK_MODES.map((m) => (
-                <div key={m.value} className="flex items-start gap-2">
-                  <RadioGroupItem
-                    value={m.value}
-                    id={`checks-mode-${m.value}`}
-                    data-testid={`settings-checks-mode-${m.value}`}
-                    className="mt-0.5"
+          {Object.keys(form.repos).length > 0 && (
+            <Section title="Repositories">
+              <p className="text-sm" style={secondary}>
+                This is a workspace. Each repository a task changes is checked in its own worktree
+                before the QA subtasks, and gets its own pull request.
+              </p>
+              <div className="space-y-3" data-testid="settings-repos">
+                {Object.entries(form.repos).map(([name, repo]) => (
+                  <RepoSettings
+                    key={name}
+                    name={name}
+                    form={repo}
+                    info={loaded.repoChecks.find((c) => c.repo === name)}
+                    error={shown.repoChecks?.[name]}
+                    onChange={(next) => update({ repos: { ...form.repos, [name]: next } })}
                   />
-                  <Label htmlFor={`checks-mode-${m.value}`} className="cursor-pointer space-y-0.5">
-                    <span className="block text-sm font-medium">{m.label}</span>
-                    <span className="block text-xs font-normal" style={muted}>
-                      {m.hint}
-                    </span>
-                  </Label>
-                </div>
-              ))}
-            </RadioGroup>
+                ))}
+              </div>
+            </Section>
+          )}
 
-            {form.checksMode === 'custom' && (
-              <div className="space-y-2">
-                {form.checks.map((c, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2"
-                    data-testid={`settings-check-row-${i}`}
-                  >
-                    <Input
-                      value={c.name}
-                      onChange={(e) => setCheck(i, 'name', e.target.value)}
-                      placeholder="Name"
-                      aria-label={`Check ${i + 1} name`}
-                      className="w-40 shrink-0"
-                      data-testid={`settings-check-name-${i}`}
+          {Object.keys(form.repos).length === 0 && (
+            <Section title="Checks">
+              <p className="text-sm" style={secondary}>
+                Commands AI review runs before the QA subtasks. A failing check starts a rework
+                round.
+              </p>
+              <RadioGroup
+                value={form.checksMode}
+                onValueChange={(v) => setForm(withChecksMode(form, v as ChecksMode))}
+                data-testid="settings-checks-mode"
+                className="gap-3"
+              >
+                {CHECK_MODES.map((m) => (
+                  <div key={m.value} className="flex items-start gap-2">
+                    <RadioGroupItem
+                      value={m.value}
+                      id={`checks-mode-${m.value}`}
+                      data-testid={`settings-checks-mode-${m.value}`}
+                      className="mt-0.5"
                     />
-                    <Input
-                      value={c.command}
-                      onChange={(e) => setCheck(i, 'command', e.target.value)}
-                      placeholder="Command, e.g. yarn lint"
-                      aria-label={`Check ${i + 1} command`}
-                      className="flex-1 font-mono"
-                      data-testid={`settings-check-command-${i}`}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove check ${i + 1}`}
-                      title="Remove"
-                      onClick={() => update({ checks: form.checks.filter((_, j) => j !== i) })}
-                      data-testid={`settings-check-remove-${i}`}
-                      style={secondary}
+                    <Label
+                      htmlFor={`checks-mode-${m.value}`}
+                      className="cursor-pointer space-y-0.5"
                     >
-                      <X className="w-4 h-4" />
-                    </Button>
+                      <span className="block text-sm font-medium">{m.label}</span>
+                      <span className="block text-xs font-normal" style={muted}>
+                        {m.hint}
+                      </span>
+                    </Label>
                   </div>
                 ))}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => update({ checks: [...form.checks, { name: '', command: '' }] })}
-                  data-testid="settings-check-add"
-                  style={outlineStyle}
-                >
-                  <Plus className="w-4 h-4" />
-                  Add check
-                </Button>
-                <FieldError message={shown.checks} testId="settings-checks-error" />
-              </div>
-            )}
-          </Section>
+              </RadioGroup>
+
+              {form.checksMode === 'custom' && (
+                <div className="space-y-2">
+                  {form.checks.map((c, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-2"
+                      data-testid={`settings-check-row-${i}`}
+                    >
+                      <Input
+                        value={c.name}
+                        onChange={(e) => setCheck(i, 'name', e.target.value)}
+                        placeholder="Name"
+                        aria-label={`Check ${i + 1} name`}
+                        className="w-40 shrink-0"
+                        data-testid={`settings-check-name-${i}`}
+                      />
+                      <Input
+                        value={c.command}
+                        onChange={(e) => setCheck(i, 'command', e.target.value)}
+                        placeholder="Command, e.g. yarn lint"
+                        aria-label={`Check ${i + 1} command`}
+                        className="flex-1 font-mono"
+                        data-testid={`settings-check-command-${i}`}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove check ${i + 1}`}
+                        title="Remove"
+                        onClick={() => update({ checks: form.checks.filter((_, j) => j !== i) })}
+                        data-testid={`settings-check-remove-${i}`}
+                        style={secondary}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => update({ checks: [...form.checks, { name: '', command: '' }] })}
+                    data-testid="settings-check-add"
+                    style={outlineStyle}
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add check
+                  </Button>
+                  <FieldError message={shown.checks} testId="settings-checks-error" />
+                </div>
+              )}
+            </Section>
+          )}
 
           <Section title="Agents">
             <div className="space-y-1.5">
@@ -408,34 +443,36 @@ export default function SettingsPage() {
             </div>
           </Section>
 
-          <Section title="Pull requests">
-            <p className="text-sm" style={secondary}>
-              How Create pull request opens one after pushing the task&rsquo;s branch.
-            </p>
-            <RadioGroup
-              value={form.pullRequestHost}
-              onValueChange={(v) => update({ pullRequestHost: v as PrHostMode })}
-              data-testid="settings-pr-host"
-              className="gap-3"
-            >
-              {PR_HOSTS.map((h) => (
-                <div key={h.value} className="flex items-start gap-2">
-                  <RadioGroupItem
-                    value={h.value}
-                    id={`pr-host-${h.value}`}
-                    data-testid={`settings-pr-host-${h.value}`}
-                    className="mt-0.5"
-                  />
-                  <Label htmlFor={`pr-host-${h.value}`} className="cursor-pointer space-y-0.5">
-                    <span className="block text-sm font-medium">{h.label}</span>
-                    <span className="block text-xs font-normal" style={muted}>
-                      {h.hint}
-                    </span>
-                  </Label>
-                </div>
-              ))}
-            </RadioGroup>
-          </Section>
+          {Object.keys(form.repos).length === 0 && (
+            <Section title="Pull requests">
+              <p className="text-sm" style={secondary}>
+                How Create pull request opens one after pushing the task&rsquo;s branch.
+              </p>
+              <RadioGroup
+                value={form.pullRequestHost}
+                onValueChange={(v) => update({ pullRequestHost: v as PrHostMode })}
+                data-testid="settings-pr-host"
+                className="gap-3"
+              >
+                {PR_HOSTS.map((h) => (
+                  <div key={h.value} className="flex items-start gap-2">
+                    <RadioGroupItem
+                      value={h.value}
+                      id={`pr-host-${h.value}`}
+                      data-testid={`settings-pr-host-${h.value}`}
+                      className="mt-0.5"
+                    />
+                    <Label htmlFor={`pr-host-${h.value}`} className="cursor-pointer space-y-0.5">
+                      <span className="block text-sm font-medium">{h.label}</span>
+                      <span className="block text-xs font-normal" style={muted}>
+                        {h.hint}
+                      </span>
+                    </Label>
+                  </div>
+                ))}
+              </RadioGroup>
+            </Section>
+          )}
 
           <Section title="Agent CLIs on this computer">
             <p className="text-sm" style={secondary}>
@@ -445,6 +482,12 @@ export default function SettingsPage() {
             </p>
             <AgentClis />
           </Section>
+
+          {native && (
+            <Section title="App updates">
+              <AppUpdates nativeApi={native} />
+            </Section>
+          )}
 
           <Section title="Timeouts">
             <p className="text-sm" style={secondary}>

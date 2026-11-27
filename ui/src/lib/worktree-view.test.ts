@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
 import {
   canDeleteWorktree,
   deleteDialogText,
   cleanupSummary,
   dirtyLabel,
   formatBytes,
+  groupWorktrees,
   orphans,
   worktreeAction,
   worktreeTitle,
@@ -90,5 +92,45 @@ describe('dirtyLabel', () => {
     expect(dirtyLabel(false)).toBe('Clean');
     expect(dirtyLabel(true)).toBe('Uncommitted changes');
     expect(dirtyLabel(null)).toBe('Unknown');
+  });
+});
+
+describe('groupWorktrees', () => {
+  const entry = (taskId: string, repo: string, isDirty: boolean | null) =>
+    ({
+      taskId,
+      repo,
+      path:
+        repo === '.'
+          ? `/p/.code-automata/worktrees/${taskId}`
+          : `/w/.code-automata/worktrees/${taskId}/${repo}`,
+      branchName: `code-automata/${taskId}`,
+      mainRepo: '/w',
+      mainBranch: 'main',
+      isDirty,
+      taskTitle: 'T',
+      orphan: false,
+      taskDone: true,
+    }) as unknown as WorktreeEntry;
+
+  it('shows a workspace task once, with every repository', () => {
+    const groups = groupWorktrees([
+      entry('t1', 'web', false),
+      entry('t1', 'api', true),
+      entry('t2', 'api', false),
+    ]);
+    expect(groups.map((g) => [g.taskId, g.repos, g.isDirty, g.path])).toEqual([
+      ['t1', ['api', 'web'], true, '/w/.code-automata/worktrees/t1'],
+      ['t2', ['api'], false, '/w/.code-automata/worktrees/t2'],
+    ]);
+    expect(
+      groupWorktrees([entry('t1', 'api', false), entry('t1', 'web', null)])[0].isDirty
+    ).toBeNull();
+  });
+
+  it('leaves a one-repository worktree as it is', () => {
+    const [g] = groupWorktrees([entry('t3', '.', false)]);
+    expect(g.path).toBe('/p/.code-automata/worktrees/t3');
+    expect(g.repos).toEqual(['.']);
   });
 });

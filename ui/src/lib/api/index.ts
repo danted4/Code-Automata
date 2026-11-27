@@ -12,7 +12,8 @@ import type { OpenProjectResponse } from './types/OpenProjectResponse';
 import type { Phase } from './types/Phase';
 import type { Provider } from './types/Provider';
 import type { ProviderInfo } from './types/ProviderInfo';
-import type { PullRequestResponse } from './types/PullRequestResponse';
+import type { PrReport } from './types/PrReport';
+import type { RepoChanges } from './types/RepoChanges';
 import type { RunLogInfo } from './types/RunLogInfo';
 import type { RunLogLine } from './types/RunLogLine';
 import type { Settings } from './types/Settings';
@@ -71,7 +72,10 @@ export const api = {
       request<Task>('POST', task(id, '/rework'), { body: { feedback } }),
     skipSubtask: (id: string, subtaskId: string) =>
       request<Task>('POST', task(id, `/subtasks/${encodeURIComponent(subtaskId)}/skip`)),
-    pullRequest: (id: string) => request<PullRequestResponse>('POST', task(id, '/pull-request')),
+    /** Open or update the pull request of every repository the task changed. */
+    pullRequests: (id: string) => request<PrReport>('POST', task(id, '/pull-requests')),
+    /** The files the task changed, per repository. */
+    changes: (id: string) => request<RepoChanges[]>('GET', task(id, '/changes')),
     runs: (id: string) => request<RunLogInfo[]>('GET', task(id, '/runs')),
     runLog: (id: string, name: string) =>
       request<RunLogLine[]>('GET', task(id, `/runs/${encodeURIComponent(name)}`)),

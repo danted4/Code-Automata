@@ -617,7 +617,7 @@ async fn a_workspace_task_reports_its_changes_and_one_pull_request_row_per_repos
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_repository_without_a_remote_is_an_error_on_the_single_pull_request_route() {
+async fn a_repository_without_a_remote_is_reported_not_pushed() {
     let h = Harness::new(true);
     let repo = Repo::new().await;
     let id = h
@@ -627,24 +627,6 @@ async fn a_repository_without_a_remote_is_an_error_on_the_single_pull_request_ro
         phase(t) == "human_review" && t["run"].is_null()
     })
     .await;
-    let (status, body) = h
-        .call(
-            "POST",
-            &format!("/api/tasks/{id}/pull-request"),
-            &repo.path,
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("no `origin` remote"),
-        "{body}"
-    );
-    assert!(!body["error"].as_str().unwrap().starts_with(". "), "{body}");
-    // The per-repository report says it as a row.
     let report = h
         .ok(
             "POST",
@@ -653,9 +635,17 @@ async fn a_repository_without_a_remote_is_an_error_on_the_single_pull_request_ro
             None,
         )
         .await;
+    assert_eq!(report["rows"][0]["repo"], ".", "{report}");
     assert_eq!(
         report["rows"][0]["result"]["result"], "no_remote",
         "{report}"
+    );
+    let task = h
+        .ok("GET", &format!("/api/tasks/{id}"), &repo.path, None)
+        .await;
+    assert!(
+        task.get("pullRequests").is_none(),
+        "nothing recorded: {task}"
     );
 }
 

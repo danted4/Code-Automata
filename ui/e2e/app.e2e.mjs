@@ -20,6 +20,7 @@ import {
   fill,
   js,
   makeRepo,
+  makeWorkspace,
   once,
   openDetails,
   openProject,
@@ -351,4 +352,40 @@ test('10. the theme can be switched and is remembered', async () => {
       ),
     (v) => v === after
   );
+});
+
+test('11. a workspace task changes two repositories and pushes each', async () => {
+  const ws = makeWorkspace(['api', 'web']);
+  const both = {
+    whenPrompt: '(dev-1)',
+    steps: [
+      { write: { path: 'api/a.txt', content: 'a' } },
+      { write: { path: 'web/w.txt', content: 'w' } },
+      { result: { text: 'done', structured: { summary: 'wrote both', handoff: '' } } },
+    ],
+  };
+  server = await startServer(rules(1, [both]));
+  await openProject(ws.path);
+  await createTask('Across repos');
+  const done = await untilCard('Across repos', 'in review', inReview);
+  assert.equal(
+    js(
+      `document.querySelector('[data-testid="task-card-${done.id}"] [data-testid="task-repos"]')?.innerText.replace(/\\s+/g, ' ').trim()`
+    ),
+    'api web'
+  );
+
+  cardAction('Across repos', 'human_review');
+  await until('the review dialog', () => exists('human-review-modal'));
+  const states = () =>
+    js(
+      `Array.from(document.querySelectorAll('[data-testid^="review-pr-row-"]')).map((r) => r.dataset.testid.replace('review-pr-row-', '') + ':' + r.dataset.state).join(' ')`
+    );
+  assert.equal(states(), 'api:create web:create');
+  click('review-create-prs');
+  await until('both pushed', states, (s) => s === 'api:current web:current');
+  const branch = `refs/heads/code-automata/${done.id}`;
+  assert.match(ws.remoteGit('api', 'ls-tree', '-r', '--name-only', branch), /a\.txt/);
+  assert.match(ws.remoteGit('web', 'ls-tree', '-r', '--name-only', branch), /w\.txt/);
+  assert.ok(!exists('review-create-prs'), 'nothing left to push');
 });

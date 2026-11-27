@@ -147,6 +147,40 @@ export function makeRepo(settings = {}) {
   return { path: dir, git };
 }
 
+/**
+ * A throwaway workspace: a plain folder holding one repository per name, each with a local bare
+ * remote and the "other" host (push only), no checks, and short timeouts.
+ */
+export function makeWorkspace(names) {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'ca-e2e-ws-')));
+  const remotes = realpathSync(mkdtempSync(path.join(tmpdir(), 'ca-e2e-remotes-')));
+  const repos = {};
+  for (const name of names) {
+    const repo = path.join(dir, name);
+    mkdirSync(repo);
+    const git = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.name', 'E2E');
+    git('config', 'user.email', 'e2e@example.com');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(path.join(repo, 'README.md'), `# ${name}\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'init');
+    const remote = path.join(remotes, `${name}.git`);
+    execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'pipe' });
+    git('remote', 'add', 'origin', remote);
+    repos[name] = { checks: [], pullRequestHost: 'other' };
+  }
+  mkdirSync(path.join(dir, '.code-automata'), { recursive: true });
+  writeFileSync(
+    path.join(dir, '.code-automata', 'settings.json'),
+    JSON.stringify({ schema: 1, timeouts: { idleMinutes: 1, totalMinutes: 3 }, repos })
+  );
+  const remoteGit = (name, ...args) =>
+    execFileSync('git', args, { cwd: path.join(remotes, `${name}.git`), encoding: 'utf8' }).trim();
+  return { path: dir, remoteGit };
+}
+
 // --- browser ---------------------------------------------------------------------------------
 
 /** One agent-browser command in the e2e session; returns its output. */

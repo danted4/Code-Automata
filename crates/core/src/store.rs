@@ -299,7 +299,7 @@ fn held_by_another_program(e: &std::io::Error) -> bool {
 
 /// Write pretty JSON to a hidden temp file next to `path`, flush it to disk, then rename it over
 /// `path`. The temp name starts with '.', so it is never read as a task file.
-pub(crate) async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| CoreError::Invalid(format!("{} has no parent", path.display())))?;

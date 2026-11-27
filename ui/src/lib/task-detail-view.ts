@@ -4,6 +4,8 @@
  */
 
 import type { Subtask } from '@/lib/api/types/Subtask';
+import type { ChangedFile } from '@/lib/api/types/ChangedFile';
+import type { RepoChanges } from '@/lib/api/types/RepoChanges';
 import type { Task } from '@/lib/api/types/Task';
 import { ACTION_LABELS, isWorking, type PrimaryAction } from '@/lib/task-view';
 
@@ -50,7 +52,7 @@ export function actionHint(action: PrimaryAction): string | null {
   }
 }
 
-export type DetailTab = 'plan' | 'subtasks' | 'review' | 'runs';
+export type DetailTab = 'plan' | 'subtasks' | 'changes' | 'review' | 'runs';
 
 /** The tab to open on: subtasks once there are any, else the plan once written, else the runs. */
 export function defaultTab(task: Task): DetailTab {
@@ -68,4 +70,20 @@ export function formatTime(ms: number | null | undefined): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+/** One changed file as the Changes tab shows it. */
+export function changedFileRow(file: ChangedFile): { mark: string; path: string; lines: string } {
+  const mark = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' }[file.status];
+  const lines =
+    file.added === null || file.added === undefined ? '' : `+${file.added} −${file.deleted ?? 0}`;
+  return { mark, path: file.path, lines };
+}
+
+/** "3 files changed, +10 −2" for a repository's change list. */
+export function changesSummary(changes: RepoChanges): string {
+  const added = changes.files.reduce((n, f) => n + (f.added ?? 0), 0);
+  const deleted = changes.files.reduce((n, f) => n + (f.deleted ?? 0), 0);
+  const files = `${changes.total} file${changes.total === 1 ? '' : 's'} changed`;
+  return added || deleted ? `${files}, +${added} −${deleted}` : files;
 }

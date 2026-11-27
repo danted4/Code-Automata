@@ -10,6 +10,9 @@
     "allow-path-exists",
     "allow-open-in-editor",
     "allow-reveal-folder",
+    "allow-get-app-settings",
+    "allow-set-app-settings",
+    "allow-check-for-updates",
     "allow-smoke-report"
   ]
 }

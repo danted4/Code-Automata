@@ -29,7 +29,6 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
 import { native, type NativeApi } from '@/lib/native';
 import {
   canDeleteWorktree,
@@ -37,11 +36,12 @@ import {
   formatBytes,
   worktreeAction,
   worktreeTitle,
+  type WorktreeGroup,
 } from '@/lib/worktree-view';
 import { useProjectStore } from '@/store/project-store';
 
 export interface WorktreeCardProps {
-  worktree: WorktreeEntry;
+  worktree: WorktreeGroup;
   /** Bytes on disk; undefined when unknown. */
   sizeBytes?: number;
   onDelete: (taskId: string) => void;
@@ -179,6 +179,15 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
             {worktree.branchName ?? 'detached HEAD'}
           </span>
         </div>
+        {worktree.repos.some((r) => r !== '.') && (
+          <p
+            className="text-xs font-mono mt-1"
+            style={{ color: 'var(--color-text-secondary)' }}
+            data-testid={`worktree-repos-${worktree.taskId}`}
+          >
+            {worktree.repos.map((r) => `${r}/`).join('  ')}
+          </p>
+        )}
         <div className="flex items-center gap-1 mt-1">
           <CardDescription
             className="text-xs font-mono truncate flex-1 min-w-0"

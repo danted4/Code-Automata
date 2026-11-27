@@ -7,7 +7,8 @@
  * the card; this view points there instead.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import {
   CheckCircle2,
   Circle,
@@ -29,7 +30,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import type { Task } from '@/lib/api/types/Task';
-import { ROOT_REPO } from '@/lib/review-summary';
+import type { RepoChanges } from '@/lib/api/types/RepoChanges';
+import { ROOT_REPO, worktreePath } from '@/lib/review-summary';
+import { native } from '@/lib/native';
+import { useProjectStore } from '@/store/project-store';
 import {
   ACTION_LABELS,
   PHASE_LABELS,
@@ -43,6 +47,8 @@ import {
 } from '@/lib/task-view';
 import {
   actionHint,
+  changedFileRow,
+  changesSummary,
   defaultTab,
   formatTime,
   shortSha,
@@ -67,6 +73,7 @@ const COMMANDS: Partial<Record<Exclude<PrimaryAction, null>, (id: string) => Pro
 const TABS: { id: DetailTab; label: string }[] = [
   { id: 'plan', label: 'Plan' },
   { id: 'subtasks', label: 'Subtasks' },
+  { id: 'changes', label: 'Changes' },
   { id: 'review', label: 'Review' },
   { id: 'runs', label: 'Runs' },
 ];
@@ -237,6 +244,7 @@ export function TaskDetailModal({ taskId, open, onOpenChange }: TaskModalProps) 
         <DialogBody className="pr-1">
           {tab === 'plan' && <PlanTab task={task} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
+          {tab === 'changes' && <ChangesTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} />}
           {tab === 'runs' && <RunLog taskId={task.id} />}
         </DialogBody>
@@ -526,6 +534,93 @@ function SubtaskItem({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** What the task changed in each repository against its base, reloaded as the task changes. */
+function ChangesTab({ task }: { task: Task }) {
+  const projectPath = useProjectStore((s) => s.projectPath);
+  const [changes, setChanges] = useState<RepoChanges[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.tasks
+      .changes(task.id)
+      .then((c) => live && (setChanges(c), setError(null)))
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [task.id, task.updatedAt]);
+
+  if (error) return <p style={muted}>Could not read the changes: {error}</p>;
+  if (!changes) return <p style={muted}>Loading…</p>;
+  if (changes.length === 0) {
+    return (
+      <p data-testid="task-detail-changes" style={muted}>
+        No changes yet.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="task-detail-changes" className="space-y-4 text-sm">
+      {changes.map((repo) => {
+        const path = worktreePath(projectPath, task.id, repo.repo);
+        return (
+          <section key={repo.repo} className="space-y-1" data-repo={repo.repo}>
+            <div className="flex items-center gap-2">
+              {repo.repo !== ROOT_REPO && (
+                <h3
+                  className="font-mono font-semibold"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  {repo.repo}/
+                </h3>
+              )}
+              <span className="text-xs" style={muted}>
+                {changesSummary(repo)}
+              </span>
+              {native && path && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto h-6 px-2 text-xs"
+                  onClick={async () => {
+                    const result = await native!.openFolder(path);
+                    if (!result.success) toast.error(result.error ?? 'Could not open it');
+                  }}
+                >
+                  Show in folder
+                </Button>
+              )}
+            </div>
+            <ul className="font-mono text-xs space-y-0.5">
+              {repo.files.map((f) => {
+                const row = changedFileRow(f);
+                return (
+                  <li key={f.path} className="flex gap-2">
+                    <span style={{ width: '1ch', color: 'var(--color-text-secondary)' }}>
+                      {row.mark}
+                    </span>
+                    <span className="truncate" style={{ color: 'var(--color-text-primary)' }}>
+                      {row.path}
+                    </span>
+                    <span className="ml-auto" style={muted}>
+                      {row.lines}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {repo.total > repo.files.length && (
+              <p className="text-xs" style={muted}>
+                and {repo.total - repo.files.length} more
+              </p>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }

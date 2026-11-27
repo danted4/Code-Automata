@@ -4,17 +4,12 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use ca_core::engine::Engine;
-use ca_core::engine::pr::{PrReport, PrResult};
+use ca_core::engine::pr::PrReport;
 use ca_core::engine::runlog::{RunLogInfo, RunLogLine};
-use ca_core::task::PullRequest;
-use ca_core::util::ROOT_REPO;
-use ca_core::{CoreError, PrHost, Provider, Task, TaskList};
+use ca_core::{Provider, Task, TaskList};
 use serde_json::{Map, Value};
 
-use super::types::{
-    AnswersRequest, CreateTaskRequest, FeedbackRequest, MoveRequest, PlanRequest,
-    PullRequestResponse,
-};
+use super::types::{AnswersRequest, CreateTaskRequest, FeedbackRequest, MoveRequest, PlanRequest};
 use super::{Body, check_provider};
 use crate::error::ApiError;
 use crate::state::{AppState, Project};
@@ -185,79 +180,6 @@ pub async fn skip_subtask(
     Path((id, subtask)): Path<(String, String)>,
 ) -> ApiResult<Task> {
     Ok(Json(engine.skip_subtask(&id, &subtask).await?))
-}
-
-pub async fn pull_request(
-    Project(engine): Project,
-    Path(id): Path<String>,
-) -> ApiResult<PullRequestResponse> {
-    let report = engine.create_pull_request(&id).await?;
-    Ok(Json(single_response(report)?))
-}
-
-/// The one-result answer the pre-3.1 UI understands. Anything it cannot show truthfully is an
-/// error: a repository whose push failed (even if others worked), and a repository with no
-/// remote (it would read as "pushed"). With several repositories pushed, the note names the rest.
-fn single_response(report: PrReport) -> Result<PullRequestResponse, ApiError> {
-    let failed: Vec<String> = report
-        .rows
-        .iter()
-        .filter_map(|r| match &r.result {
-            PrResult::Failed { error } => Some(format!("{}: {error}", r.repo)),
-            PrResult::NoRemote { branch } => Some(format!(
-                "{}: the repository has no `origin` remote to push {branch} to",
-                r.repo
-            )),
-            _ => None,
-        })
-        .collect();
-    let pushed: Vec<(String, PullRequest, Option<String>)> = report
-        .rows
-        .into_iter()
-        .filter_map(|r| match r.result {
-            PrResult::Pushed { pull_request, note } => Some((r.repo, pull_request, note)),
-            _ => None,
-        })
-        .collect();
-    let one_repo = |s: &str| s.strip_prefix(&format!("{ROOT_REPO}: ")).map(String::from);
-    if !failed.is_empty() {
-        let mut msg = match failed.as_slice() {
-            [only] => one_repo(only).unwrap_or_else(|| only.clone()),
-            all => all.join("; "),
-        };
-        if !pushed.is_empty() {
-            let done: Vec<&str> = pushed.iter().map(|(r, _, _)| r.as_str()).collect();
-            msg.push_str(&format!(" (pushed: {})", done.join(", ")));
-        }
-        return Err(CoreError::Invalid(msg).into());
-    }
-    let mut rest = pushed.into_iter();
-    let Some((_, pr, note)) = rest.next() else {
-        return Err(CoreError::Invalid(
-            "nothing to open a pull request for: the task changed no repository".into(),
-        )
-        .into());
-    };
-    let others: Vec<String> = rest
-        .map(|(repo, p, _)| match p.url {
-            Some(url) => format!("{repo}: {url}"),
-            None => format!("{repo}: branch pushed"),
-        })
-        .collect();
-    let note = match (note, others.is_empty()) {
-        (note, true) => note,
-        (note, false) => Some(
-            note.into_iter()
-                .chain([format!("Also pushed: {}", others.join("; "))])
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-    };
-    Ok(PullRequestResponse {
-        url: pr.url,
-        host: pr.host.unwrap_or(PrHost::Github),
-        note,
-    })
 }
 
 /// The files the task changed, per repository.

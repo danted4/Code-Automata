@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Run } from '@/lib/api/types/Run';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
-import { actionHint, defaultTab, shortSha, subtaskRows } from './task-detail-view';
+import {
+  actionHint,
+  changedFileRow,
+  changesSummary,
+  defaultTab,
+  shortSha,
+  subtaskRows,
+} from './task-detail-view';
 
 function sub(over: Partial<Subtask>): Subtask {
   return { id: 'dev-1', kind: 'dev', title: 'S', detail: '', status: 'pending', ...over };
@@ -78,5 +85,33 @@ describe('small helpers', () => {
     expect(defaultTab(task({ subtasks: [sub({})] }))).toBe('subtasks');
     expect(defaultTab(task())).toBe('plan');
     expect(defaultTab(task({ planning: { stage: 'not_started' } }))).toBe('runs');
+  });
+});
+
+describe('changes', () => {
+  it('marks each file and sums the lines', () => {
+    expect(changedFileRow({ path: 'a.ts', status: 'modified', added: 3, deleted: 1 })).toEqual({
+      mark: 'M',
+      path: 'a.ts',
+      lines: '+3 −1',
+    });
+    expect(
+      changedFileRow({ path: 'img.png', status: 'added', added: null, deleted: null })
+    ).toEqual({
+      mark: 'A',
+      path: 'img.png',
+      lines: '',
+    });
+    expect(
+      changesSummary({
+        repo: 'api',
+        total: 2,
+        files: [
+          { path: 'a', status: 'added', added: 4, deleted: 0 },
+          { path: 'b', status: 'deleted', added: 0, deleted: 2 },
+        ],
+      })
+    ).toBe('2 files changed, +4 −2');
+    expect(changesSummary({ repo: '.', total: 1, files: [] })).toBe('1 file changed');
   });
 });

@@ -9,6 +9,7 @@ import type { CheckCommand } from '@/lib/api/types/CheckCommand';
 import type { PrHost } from '@/lib/api/types/PrHost';
 import type { PromptDefaults } from '@/lib/api/types/PromptDefaults';
 import type { PromptOverrides } from '@/lib/api/types/PromptOverrides';
+import type { RepoChecks } from '@/lib/api/types/RepoChecks';
 import type { Settings } from '@/lib/api/types/Settings';
 
 /** `auto`: detect from the project (`checks` null); `none`: `[]`; `custom`: the list. */
@@ -20,6 +21,13 @@ export type PrHostMode = 'detect' | PrHost;
 export const TIMEOUT_KEYS = ['idle', 'tool', 'total', 'check'] as const;
 export type TimeoutKey = (typeof TIMEOUT_KEYS)[number];
 
+/** A workspace repository's own checks and pull request host. */
+export type RepoForm = {
+  checksMode: ChecksMode;
+  checks: CheckCommand[];
+  pullRequestHost: PrHostMode;
+};
+
 export type SettingsForm = {
   checksMode: ChecksMode;
   /** Kept while another mode is selected, so switching back does not lose the list. */
@@ -30,6 +38,8 @@ export type SettingsForm = {
   triageOnResume: boolean;
   prompts: { plan: string; subtasks: string };
   pullRequestHost: PrHostMode;
+  /** A workspace's repositories, by name in name order; empty for a one-repository project. */
+  repos: Record<string, RepoForm>;
 };
 
 export type FormErrors = Partial<{
@@ -38,7 +48,11 @@ export type FormErrors = Partial<{
   reworkLimit: string;
   promptPlan: string;
   promptSubtasks: string;
-}> & { timeouts?: Partial<Record<TimeoutKey, string>> };
+}> & {
+  timeouts?: Partial<Record<TimeoutKey, string>>;
+  /** Per workspace repository, the checks error. */
+  repoChecks?: Record<string, string>;
+};
 
 export const DEFAULT_MAX_CONCURRENT_AGENTS = 12;
 /** The server's upper bound for a timeout. */
@@ -57,8 +71,28 @@ export function checksMode(checks: Settings['checks']): ChecksMode {
   return checks.length === 0 ? 'none' : 'custom';
 }
 
-export function toForm(settings: Settings, defaults: PromptDefaults): SettingsForm {
+/**
+ * `repoNames` are the workspace's repositories now; ones only the settings name (a folder since
+ * removed) are kept too, so saving does not drop them.
+ */
+export function toForm(
+  settings: Settings,
+  defaults: PromptDefaults,
+  repoNames: string[] = []
+): SettingsForm {
   const t = settings.timeouts;
+  const names = [...new Set([...repoNames, ...Object.keys(settings.repos ?? {})])]
+    .filter((n) => n !== '.')
+    .sort();
+  const repos: Record<string, RepoForm> = {};
+  for (const name of names) {
+    const own = settings.repos?.[name];
+    repos[name] = {
+      checksMode: checksMode(own?.checks),
+      checks: (own?.checks ?? []).map((c) => ({ name: c.name, command: c.command })),
+      pullRequestHost: own?.pullRequestHost ?? 'detect',
+    };
+  }
   return {
     checksMode: checksMode(settings.checks),
     checks: (settings.checks ?? []).map((c) => ({ name: c.name, command: c.command })),
@@ -76,14 +110,34 @@ export function toForm(settings: Settings, defaults: PromptDefaults): SettingsFo
       subtasks: settings.prompts?.subtasks ?? defaults.subtasks,
     },
     pullRequestHost: settings.pullRequestHost ?? 'detect',
+    repos,
   };
 }
 
 /** Switch the checks mode; choosing `custom` with an empty list starts one blank row. */
-export function withChecksMode(form: SettingsForm, mode: ChecksMode): SettingsForm {
+export function withChecksMode<T extends { checksMode: ChecksMode; checks: CheckCommand[] }>(
+  form: T,
+  mode: ChecksMode
+): T {
   const checks =
     mode === 'custom' && form.checks.length === 0 ? [{ name: '', command: '' }] : form.checks;
   return { ...form, checksMode: mode, checks };
+}
+
+function checksError(mode: ChecksMode, checks: CheckCommand[]): string | null {
+  if (mode !== 'custom') return null;
+  if (checks.length === 0) return 'Add a check, or choose "No checks".';
+  if (checks.some((c) => !c.name.trim() || !c.command.trim())) {
+    return 'Every check needs a name and a command.';
+  }
+  return null;
+}
+
+function checksValue(mode: ChecksMode, checks: CheckCommand[]): CheckCommand[] | undefined {
+  if (mode === 'none') return [];
+  if (mode === 'custom')
+    return checks.map((c) => ({ name: c.name.trim(), command: c.command.trim() }));
+  return undefined;
 }
 
 function parseCount(text: string, min: number): number | null {
@@ -104,12 +158,11 @@ function parseMinutes(text: string): number | null {
 /** Field errors for the form; empty when it can be saved. */
 export function validateForm(form: SettingsForm): FormErrors {
   const errors: FormErrors = {};
-  if (form.checksMode === 'custom') {
-    if (form.checks.length === 0) {
-      errors.checks = 'Add a check, or choose "No checks".';
-    } else if (form.checks.some((c) => !c.name.trim() || !c.command.trim())) {
-      errors.checks = 'Every check needs a name and a command.';
-    }
+  const checks = checksError(form.checksMode, form.checks);
+  if (checks) errors.checks = checks;
+  for (const [name, repo] of Object.entries(form.repos)) {
+    const message = checksError(repo.checksMode, repo.checks);
+    if (message) errors.repoChecks = { ...errors.repoChecks, [name]: message };
   }
   if (parseCount(form.maxConcurrentAgents, 1) === null) {
     errors.maxConcurrentAgents = 'A whole number, 1 or more.';
@@ -133,8 +186,12 @@ export function validateForm(form: SettingsForm): FormErrors {
 }
 
 export function hasErrors(errors: FormErrors): boolean {
-  const { timeouts, ...rest } = errors;
-  return Object.keys(rest).length > 0 || Object.keys(timeouts ?? {}).length > 0;
+  const { timeouts, repoChecks, ...rest } = errors;
+  return (
+    Object.keys(rest).length > 0 ||
+    Object.keys(timeouts ?? {}).length > 0 ||
+    Object.keys(repoChecks ?? {}).length > 0
+  );
 }
 
 /**
@@ -163,10 +220,19 @@ export function fromForm(
     reworkLimit: Number(form.reworkLimit.trim()),
     triageOnResume: form.triageOnResume,
   };
-  if (form.checksMode === 'none') settings.checks = [];
-  if (form.checksMode === 'custom') {
-    settings.checks = form.checks.map((c) => ({ name: c.name.trim(), command: c.command.trim() }));
+  const checks = checksValue(form.checksMode, form.checks);
+  if (checks) settings.checks = checks;
+  // Only repositories with something set; in name order, so equal settings compare equal.
+  const repos: NonNullable<Settings['repos']> = {};
+  for (const name of Object.keys(form.repos).sort()) {
+    const repo = form.repos[name];
+    const own: NonNullable<Settings['repos']>[string] = {};
+    const repoChecks = checksValue(repo.checksMode, repo.checks);
+    if (repoChecks) own.checks = repoChecks;
+    if (repo.pullRequestHost !== 'detect') own.pullRequestHost = repo.pullRequestHost;
+    if (Object.keys(own).length > 0) repos[name] = own;
   }
+  if (Object.keys(repos).length > 0) settings.repos = repos;
   if (Object.keys(prompts).length > 0) settings.prompts = prompts;
   if (form.pullRequestHost !== 'detect') settings.pullRequestHost = form.pullRequestHost;
   return { settings };
@@ -182,10 +248,27 @@ export function isFormDirty(
   loaded: Settings,
   defaults: PromptDefaults
 ): boolean {
+  const loadedForm = toForm(loaded, defaults, Object.keys(form.repos));
   const now = fromForm(form, loaded, defaults);
-  const then = fromForm(toForm(loaded, defaults), loaded, defaults);
+  const then = fromForm(loadedForm, loaded, defaults);
   if ('errors' in now || 'errors' in then) {
-    return JSON.stringify(form) !== JSON.stringify(toForm(loaded, defaults));
+    return JSON.stringify(form) !== JSON.stringify(loadedForm);
   }
   return JSON.stringify(now.settings) !== JSON.stringify(then.settings);
+}
+
+/** Where the commands a task would run now come from, in words. */
+export function checkSourceText(info: RepoChecks | undefined): string {
+  if (!info) return 'Not in the workspace now.';
+  const list = info.commands.map((c) => c.command).join(', ') || 'none';
+  switch (info.source) {
+    case 'workspace':
+      return `Now: ${list} (these settings)`;
+    case 'repo':
+      return `Now: ${list} (the repository's own settings)`;
+    case 'project':
+      return `Now: ${list}`;
+    case 'detected':
+      return info.commands.length ? `Now: ${list} (detected)` : 'Now: none detected';
+  }
 }

@@ -215,6 +215,16 @@ pub struct RepoChanges {
     pub total: usize,
 }
 
+/// A repository's check commands and where they come from (see [`Engine::repo_checks`]).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoChecks {
+    pub repo: String,
+    pub source: checks::CheckSource,
+    pub commands: Vec<settings::CheckCommand>,
+}
+
 /// One repository's worktree for a task.
 pub(crate) struct RepoWorktree {
     pub repo: String,
@@ -517,6 +527,26 @@ impl Engine {
 
     pub fn settings(&self) -> Settings {
         self.inner.settings()
+    }
+
+    /// Each repository of the project as it is now, with the check commands a task would run in
+    /// it and where they come from (detected from its main checkout's files).
+    pub async fn repo_checks(&self) -> Vec<RepoChecks> {
+        let settings = self.inner.settings();
+        let project = match ProjectDir::open(self.inner.project.root()).await {
+            Ok(now) => now,
+            Err(_) => self.inner.project.clone(),
+        };
+        let mut out = Vec::new();
+        for repo in project.repos() {
+            let resolved = checks::commands_for(&project, &settings, &repo.name, &repo.path).await;
+            out.push(RepoChecks {
+                repo: repo.name.clone(),
+                source: resolved.source,
+                commands: resolved.commands,
+            });
+        }
+        out
     }
 
     /// Save settings. `maxConcurrentAgents` takes effect the next time the project is opened.

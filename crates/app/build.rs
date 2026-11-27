@@ -7,6 +7,9 @@ fn main() {
         "path_exists",
         "open_in_editor",
         "reveal_folder",
+        "get_app_settings",
+        "set_app_settings",
+        "check_for_updates",
         "smoke_report",
     ];
     tauri_build::try_build(

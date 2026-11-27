@@ -205,6 +205,12 @@ describe('eventRow and logRows', () => {
     const abandoned: RunLogLine[] = [...lines, { line: 'abandoned', at: 5, reason: 'no binary' }];
     expect(logRows(abandoned).at(-1)).toEqual({ type: 'abandoned', reason: 'no binary' });
     expect(logEnded(abandoned)).toBe(true);
+    const noted: RunLogLine[] = [
+      ...lines,
+      { line: 'note', at: 6, text: 'removed after the run: x' },
+    ];
+    expect(logRows(noted).at(-1)).toEqual({ type: 'note', text: 'removed after the run: x' });
+    expect(logEnded(noted)).toBe(logEnded(lines));
   });
 });
 

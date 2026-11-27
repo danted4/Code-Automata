@@ -12,8 +12,13 @@ import { WorktreeCard } from '@/components/worktrees/worktree-card';
 import { Button } from '@/components/ui/button';
 import { api, errorMessage } from '@/lib/api';
 import type { DiskUsage } from '@/lib/api/types/DiskUsage';
-import type { WorktreeEntry } from '@/lib/api/types/WorktreeEntry';
-import { cleanupSummary, formatBytes, orphans } from '@/lib/worktree-view';
+import {
+  cleanupSummary,
+  formatBytes,
+  groupWorktrees,
+  orphans,
+  type WorktreeGroup,
+} from '@/lib/worktree-view';
 import { useProjectStore } from '@/store/project-store';
 
 const pageStyle = { background: 'var(--color-background)', color: 'var(--color-text-primary)' };
@@ -57,7 +62,7 @@ type Pending = { kind: 'one'; taskId: string } | { kind: 'all' } | null;
 
 export default function WorktreesPage() {
   const projectPath = useProjectStore((s) => s.projectPath);
-  const [worktrees, setWorktrees] = useState<WorktreeEntry[] | null>(null);
+  const [worktrees, setWorktrees] = useState<WorktreeGroup[] | null>(null);
   const [usage, setUsage] = useState<DiskUsage | null>(null);
   const [usageError, setUsageError] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +87,8 @@ export default function WorktreesPage() {
       });
     try {
       const list = await api.worktrees.list();
-      if (id === loadId.current) setWorktrees(list);
+      // A workspace task's worktrees (one per repository) are one card, removed together.
+      if (id === loadId.current) setWorktrees(groupWorktrees(list));
     } catch (e) {
       if (id === loadId.current) setError(errorMessage(e));
     } finally {
@@ -124,7 +130,7 @@ export default function WorktreesPage() {
     }
   };
 
-  const deleteAll = async (targets: WorktreeEntry[]) => {
+  const deleteAll = async (targets: WorktreeGroup[]) => {
     let removed = 0;
     const problems: string[] = [];
     for (const w of targets) {
@@ -206,7 +212,7 @@ export default function WorktreesPage() {
   }
 
   const orphanList = orphans(worktrees);
-  const targets: WorktreeEntry[] =
+  const targets: WorktreeGroup[] =
     pending?.kind === 'all'
       ? orphanList
       : pending?.kind === 'one'
