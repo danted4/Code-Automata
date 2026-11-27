@@ -4,7 +4,9 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
-## 3.1.0 (unreleased)
+## 3.1.0
+
+Workspaces: one task across several repositories. If you have 3.0.1 installed, it offers this update when it starts.
 
 ### New
 
