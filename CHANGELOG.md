@@ -21,6 +21,11 @@ All notable changes to Code-Automata are documented here.
 - A repository without an `origin` remote is reported as such in Human Review ("No remote: the changes are on code-automata/…"), not as an error.
 - After a replan, resuming or skipping a halted subtask only undoes that run's own work, never the earlier plan's commits.
 
+### Known limits
+
+- **"Check for updates" has not been tried against a real release yet**; it will be from 3.1.0 onward. The check at launch works as in 3.0.1.
+- **GitLab** is still untested against a real GitLab, and SSH host aliases have not been resolved end to end (as in 3.0.1).
+
 ---
 
 ## 3.0.1
