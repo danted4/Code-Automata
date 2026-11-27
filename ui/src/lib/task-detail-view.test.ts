@@ -106,12 +106,15 @@ describe('changes', () => {
       changesSummary({
         repo: 'api',
         total: 2,
+        hasRemote: true,
         files: [
           { path: 'a', status: 'added', added: 4, deleted: 0 },
           { path: 'b', status: 'deleted', added: 0, deleted: 2 },
         ],
       })
     ).toBe('2 files changed, +4 −2');
-    expect(changesSummary({ repo: '.', total: 1, files: [] })).toBe('1 file changed');
+    expect(changesSummary({ repo: '.', total: 1, files: [], hasRemote: true })).toBe(
+      '1 file changed'
+    );
   });
 });

@@ -4,4 +4,8 @@ import type { PullRequest } from "./PullRequest";
 /**
  * What happened in one repository.
  */
-export type PrResult = { "result": "pushed", pullRequest: PullRequest, note: string | null, } | { "result": "no_remote", branch: string, } | { "result": "no_changes" } | { "result": "failed", error: string, };
+export type PrResult = { "result": "pushed", pullRequest: PullRequest, 
+/**
+ * Sent as `null` when there is none (the generated type is `string | null`).
+ */
+note: string | null, } | { "result": "no_remote", branch: string, } | { "result": "no_changes" } | { "result": "failed", error: string, };

@@ -126,6 +126,10 @@ describe('groupWorktrees', () => {
     expect(
       groupWorktrees([entry('t1', 'api', false), entry('t1', 'web', null)])[0].isDirty
     ).toBeNull();
+    // A known change wins over an unreadable one, so the page can still force the removal.
+    expect(groupWorktrees([entry('t1', 'api', true), entry('t1', 'web', null)])[0].isDirty).toBe(
+      true
+    );
   });
 
   it('leaves a one-repository worktree as it is', () => {

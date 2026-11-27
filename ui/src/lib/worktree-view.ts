@@ -108,9 +108,10 @@ export function groupWorktrees(list: WorktreeEntry[]): WorktreeGroup[] {
       continue;
     }
     group.repos.push(w.repo);
+    // Known changes win (the remove dialog then forces past them), else unknown, else clean.
     const a = group.isDirty ?? null;
     const b = w.isDirty ?? null;
-    group.isDirty = a === null || b === null ? null : a || b;
+    group.isDirty = a === true || b === true ? true : a === null || b === null ? null : false;
   }
   return [...groups.values()].map((g) => ({ ...g, repos: [...g.repos].sort() }));
 }

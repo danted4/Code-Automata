@@ -6,7 +6,7 @@
 import type { Phase } from '@/lib/api/types/Phase';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
-import { changedRepos, ROOT_REPO } from '@/lib/review-summary';
+import { changedRepos, isWorkspaceTask, taskRepos } from '@/lib/review-summary';
 
 export const PHASES: Phase[] = ['planning', 'in_progress', 'ai_review', 'human_review', 'done'];
 
@@ -192,8 +192,8 @@ export function statusBadge(status: TaskStatus): { label: string; bg: string } {
  * are any, else the ones the plan named for its subtasks. None for a one-repository project.
  */
 export function repoChips(task: Task): string[] {
-  const repos = Object.keys(task.baseCommits ?? {});
-  if (repos.length === 0 || repos.includes(ROOT_REPO)) return [];
+  if (!isWorkspaceTask(task)) return [];
+  const repos = taskRepos(task);
   const changed = changedRepos(task);
   if (changed.length) return changed;
   const planned = new Set((task.subtasks ?? []).flatMap((s) => s.repos ?? []));

@@ -213,6 +213,9 @@ pub struct RepoChanges {
     /// How many files changed in all.
     #[cfg_attr(feature = "ts", ts(as = "f64"))]
     pub total: usize,
+    /// Whether the repository has an `origin` remote: without one its work cannot be pushed, and
+    /// Human Review says so instead of offering a pull request.
+    pub has_remote: bool,
 }
 
 /// A repository's check commands and where they come from (see [`Engine::repo_checks`]).
@@ -412,10 +415,16 @@ impl Engine {
                 git::changed_files(main.main_checkout(), base, Some(&branch)).await?
             };
             if total > 0 {
+                let main = self.inner.repo_worktrees(&w.repo)?;
+                let has_remote =
+                    git::run_git(main.main_checkout(), &["remote", "get-url", "origin"])
+                        .await
+                        .is_ok();
                 out.push(RepoChanges {
                     repo: w.repo,
                     files,
                     total,
+                    has_remote,
                 });
             }
         }

@@ -41,12 +41,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
 import type { PrReport } from '@/lib/api/types/PrReport';
+import type { RepoChanges } from '@/lib/api/types/RepoChanges';
 import {
-  ROOT_REPO,
+  isWorkspaceTask,
   prReportToast,
   pullRequestAction,
   pushedNow,
   repoPrButton,
+  repoPrRowText,
   repoPrViews,
   reviewSummary,
   type RepoPrView,
@@ -70,17 +72,29 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
   /** What "Create pull requests" last did here: links before the reload, failures, no remote. */
   const [report, setReport] = useState<PrReport | null>(null);
   const summary = useMemo(() => (task ? reviewSummary(task) : null), [task]);
+  /** A workspace task's changes per repository: which repositories have no remote. */
+  const [changes, setChanges] = useState<RepoChanges[] | null>(null);
+  const workspace = !!task && isWorkspaceTask(task);
+  useEffect(() => {
+    if (!open || !workspace) return;
+    let live = true;
+    api.tasks
+      .changes(taskId)
+      .then((c) => live && setChanges(c))
+      .catch(() => live && setChanges(null));
+    return () => {
+      live = false;
+    };
+  }, [open, workspace, taskId, task?.updatedAt]);
   if (!task || !summary) return null;
 
   const branch = taskBranch(task.id);
   const inReview = task.phase === 'human_review';
-  const repos = Object.keys(task.baseCommits ?? {});
-  const workspace = repos.length > 0 && !repos.includes(ROOT_REPO);
   const onlyRow = report?.rows[0];
   const prAction = pullRequestAction(task, pushedNow(onlyRow));
   const prUrl = prAction.url;
   const noRemote = onlyRow?.result.result === 'no_remote' ? onlyRow.result.branch : null;
-  const repoViews = workspace ? repoPrViews(task, report) : [];
+  const repoViews = workspace ? repoPrViews(task, report, changes) : [];
   const repoButton = workspace ? repoPrButton(repoViews) : null;
 
   const setOpen = (next: boolean) => {
@@ -631,50 +645,36 @@ function Attention({ lines }: { lines: string[] }) {
 function RepoPrRow({ view, taskId }: { view: RepoPrView; taskId: string }) {
   const projectPath = useProjectStore((s) => s.projectPath);
   const path = worktreePath(projectPath, taskId, view.repo);
-  const muted = { color: 'var(--color-text-muted)' };
-  let detail: React.ReactNode;
-  switch (view.state) {
-    case 'no_changes':
-      detail = <span style={muted}>No changes</span>;
-      break;
-    case 'no_remote':
-      detail = (
-        <span style={{ color: 'var(--color-warning)' }}>
-          No remote: the changes are on {view.branch}
+  const words = repoPrRowText(view);
+  const tone = {
+    muted: 'var(--color-text-muted)',
+    warning: 'var(--color-warning)',
+    error: 'var(--color-error)',
+  }[words.tone];
+  const action = view.state === 'action' ? view.action : null;
+  const note = view.state === 'action' ? (view.note ?? action?.pushedNote ?? null) : null;
+  const detail = (
+    <span className="flex flex-wrap items-center gap-2">
+      {action?.url && (
+        <a
+          href={action.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 underline"
+          style={{ color: 'var(--color-primary)' }}
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          {action.linkLabel}
+        </a>
+      )}
+      <span style={{ color: tone }}>{words.text}</span>
+      {note && (
+        <span className="basis-full" style={{ color: 'var(--color-text-secondary)' }}>
+          {note}
         </span>
-      );
-      break;
-    case 'failed':
-      detail = <span style={{ color: 'var(--color-error)' }}>Failed: {view.error}</span>;
-      break;
-    case 'action': {
-      const a = view.action;
-      detail = (
-        <span className="flex flex-wrap items-center gap-2">
-          {a.url && (
-            <a
-              href={a.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 underline"
-              style={{ color: 'var(--color-primary)' }}
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              {a.linkLabel}
-            </a>
-          )}
-          <span style={muted}>
-            {a.kind === 'current'
-              ? 'Up to date'
-              : a.kind === 'update'
-                ? 'Not pushed yet: new work'
-                : 'No pull request yet'}
-          </span>
-        </span>
-      );
-      break;
-    }
-  }
+      )}
+    </span>
+  );
   return (
     <li
       className="flex flex-wrap items-center gap-2 text-xs"

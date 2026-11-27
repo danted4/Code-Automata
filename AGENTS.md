@@ -58,7 +58,7 @@ yarn typecheck
 yarn test           # Vitest
 yarn build          # typecheck + vite build into ui/dist
 yarn format         # Prettier
-yarn e2e            # after `cargo build` and `yarn build`: ten agent-browser scenarios
+yarn e2e            # after `cargo build` and `yarn build`: eleven agent-browser scenarios
 ```
 
 Releases: `.github/workflows/release.yml` builds the installers (universal macOS DMG, Windows NSIS, Linux AppImage and deb) on a `v*` tag that matches the version in `Cargo.toml` and `ui/package.json`, and creates a **draft** release with `latest.json` (the updater's manifest) and `checksums.sha256`. Run it by hand without a tag for a dry run (workflow artifacts only). Updates are signed with the `TAURI_SIGNING_PRIVATE_KEY` secret. A local `cargo tauri build` with bundles needs that key too (`TAURI_SIGNING_PRIVATE_KEY="$(cat <key file>)"`), or `--config '{"bundle":{"createUpdaterArtifacts":false}}'`. Installers are not code-signed.

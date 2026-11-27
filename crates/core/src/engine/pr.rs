@@ -62,7 +62,7 @@ pub enum PrResult {
     /// Opened, updated or already up to date.
     Pushed {
         pull_request: PullRequest,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        /// Sent as `null` when there is none (the generated type is `string | null`).
         note: Option<String>,
     },
     /// No `origin` remote: the work is on the task branch in this repository.
@@ -114,7 +114,7 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrReport> {
     }
 
     // A one-repository task keeps 3.0's behaviour: a failure is the call's error. No remote is
-    // a row, not an error, here; the single-result route (the pre-3.1 UI) refuses it.
+    // a row, not an error.
     if task.base_commits.contains_key(ROOT_REPO) {
         let result = match create_one(inner, &task, ROOT_REPO, &[]).await? {
             Some(outcome) => {
@@ -818,6 +818,30 @@ async fn open_pr(inner: &Inner, gh: &Path, pr: &PrTarget<'_>, task: &Task) -> Re
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_field_of_a_report_is_sent_as_its_generated_type_says() {
+        let row = PrRow {
+            repo: "api".into(),
+            result: PrResult::Pushed {
+                pull_request: PullRequest {
+                    url: None,
+                    host: Some(PrHost::Other),
+                    pushed_checkpoint: None,
+                },
+                note: None,
+            },
+        };
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["result"]["note"], serde_json::Value::Null);
+        assert!(json["result"].as_object().unwrap().contains_key("note"));
+        assert!(
+            json["result"]["pullRequest"]
+                .as_object()
+                .unwrap()
+                .contains_key("url")
+        );
+    }
 
     #[test]
     fn remote_hosts_are_read_from_every_url_form() {

@@ -8,6 +8,7 @@ import type { PrHost } from '@/lib/api/types/PrHost';
 import type { PullRequest } from '@/lib/api/types/PullRequest';
 import type { PrReport } from '@/lib/api/types/PrReport';
 import type { PrRow } from '@/lib/api/types/PrRow';
+import type { RepoChanges } from '@/lib/api/types/RepoChanges';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 
@@ -63,6 +64,12 @@ export function primaryRepo(task: Task): string {
 export function newestDevCheckpoint(task: Task, repo: string = primaryRepo(task)): string | null {
   const devs = (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoints?.[repo]);
   return devs.length ? (devs[devs.length - 1].checkpoints?.[repo] ?? null) : null;
+}
+
+/** Whether the task belongs to a workspace (its repositories are named, not the project itself). */
+export function isWorkspaceTask(task: Task): boolean {
+  const repos = taskRepos(task);
+  return repos.length > 0 && !repos.includes(ROOT_REPO);
 }
 
 /** The repositories some dev subtask changed (last checkpoint is not the base), as the engine. */
@@ -153,7 +160,8 @@ export type PushedNow = { url: string | null; host: PrHost; note: string | null 
 export function pushedNow(row: PrRow | undefined): PushedNow | null {
   if (row?.result.result !== 'pushed') return null;
   const pr = row.result.pullRequest;
-  return { url: pr.url, host: pr.host ?? 'github', note: row.result.note };
+  // `?? null`: a note the server left out is no note (a toast warns only on a real one).
+  return { url: pr.url ?? null, host: pr.host ?? 'github', note: row.result.note ?? null };
 }
 
 /** The pull request section: open a PR, push new work to the open one, or nothing to do. */
@@ -319,16 +327,22 @@ export function worktreePath(
 
 /** One repository's row in a workspace task's pull request section. */
 export type RepoPrView =
-  | { repo: string; state: 'action'; action: PullRequestAction }
+  | { repo: string; state: 'action'; action: PullRequestAction; note: string | null }
   | { repo: string; state: 'no_changes' }
   | { repo: string; state: 'no_remote'; branch: string }
   | { repo: string; state: 'failed'; error: string };
 
 /**
- * A row per repository of the task: what the last "Create pull requests" here said (a failure or
- * a missing remote, which leave no record), else what the task file says.
+ * A row per repository of the task: what the last "Create pull requests" here said (a failure,
+ * no remote, or changes that add up to nothing: none leaves a record), else what the task file
+ * says. `changes` (from the changes endpoint) tells a repository without a remote apart before
+ * any push, so reopening the dialog does not offer to push it again.
  */
-export function repoPrViews(task: Task, report: PrReport | null): RepoPrView[] {
+export function repoPrViews(
+  task: Task,
+  report: PrReport | null,
+  changes: RepoChanges[] | null = null
+): RepoPrView[] {
   const changed = changedRepos(task);
   return taskRepos(task).map((repo): RepoPrView => {
     const row = report?.rows.find((r) => r.repo === repo);
@@ -336,9 +350,47 @@ export function repoPrViews(task: Task, report: PrReport | null): RepoPrView[] {
     if (row?.result.result === 'no_remote') {
       return { repo, state: 'no_remote', branch: row.result.branch };
     }
-    if (!changed.includes(repo)) return { repo, state: 'no_changes' };
-    return { repo, state: 'action', action: pullRequestAction(task, pushedNow(row), repo) };
+    if (row?.result.result === 'no_changes' || !changed.includes(repo)) {
+      return { repo, state: 'no_changes' };
+    }
+    if (changes?.find((c) => c.repo === repo)?.hasRemote === false) {
+      return { repo, state: 'no_remote', branch: taskBranch(task.id) };
+    }
+    const now = pushedNow(row);
+    return {
+      repo,
+      state: 'action',
+      action: pullRequestAction(task, now, repo),
+      note: now?.note ?? null,
+    };
   });
+}
+
+/** A row's status words and how they read (the row's link and note are shown beside them). */
+export function repoPrRowText(view: RepoPrView): {
+  text: string;
+  tone: 'muted' | 'warning' | 'error';
+} {
+  switch (view.state) {
+    case 'no_changes':
+      return { text: 'No changes', tone: 'muted' };
+    case 'no_remote':
+      return { text: `No remote: the changes are on ${view.branch}`, tone: 'warning' };
+    case 'failed':
+      return { text: `Failed: ${view.error}`, tone: 'error' };
+    case 'action':
+      switch (view.action.kind) {
+        case 'current':
+          return {
+            text: view.action.url ? 'Up to date' : 'Up to date: open the pull request on the host',
+            tone: 'muted',
+          };
+        case 'update':
+          return { text: 'New work not pushed yet', tone: 'warning' };
+        case 'create':
+          return { text: 'No pull request yet', tone: 'muted' };
+      }
+  }
 }
 
 /** The one button over a workspace's rows, or null when there is nothing to do. */
@@ -387,9 +439,15 @@ export function prReportToast(
   const parts = [`${n} ${n === 1 ? 'repository' : 'repositories'} pushed`];
   if (failed.length) parts.push(`failed: ${failed.map((r) => r.repo).join(', ')}`);
   if (noRemote.length) parts.push(`no remote: ${noRemote.map((r) => r.repo).join(', ')}`);
+  // What the server said about a push (the branch was only pushed, say), per repository.
+  const notes = pushed.flatMap((r) => {
+    const note = pushedNow(r)?.note;
+    return note ? [`${r.repo}: ${note}`] : [];
+  });
+  parts.push(...notes);
   return {
     title: failed.length ? 'Some pull requests failed' : 'Pull requests updated',
     description: parts.join('; '),
-    warn: failed.length > 0 || noRemote.length > 0 || pushed.some((r) => pushedNow(r)?.note),
+    warn: failed.length > 0 || noRemote.length > 0 || notes.length > 0,
   };
 }

@@ -8,10 +8,9 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ProjectKind } from '@/lib/api/types/ProjectKind';
+import type { ProjectInfo } from '@/lib/project-view';
 
-/** What a project folder was when last opened: a repository, or a workspace of N. */
-export type ProjectInfo = { kind: ProjectKind; repos: number };
+export type { ProjectInfo };
 
 const MAX_RECENT_PROJECTS = 5;
 

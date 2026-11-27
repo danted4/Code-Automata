@@ -12,4 +12,9 @@ files: Array<ChangedFile>,
 /**
  * How many files changed in all.
  */
-total: number, };
+total: number, 
+/**
+ * Whether the repository has an `origin` remote: without one its work cannot be pushed, and
+ * Human Review says so instead of offering a pull request.
+ */
+hasRemote: boolean, };

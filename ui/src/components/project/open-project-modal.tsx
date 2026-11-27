@@ -18,7 +18,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useProjectStore, type ProjectInfo } from '@/store/project-store';
+import { projectLabel } from '@/lib/project-view';
+import { useProjectStore } from '@/store/project-store';
 import { api, errorMessage } from '@/lib/api';
 import { FolderOpen, FolderSearch } from 'lucide-react';
 import { native } from '@/lib/native';
@@ -27,12 +28,6 @@ import { toast } from 'sonner';
 interface OpenProjectModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}
-
-/** "workspace · 3 repositories", or "repository". */
-export function projectLabel(info: ProjectInfo): string {
-  if (info.kind === 'repo') return 'repository';
-  return `workspace · ${info.repos} ${info.repos === 1 ? 'repository' : 'repositories'}`;
 }
 
 export function OpenProjectModal({ open, onOpenChange }: OpenProjectModalProps) {

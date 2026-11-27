@@ -10,7 +10,9 @@ import {
   pullRequestAction,
   pullRequestToast,
   prReportToast,
+  pushedNow,
   repoPrButton,
+  repoPrRowText,
   repoPrViews,
   reposToCheck,
   reviewSummary,
@@ -180,6 +182,59 @@ describe('reviewSummary in a workspace', () => {
 
     const done = repoPrViews(ws({ pullRequests: { api: pr('a1'), web: pr('w1') } }), null);
     expect(repoPrButton(done)).toBeNull();
+  });
+
+  it('treats a note the server left out as no note', () => {
+    // An older server omitted the key; a pushed PR must not toast as a warning.
+    const row = {
+      repo: '.',
+      result: { result: 'pushed', pullRequest: { url: 'u', host: 'github' } },
+    } as unknown as PrRow;
+    expect(pushedNow(row)).toEqual({ url: 'u', host: 'github', note: null });
+    expect(toastFor(row.result).warn).toBe(false);
+  });
+
+  it('shows changes that add up to nothing as no changes, not create', () => {
+    const t = ws({});
+    const report = {
+      rows: [{ repo: 'api', result: { result: 'no_changes' as const } }],
+    };
+    const views = repoPrViews(t, report);
+    expect(views.find((v) => v.repo === 'api')?.state).toBe('no_changes');
+  });
+
+  it('knows a repository without a remote before any push', () => {
+    const changes = [
+      { repo: 'web', files: [], total: 1, hasRemote: false },
+      { repo: 'api', files: [], total: 1, hasRemote: true },
+    ];
+    const views = repoPrViews(ws({}), null, changes);
+    const web = views.find((v) => v.repo === 'web');
+    expect(web).toEqual({ repo: 'web', state: 'no_remote', branch: 'code-automata/task-1' });
+    expect(repoPrRowText(web!).text).toBe('No remote: the changes are on code-automata/task-1');
+    expect(repoPrButton(views)?.label).toBe('Create pull requests');
+  });
+
+  it('shows the server note for a pushed repository', () => {
+    const report = {
+      rows: [
+        {
+          repo: 'api',
+          result: {
+            result: 'pushed' as const,
+            pullRequest: { url: null, host: 'other' as const, pushedCheckpoint: 'a1' },
+            note: 'only pushed',
+          },
+        },
+      ],
+    };
+    const t = ws({ pullRequests: { api: { url: null, host: 'other', pushedCheckpoint: 'a1' } } });
+    const api = repoPrViews(t, report).find((v) => v.repo === 'api');
+    expect(api?.state === 'action' && api.note).toBe('only pushed');
+    expect(repoPrRowText(api!).text).toBe('Up to date: open the pull request on the host');
+    const toast = prReportToast(t, report);
+    expect(toast.description).toContain('api: only pushed');
+    expect(toast.warn).toBe(true);
   });
 
   it('says a one-repository task without a remote pushed nothing', () => {

@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { isWorkspaceTask, taskRepos } from '@/lib/review-summary';
 import {
   Dialog,
   DialogBody,
@@ -24,9 +25,7 @@ export function DeleteTaskModal({ taskId, open, onOpenChange }: TaskModalProps) 
   const task = useTask(taskId);
   const [deleting, setDeleting] = useState(false);
   if (!task) return null;
-  const repos = Object.keys(task.baseCommits ?? {})
-    .filter((r) => r !== '.')
-    .sort();
+  const repos = isWorkspaceTask(task) ? taskRepos(task) : [];
 
   const confirm = async () => {
     setDeleting(true);

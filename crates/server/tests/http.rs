@@ -600,6 +600,7 @@ async fn a_workspace_task_reports_its_changes_and_one_pull_request_row_per_repos
     assert_eq!(changes[0]["repo"], "api", "{changes}");
     assert_eq!(changes[0]["files"][0]["path"], "x.txt");
     assert_eq!(changes[0]["files"][0]["status"], "added");
+    assert_eq!(changes[0]["hasRemote"], false, "{changes}");
     assert_eq!(changes.as_array().unwrap().len(), 1);
 
     let report = h

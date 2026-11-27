@@ -251,6 +251,7 @@ async fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Every field is always sent (`null` when unknown), as the generated UI type says.
 pub struct WorktreeInfo {
     pub task_id: String,
     /// The repository it belongs to ([`ROOT_REPO`] in a one-repository project).
@@ -261,9 +262,7 @@ pub struct WorktreeInfo {
     pub main_repo: PathBuf,
     pub main_branch: String,
     /// Set by `create`; not known for worktrees found by `list`.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_commit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_dirty: Option<bool>,
 }
 
@@ -272,13 +271,9 @@ pub struct WorktreeInfo {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeStatus {
     pub exists: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub has_changes: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
