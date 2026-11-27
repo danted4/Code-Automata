@@ -60,18 +60,84 @@ pub fn output_instructions<T: AgentOutput>() -> String {
     )
 }
 
-fn task_header(task: &Task) -> String {
+/// A workspace task's folder as its agents see it: one worktree per repository, and the agent
+/// instruction files each has. Built by the driver (it looks at the files); `None` for a
+/// one-repository project, whose worktree is the agent's folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Layout {
+    pub repos: Vec<RepoLayout>,
+    /// Instruction files in the workspace folder itself, outside the task folder (absolute).
+    pub root_instructions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoLayout {
+    pub name: String,
+    /// Instruction files at the repository's root, relative to the task folder (`api/CLAUDE.md`).
+    pub instructions: Vec<String>,
+}
+
+/// The files (or folder, for Cursor's rules) an agent should read before working in a folder.
+pub const INSTRUCTION_FILES: [&str; 3] = ["CLAUDE.md", "AGENTS.md", ".cursor/rules"];
+
+fn layout_block(layout: Option<&Layout>) -> String {
+    let Some(layout) = layout else {
+        return String::new();
+    };
+    let mut s = String::from(
+        "\n# Workspace layout\n\nYour working folder holds one folder per repository of this \
+         workspace; each is its own git repository (a worktree on the task's branch):\n\n",
+    );
+    for repo in &layout.repos {
+        if repo.instructions.is_empty() {
+            let _ = writeln!(s, "- `{}/`", repo.name);
+        } else {
+            let _ = writeln!(
+                s,
+                "- `{}/`: its instructions are {}",
+                repo.name,
+                repo.instructions
+                    .iter()
+                    .map(|i| format!("`{i}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    if !layout.root_instructions.is_empty() {
+        let _ = writeln!(
+            s,
+            "\nInstructions for the whole workspace (outside your folder): {}",
+            layout
+                .root_instructions
+                .iter()
+                .map(|i| format!("`{i}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    s.push_str(
+        "\nBefore changing a repository, read its instructions and follow them. Only files \
+         inside a repository's folder are kept: anything written directly in your working folder \
+         is removed after the run. Run git commands inside a repository's folder. Never commit: \
+         the system commits each repository's changes.\n",
+    );
+    s
+}
+
+fn task_header(task: &Task, layout: Option<&Layout>) -> String {
     let mut s = format!("**Task:** {}\n", task.title);
     if !task.description.trim().is_empty() {
         let _ = writeln!(s, "**Description:** {}", task.description.trim());
     }
+    s.push_str(&layout_block(layout));
     s
 }
 
 const READ_ONLY_NOTE: &str = "This is a planning step: read the code, but do not create, edit or \
 delete any file and do not run commands that change anything. Anything you change is discarded.";
 
-pub fn questions(task: &Task) -> String {
+pub fn questions(task: &Task, layout: Option<&Layout>) -> String {
     format!(
         "You are an AI planning assistant helping to plan the following task.\n\n{}\n\
          # Planning: clarifying questions\n\n\
@@ -81,7 +147,7 @@ pub fn questions(task: &Task) -> String {
          edge cases and error handling, performance, and how the result should be tested.\n\n\
          Ask between 3 and 10 questions. Give each 2 to 5 short options where options make \
          sense (the user can always add a note), and mark whether it must be answered.\n\n{READ_ONLY_NOTE}{}",
-        task_header(task),
+        task_header(task, layout),
         output_instructions::<QuestionsOut>()
     )
 }
@@ -138,14 +204,14 @@ fn answers_block(task: &Task) -> String {
     s
 }
 
-pub fn plan(task: &Task, settings: &Settings) -> String {
+pub fn plan(task: &Task, settings: &Settings, layout: Option<&Layout>) -> String {
     let template = settings
         .prompts
         .plan
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or(DEFAULT_PLAN_TEMPLATE);
-    let header = task_header(task);
+    let header = task_header(task, layout);
     let answers = answers_block(task);
     format!(
         "{}\n\n{READ_ONLY_NOTE}{}",
@@ -154,12 +220,12 @@ pub fn plan(task: &Task, settings: &Settings) -> String {
     )
 }
 
-pub fn plan_revision(task: &Task, feedback: &str) -> String {
+pub fn plan_revision(task: &Task, feedback: &str, layout: Option<&Layout>) -> String {
     format!(
         "You are an AI planning assistant. Revise the implementation plan below according to the \
          user's feedback. Keep what the feedback does not touch.\n\n{}\n\
          # Current plan\n\n{}\n\n# The user's feedback\n\n{}\n\n{READ_ONLY_NOTE}{}",
-        task_header(task),
+        task_header(task, layout),
         task.planning.plan.as_deref().unwrap_or("(no plan yet)"),
         feedback.trim(),
         output_instructions::<PlanOut>()
@@ -187,17 +253,23 @@ fixed, it belongs in a dev subtask.
 - Give each a short title (3 to 6 words), a detailed `detail`, and optionally a present-tense \
 `progressLabel` (\"Adding validation\").";
 
-pub fn subtasks(task: &Task, settings: &Settings) -> String {
+pub fn subtasks(task: &Task, settings: &Settings, layout: Option<&Layout>) -> String {
     let template = settings
         .prompts
         .subtasks
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or(DEFAULT_SUBTASKS_TEMPLATE);
-    let header = task_header(task);
+    let header = task_header(task, layout);
     let plan = task.planning.plan.clone().unwrap_or_default();
+    let repos_note = if layout.is_some() {
+        "\n\nThis is a workspace of several repositories: give each subtask `repos`, the \
+         repository folders it changes (or, for a QA subtask, checks)."
+    } else {
+        ""
+    };
     format!(
-        "{}\n\n{READ_ONLY_NOTE}{}",
+        "{}{repos_note}\n\n{READ_ONLY_NOTE}{}",
         render(template, &[("task", &header), ("plan", &plan)]),
         output_instructions::<SubtasksOut>()
     )
@@ -311,12 +383,17 @@ fn capitalize(s: &str) -> String {
 
 /// A dev subtask, with everything the agent needs. `resume` carries the partial work when a
 /// previous attempt was interrupted and this is a fresh session.
-pub fn dev(task: &Task, subtask: &Subtask, resume: Option<&RepoDiffs>) -> String {
+pub fn dev(
+    task: &Task,
+    subtask: &Subtask,
+    resume: Option<&RepoDiffs>,
+    layout: Option<&Layout>,
+) -> String {
     let mut s = format!(
         "You are a developer working through an approved plan one subtask at a time.\n\n{}\n\
          # Approved plan\n\n{}\n\n# Subtasks\n\n{}{}\n\
          # Your subtask: {} ({})\n\n{}\n",
-        task_header(task),
+        task_header(task, layout),
         task.planning.plan.as_deref().unwrap_or("(no plan)"),
         subtask_list(task, &subtask.id),
         handoffs(task),
@@ -324,6 +401,19 @@ pub fn dev(task: &Task, subtask: &Subtask, resume: Option<&RepoDiffs>) -> String
         subtask.id,
         subtask.detail.trim(),
     );
+    if !subtask.repos.is_empty() {
+        let _ = writeln!(
+            s,
+            "\nThe plan says this subtask changes: {}. Change other repositories too if the work \
+             needs it.",
+            subtask
+                .repos
+                .iter()
+                .map(|r| format!("`{r}/`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     if let Some(round) = subtask.rework_round {
         let _ = write!(
             s,
@@ -359,7 +449,7 @@ pub fn resume_same_session(diff: &RepoDiffs) -> String {
     )
 }
 
-pub fn qa(task: &Task, subtask: &Subtask) -> String {
+pub fn qa(task: &Task, subtask: &Subtask, layout: Option<&Layout>) -> String {
     let done: String = task
         .subtasks
         .iter()
@@ -379,7 +469,7 @@ pub fn qa(task: &Task, subtask: &Subtask) -> String {
          and report each problem found as one concrete finding (what, where, how to see it). \
          `passed` is true only if there is nothing that must be fixed. If the check needs a person, \
          say so in the summary and list what they should look at as findings, with `passed` true.{}",
-        task_header(task),
+        task_header(task, layout),
         task.planning.plan.as_deref().unwrap_or("(no plan)"),
         if done.is_empty() {
             "(none)\n".to_string()
@@ -393,7 +483,7 @@ pub fn qa(task: &Task, subtask: &Subtask) -> String {
     )
 }
 
-pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs) -> String {
+pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs, layout: Option<&Layout>) -> String {
     format!(
         "A developer was interrupted while working on a subtask. Judge the state they left; do \
          not change anything.\n\n{}\n# The subtask: {} ({})\n\n{}\n\n# What is in the \
@@ -401,7 +491,7 @@ pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs) -> String {
          Answer `done` if the subtask is complete as it stands, `partial` if it is part-way and \
          the changes are a good base, or `broken` if the changes should be thrown away and the \
          subtask redone.{}",
-        task_header(task),
+        task_header(task, layout),
         subtask.title,
         subtask.id,
         subtask.detail.trim(),
@@ -460,7 +550,7 @@ mod tests {
     #[test]
     fn a_dev_prompt_carries_plan_list_handoffs_and_answer_format() {
         let t = task();
-        let p = dev(&t, &t.subtasks[1], None);
+        let p = dev(&t, &t.subtasks[1], None, None);
         assert!(p.contains("## Steps"), "plan missing");
         assert!(p.contains("[✓ done] dev-1"));
         assert!(p.contains("[→ (this one)] dev-2"));
@@ -479,7 +569,7 @@ mod tests {
             truncated: false,
         };
         let diff = RepoDiffs(vec![(ROOT_REPO.to_string(), diff)]);
-        let p = dev(&t, &t.subtasks[1], Some(&diff));
+        let p = dev(&t, &t.subtasks[1], Some(&diff), None);
         assert!(p.contains("Resuming an interrupted attempt"));
         assert!(p.contains("+fn next() {}"));
         assert!(p.contains("src/new.rs"));
@@ -490,7 +580,7 @@ mod tests {
     fn custom_templates_replace_only_the_editable_part() {
         let mut settings = Settings::default();
         settings.prompts.plan = Some("CUSTOM for {{task}}".into());
-        let p = plan(&task(), &settings);
+        let p = plan(&task(), &settings, None);
         assert!(p.starts_with("CUSTOM for **Task:** Add pagination"));
         assert!(
             p.contains("# Answer format"),
@@ -501,9 +591,40 @@ mod tests {
     #[test]
     fn qa_prompts_forbid_edits_and_ask_for_a_verdict() {
         let t = task();
-        let p = qa(&t, &t.subtasks[2]);
+        let p = qa(&t, &t.subtasks[2], None);
         assert!(p.contains("do not edit"));
         assert!(p.contains("\"passed\""));
         assert!(p.contains("dev-1: Cursor query"));
+    }
+
+    #[test]
+    fn a_workspace_prompt_names_each_repository_and_its_instructions() {
+        let mut t = task();
+        t.subtasks[1].repos = vec!["api".into()];
+        let layout = Layout {
+            repos: vec![
+                RepoLayout {
+                    name: "api".into(),
+                    instructions: vec!["api/CLAUDE.md".into(), "api/AGENTS.md".into()],
+                },
+                RepoLayout {
+                    name: "web".into(),
+                    instructions: vec![],
+                },
+            ],
+            root_instructions: vec!["/ws/CLAUDE.md".into()],
+        };
+        let p = dev(&t, &t.subtasks[1], None, Some(&layout));
+        assert!(p.contains("# Workspace layout"));
+        assert!(p.contains("- `api/`: its instructions are `api/CLAUDE.md`, `api/AGENTS.md`"));
+        assert!(p.contains("- `web/`\n"));
+        assert!(p.contains("`/ws/CLAUDE.md`"));
+        assert!(p.contains("removed after the run"));
+        assert!(p.contains("this subtask changes: `api/`"));
+        let s = subtasks(&t, &Settings::default(), Some(&layout));
+        assert!(s.contains("give each subtask `repos`"));
+        // A one-repository project says nothing of it.
+        assert!(!dev(&t, &t.subtasks[0], None, None).contains("Workspace layout"));
+        assert!(!subtasks(&t, &Settings::default(), None).contains("`repos`"));
     }
 }

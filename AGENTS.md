@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## What this is
 
-Code-Automata runs AI coding agents through a five-phase Kanban workflow, one git worktree per task, inside a project (a git repository) the user opens. Persistence is files on disk under that project's `.code-automata/`, never this repo's working directory.
+Code-Automata runs AI coding agents through a five-phase Kanban workflow, one git worktree per task and repository, inside a project the user opens: a git repository, or a workspace folder of repositories. Persistence is files on disk under that project's `.code-automata/`, never this repo's working directory.
 
 This is **3.0**: a Rust core plus a React UI in a Tauri 2 desktop app. 2.2.4 (Electron + Next.js) is on the `main-backup` branch. 3.0 owes it nothing: no migration, no compatibility, and its design decisions are not binding.
 
@@ -69,7 +69,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml` fail on a
 
 **Project scoping.** Every UI request goes through `ui/src/lib/api/client.ts`, which sends the open project's path (`X-Project-Path`). Never assume the process's working directory is the user's project.
 
-**On-disk layout.** Everything lives under `<repo root>/.code-automata/`, which the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs beside it. `worktrees/<id>/` is the worktree on branch `code-automata/<id>`. There is no aggregate file.
+**On-disk layout.** Everything lives under `<project root>/.code-automata/`, which in a repository the app adds to `.git/info/exclude`. `tasks/<id>/task.json` holds the task (schema in `crates/core/src/task.rs`, example in `crates/core/tests/fixtures/task-example.json`) with its logs beside it. `worktrees/<id>/` is the worktree on branch `code-automata/<id>`; in a workspace it is a plain folder holding `worktrees/<id>/<repo>/`, one worktree per repository, each on `code-automata/<id>` in its repository. There is no aggregate file.
 
 **Workflow.** The phases are fixed: `planning → in_progress → ai_review → human_review → done`. Allowed moves, including rework, replan and reopen, are the table in `crates/core/src/transitions.rs`. Do not add phases. Dragging a card only moves it; agents are started, paused and resumed by buttons.
 

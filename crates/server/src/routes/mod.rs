@@ -46,6 +46,7 @@ pub fn api() -> Router<Arc<AppState>> {
         )
         .route("/api/tasks/{id}/pull-request", post(tasks::pull_request))
         .route("/api/tasks/{id}/pull-requests", post(tasks::pull_requests))
+        .route("/api/tasks/{id}/changes", get(tasks::changes))
         .route("/api/tasks/{id}/runs", get(tasks::runs))
         .route("/api/tasks/{id}/runs/{name}", get(tasks::run_events))
         .route("/api/worktrees", get(worktrees::list))

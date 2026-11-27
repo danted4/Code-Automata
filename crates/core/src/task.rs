@@ -431,6 +431,11 @@ pub struct Run {
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// For a dev run: each repository's HEAD when the run started. Commits after it are this
+    /// run's (a checkpoint commit a crash left unrecorded, or one the agent made), so a resume or a
+    /// dropped run undoes those and never anything older, such as an earlier plan's checkpoints.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub heads: BTreeMap<String, String>,
 }
 
 impl Run {
@@ -450,6 +455,7 @@ impl Run {
             started_at: now,
             updated_at: now,
             error: None,
+            heads: BTreeMap::new(),
         }
     }
 }
@@ -691,6 +697,9 @@ impl Task {
         }
         if let Some(run) = &self.run {
             self.validate_run(run)?;
+            for repo in run.heads.keys() {
+                self.known_repo(repo, "the run")?;
+            }
         }
         Ok(())
     }

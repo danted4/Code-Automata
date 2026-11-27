@@ -1090,6 +1090,127 @@ impl WorkingDiff {
     }
 }
 
+/// One file a task changed in a repository, against the task's base commit.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    pub path: String,
+    pub status: FileChange,
+    /// Lines added and removed; none for a binary file or a new file not yet committed.
+    #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
+    pub added: Option<u64>,
+    #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
+    pub deleted: Option<u64>,
+}
+
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileChange {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+/// Most files a change list holds; the rest are counted, not listed.
+pub const MAX_CHANGED_FILES: usize = 500;
+
+/// The files that differ from `base`: in the worktree at `dir` (committed or not, plus new files
+/// not yet tracked) when `tip` is `None`, else between `base` and the commit `tip` (run in the
+/// main checkout, for a task whose worktree was removed). Returns the list (at most
+/// [`MAX_CHANGED_FILES`]) and how many files changed in all.
+pub async fn changed_files(
+    dir: &Path,
+    base: &str,
+    tip: Option<&str>,
+) -> Result<(Vec<ChangedFile>, usize)> {
+    let mut range = vec![base];
+    if let Some(tip) = tip {
+        range.push(tip);
+    }
+    let mut args = vec![
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "-M",
+        "-z",
+        "--numstat",
+    ];
+    args.extend(&range);
+    let numstat = run_git_raw(dir, &args).await?;
+    let mut args = vec![
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "-M",
+        "-z",
+        "--name-status",
+    ];
+    args.extend(&range);
+    let names = run_git_raw(dir, &args).await?;
+
+    // --numstat -z: "added\tdeleted\tpath\0", or for a rename "added\tdeleted\t\0old\0new\0".
+    let mut counts: BTreeMap<String, (Option<u64>, Option<u64>)> = BTreeMap::new();
+    let mut fields = numstat
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned());
+    while let Some(field) = fields.next() {
+        let mut parts = field.splitn(3, '\t');
+        let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            let _old = fields.next();
+            fields.next().unwrap_or_default()
+        } else {
+            path.to_string()
+        };
+        counts.insert(path, (a.parse().ok(), d.parse().ok()));
+    }
+
+    let mut files = Vec::new();
+    let mut fields = names
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).into_owned());
+    while let Some(code) = fields.next() {
+        let status = match code.chars().next() {
+            Some('A') => FileChange::Added,
+            Some('D') => FileChange::Deleted,
+            Some('R') => FileChange::Renamed,
+            Some(_) => FileChange::Modified,
+            None => continue,
+        };
+        if status == FileChange::Renamed {
+            let _old = fields.next();
+        }
+        let Some(path) = fields.next() else { break };
+        let (added, deleted) = counts.get(&path).copied().unwrap_or((None, None));
+        files.push(ChangedFile {
+            path,
+            status,
+            added,
+            deleted,
+        });
+    }
+    if tip.is_none() {
+        let raw = run_git_raw(dir, &["ls-files", "--others", "--exclude-standard", "-z"]).await?;
+        for path in raw.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            files.push(ChangedFile {
+                path: String::from_utf8_lossy(path).into_owned(),
+                status: FileChange::Added,
+                added: None,
+                deleted: None,
+            });
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let total = files.len();
+    files.truncate(MAX_CHANGED_FILES);
+    Ok((files, total))
+}
+
 pub async fn head(worktree: &Path) -> Result<String> {
     run_git(worktree, &["rev-parse", "HEAD"]).await
 }

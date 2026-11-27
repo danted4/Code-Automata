@@ -29,7 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import type { Task } from '@/lib/api/types/Task';
-import { ROOT_REPO, primaryRepo } from '@/lib/review-summary';
+import { ROOT_REPO } from '@/lib/review-summary';
 import {
   ACTION_LABELS,
   PHASE_LABELS,
@@ -539,20 +539,26 @@ function ReviewTab({ task }: { task: Task }) {
       </p>
     );
   }
-  const checks = review.checks?.[primaryRepo(task)] ?? null;
+  const allChecks = Object.entries(review.checks ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return (
     <div data-testid="task-detail-review" className="space-y-4 text-sm">
       <section data-testid="task-detail-checks" className="space-y-2">
         <h3 className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>
           Automated checks
         </h3>
-        {checks ? (
-          <>
+        {allChecks.length === 0 && <p style={muted}>Not run yet.</p>}
+        {allChecks.map(([repo, checks]) => (
+          <div key={repo} className="space-y-2" data-repo={repo}>
             <div className="flex flex-wrap items-center gap-2">
               {checks.passed ? (
                 <CheckCircle2 className="w-4 h-4" style={{ color: 'var(--color-success)' }} />
               ) : (
                 <XCircle className="w-4 h-4" style={{ color: 'var(--color-error)' }} />
+              )}
+              {repo !== ROOT_REPO && (
+                <span className="font-mono text-xs" style={secondary}>
+                  {repo}/
+                </span>
               )}
               <span
                 data-testid="task-detail-checks-result"
@@ -577,10 +583,8 @@ function ReviewTab({ task }: { task: Task }) {
                 {checks.details}
               </pre>
             )}
-          </>
-        ) : (
-          <p style={muted}>Not run yet.</p>
-        )}
+          </div>
+        ))}
       </section>
 
       <section className="space-y-1">

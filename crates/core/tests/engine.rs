@@ -1723,3 +1723,84 @@ fn pushed(report: ca_core::engine::pr::PrReport) -> ca_core::task::PullRequest {
         other => panic!("expected a pushed pull request, got {other:?}"),
     }
 }
+
+/// Plan A is done; a replan's first subtask is paused mid-run. Returns the engine, the task id and
+/// plan A's last commit.
+async fn replan_paused_on_dev_1(env: &Env) -> (Engine, String, String) {
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Replan", "", env.agent(2, vec![]), false)
+        .await
+        .unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview);
+    let wt = env.worktree(&task.id);
+    let plan_a = git(&wt, &["rev-parse", "HEAD"]);
+    assert_eq!(commits_since(&wt, t.base_commit(ROOT_REPO).unwrap()), 2);
+
+    // The new plan's dev-1 hangs once, after writing something.
+    env.agent(
+        2,
+        vec![hang_once(
+            env,
+            "(dev-1)",
+            vec![json!({ "write": { "path": "new.txt", "content": "new" } })],
+        )],
+    );
+    engine.move_task(&task.id, Phase::Planning).await.unwrap();
+    engine.approve_plan(&task.id).await.unwrap();
+    wait_for(
+        &TaskStore::new(engine.project()),
+        &task.id,
+        "the new dev-1 running",
+        |t| {
+            t.run
+                .as_ref()
+                .is_some_and(|r| r.subtask_id.as_deref() == Some("dev-1") && r.pid.is_some())
+                && wt.join("new.txt").exists()
+        },
+    )
+    .await;
+    engine.pause(&task.id).await.unwrap();
+    engine.wait_idle(&task.id).await;
+    (engine, task.id, plan_a)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resuming_after_a_replan_keeps_the_earlier_plans_commits() {
+    let env = Env::new().await;
+    let (engine, id, plan_a) = replan_paused_on_dev_1(&env).await;
+    let wt = env.worktree(&id);
+    engine.resume(&id).await.unwrap();
+    engine.wait_idle(&id).await;
+    let t = engine.get_task(&id).await.unwrap().unwrap();
+    assert_eq!(t.phase, Phase::HumanReview, "{:?}", t.run);
+    assert!(
+        std::process::Command::new("git")
+            .args(["merge-base", "--is-ancestor", &plan_a, "HEAD"])
+            .current_dir(&wt)
+            .status()
+            .unwrap()
+            .success(),
+        "plan A's commits were rewound"
+    );
+    assert!(wt.join("new.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn skipping_a_halted_subtask_after_a_replan_drops_only_its_own_work() {
+    let env = Env::new().await;
+    let (engine, id, plan_a) = replan_paused_on_dev_1(&env).await;
+    let wt = env.worktree(&id);
+    engine.skip_subtask(&id, "dev-1").await.unwrap();
+    assert_eq!(
+        git(&wt, &["rev-parse", "HEAD"]),
+        plan_a,
+        "plan A is still the branch"
+    );
+    assert!(
+        !wt.join("new.txt").exists(),
+        "the dropped run's work is gone"
+    );
+    assert!(wt.join("dev-1.txt").exists(), "plan A's work is not");
+}

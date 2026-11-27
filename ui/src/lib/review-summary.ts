@@ -64,6 +64,20 @@ export function newestDevCheckpoint(task: Task, repo: string = primaryRepo(task)
   return devs.length ? (devs[devs.length - 1].checkpoints?.[repo] ?? null) : null;
 }
 
+/** The repositories some dev subtask changed (last checkpoint is not the base), as the engine. */
+export function changedRepos(task: Task): string[] {
+  return taskRepos(task).filter((repo) => {
+    const newest = newestDevCheckpoint(task, repo);
+    return newest !== null && newest !== task.baseCommits?.[repo];
+  });
+}
+
+/** The repositories whose checks count: the project itself, or in a workspace the changed ones. */
+export function reposToCheck(task: Task): string[] {
+  const repos = taskRepos(task);
+  return repos.length === 0 || repos.includes(ROOT_REPO) ? [ROOT_REPO] : changedRepos(task);
+}
+
 /**
  * The commit `repo`'s checks should have run against: its last dev checkpoint, else the commit
  * its branch started from (as the engine decides it).
@@ -86,9 +100,22 @@ export function reviewSummary(task: Task): ReviewSummary {
     .filter((s) => s.kind === 'qa')
     .map((subtask) => ({ subtask, verdict: subtask.verdict ?? null }));
 
-  const checks = task.review?.checks?.[primaryRepo(task)] ?? null;
-  const last = lastDevCheckpoint(task);
-  const checksStale = !!checks && !!last && checks.commit !== last;
+  // Every repository whose checks count; shown is the first that failed, else the first.
+  const counted = reposToCheck(task);
+  const all = task.review?.checks ?? {};
+  const isStale = (repo: string) => {
+    const c = all[repo];
+    const last = lastDevCheckpoint(task, repo);
+    return !!c && !!last && c.commit !== last;
+  };
+  const missingIn = counted.filter((r) => !all[r]);
+  const failedIn = counted.filter((r) => all[r] && !all[r].passed);
+  const staleIn = counted.filter((r) => all[r]?.passed && isStale(r));
+  const shown = failedIn[0] ?? counted.find((r) => all[r]) ?? primaryRepo(task);
+  const checks = all[shown] ?? null;
+  const checksStale = isStale(shown) || staleIn.length > 0;
+  const where = (repos: string[]) =>
+    repos.length && !repos.includes(ROOT_REPO) ? ` in ${repos.join(', ')}` : '';
 
   const feedback = task.review?.feedback?.trim();
   const reworkCount = task.review?.reworkCount ?? 0;
@@ -102,9 +129,11 @@ export function reviewSummary(task: Task): ReviewSummary {
 
   const attention: string[] = [];
   if (unresolved) attention.push(unresolved.heading);
-  if (!checks) attention.push('The automated checks did not run');
-  else if (!checks.passed) attention.push('The automated checks failed');
-  else if (checksStale) attention.push('The checks ran against an older commit');
+  if (failedIn.length) attention.push(`The automated checks failed${where(failedIn)}`);
+  if (missingIn.length) attention.push(`The automated checks did not run${where(missingIn)}`);
+  if (!failedIn.length && staleIn.length) {
+    attention.push(`The checks ran against an older commit${where(staleIn)}`);
+  }
   const failedQa = qa.filter((q) => q.verdict && !q.verdict.passed).length;
   if (failedQa) attention.push(`${plural(failedQa, 'QA review')} found problems`);
   const skippedQa = qa.filter((q) => !q.verdict && q.subtask.status === 'skipped').length;
@@ -176,8 +205,14 @@ export function pullRequestAction(
     linkLabel: url ? linkLabel(host) : '',
     pushedNote: url ? null : `${branch} is pushed. Open the pull request on your host.`,
   };
-  const pushed = pr ? (pr.pushedCheckpoint ?? null) : null;
-  const current = pr ? pushed !== null && pushed === newestDevCheckpoint(task) : true;
+  const upToDate = (repo: string) => {
+    const record = task.pullRequests?.[repo];
+    const pushed = record?.pushedCheckpoint ?? null;
+    return pushed !== null && pushed === newestDevCheckpoint(task, repo);
+  };
+  // In a workspace, up to date only when every changed repository's request is.
+  const others = changedRepos(task).filter((r) => r !== primaryRepo(task));
+  const current = pr ? upToDate(primaryRepo(task)) && others.every(upToDate) : true;
   const noun = requestNoun(host);
   if (current) {
     return {

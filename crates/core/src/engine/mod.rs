@@ -202,6 +202,19 @@ impl Inner {
     }
 }
 
+/// The files a task changed in one repository (see [`Engine::changes`]).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoChanges {
+    pub repo: String,
+    /// At most [`git::MAX_CHANGED_FILES`], by path.
+    pub files: Vec<git::ChangedFile>,
+    /// How many files changed in all.
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
+    pub total: usize,
+}
+
 /// One repository's worktree for a task.
 pub(crate) struct RepoWorktree {
     pub repo: String,
@@ -301,12 +314,49 @@ impl Engine {
 
     /// Every worktree under `.code-automata/worktrees/`, with its task's title. A worktree whose
     /// task file exists but cannot be read is not an orphan.
+    ///
+    /// The repositories looked in are the project's as they are now (a workspace may have gained
+    /// one since it was opened) plus every one a task file names; one that is gone or cannot be
+    /// read is skipped (and logged), so it cannot hide the others.
     pub async fn worktrees(&self) -> Result<Vec<WorktreeEntry>> {
-        let mut list = Vec::new();
-        for repo in self.inner.project_repos() {
-            list.extend(self.inner.repo_worktrees(&repo)?.list().await?);
-        }
         let tasks = self.inner.store.list().await?;
+        let mut repos: Vec<String> = match ProjectDir::open(self.inner.project.root()).await {
+            Ok(now) => now.repos().iter().map(|r| r.name.clone()).collect(),
+            Err(_) => self.inner.project_repos(),
+        };
+        for t in &tasks.tasks {
+            for r in t.repos() {
+                if !repos.iter().any(|x| x == r) {
+                    repos.push(r.to_string());
+                }
+            }
+        }
+        repos.sort();
+        let mut list = Vec::new();
+        for repo in repos {
+            let listed = match self.inner.repo_worktrees(&repo) {
+                Ok(w)
+                    if tokio::fs::try_exists(w.main_checkout())
+                        .await
+                        .unwrap_or(false) =>
+                {
+                    w.list().await
+                }
+                Ok(_) => {
+                    log::warn!(
+                        "worktrees: the repository {repo} is gone; its worktrees are not listed"
+                    );
+                    continue;
+                }
+                Err(e) => Err(e),
+            };
+            match listed {
+                Ok(found) => list.extend(found),
+                // A one-repository project has nothing else to show: say why.
+                Err(e) if !self.inner.project.is_workspace() => return Err(e),
+                Err(e) => log::warn!("worktrees: could not list {repo}: {e}"),
+            }
+        }
         let unreadable: Vec<String> = tasks
             .skipped
             .iter()
@@ -327,6 +377,34 @@ impl Engine {
                 }
             })
             .collect())
+    }
+
+    /// The files the task changed in each of its repositories, against each base commit: from the
+    /// worktree (uncommitted work included) when it exists, else from the task branch. Only
+    /// repositories with changes are listed.
+    pub async fn changes(&self, id: &str) -> Result<Vec<RepoChanges>> {
+        let task = self.inner.load(id).await?;
+        let mut out = Vec::new();
+        for w in self.inner.task_worktrees(&task)? {
+            let Some(base) = task.base_commit(&w.repo) else {
+                continue;
+            };
+            let (files, total) = if git::status_at(&w.path).await.exists {
+                git::changed_files(&w.path, base, None).await?
+            } else {
+                let main = self.inner.repo_worktrees(&w.repo)?;
+                let branch = Worktrees::branch_for(id);
+                git::changed_files(main.main_checkout(), base, Some(&branch)).await?
+            };
+            if total > 0 {
+                out.push(RepoChanges {
+                    repo: w.repo,
+                    files,
+                    total,
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Remove a worktree on its own:
@@ -748,14 +826,20 @@ impl Engine {
     /// A halted dev run is being dropped (skip, replan): put the worktree back at the last
     /// checkpoint so its half-done edits (or work parked by a triage) cannot end up in another
     /// subtask's checkpoint.
+    ///
+    /// Only the dropped run's work goes: back to each repository's HEAD when the run started
+    /// (`Run::heads`), never further (after a replan the last checkpoint is the base commit, and an
+    /// earlier plan's commits are still on the branch). A run from before 3.1 has no heads: only
+    /// its uncommitted work is discarded.
     async fn discard_dropped_dev_work(&self, task: &Task) -> Result<()> {
-        if !task.run.as_ref().is_some_and(|r| r.kind == RunKind::Dev) {
+        let Some(run) = task.run.as_ref().filter(|r| r.kind == RunKind::Dev) else {
             return Ok(());
-        }
+        };
         for w in self.inner.task_worktrees(task)? {
-            if let Some(checkpoint) = task.last_dev_checkpoint(&w.repo) {
-                git::unpark_changes(&w.path).await?;
-                git::discard_to(&w.path, checkpoint).await?;
+            git::unpark_changes(&w.path).await?;
+            match run.heads.get(&w.repo) {
+                Some(start) => git::discard_to(&w.path, start).await?,
+                None => git::discard_changes(&w.path).await?,
             }
         }
         Ok(())

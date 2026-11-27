@@ -30,4 +30,10 @@ processStarted?: string | null,
 /**
  * The app process that owns the run; a different boot id means the owner died.
  */
-bootId?: string | null, startedAt: number, updatedAt: number, error?: string | null, };
+bootId?: string | null, startedAt: number, updatedAt: number, error?: string | null, 
+/**
+ * For a dev run: each repository's HEAD when the run started. Commits after it are this
+ * run's (a checkpoint commit a crash left unrecorded, or one the agent made), so a resume or a
+ * dropped run undoes those and never anything older, such as an earlier plan's checkpoints.
+ */
+heads?: { [key in string]: string }, };

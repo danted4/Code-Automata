@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use ca_core::agent::Binaries;
 use ca_core::engine::Engine;
 use ca_core::engine::pr::PrResult;
-use ca_core::engine::settings::{RepoSettings, Settings};
+use ca_core::engine::settings::{CheckCommand, RepoSettings, Settings};
 use ca_core::git;
 use ca_core::{AgentConfig, Phase, PrHost, Provider, Task};
 use common::{TempWorkspace, git};
@@ -57,8 +57,22 @@ impl Env {
     /// A mock agent with `devs` dev subtasks; `writes[i]` are the files dev-(i+1) writes, relative
     /// to the task folder (so `api/x.txt` lands in the api worktree).
     fn agent(&self, writes: &[&[&str]], qa_writes: &[&str]) -> AgentConfig {
-        let mut subtasks: Vec<Value> = (1..=writes.len())
-            .map(|i| json!({ "id": format!("dev-{i}"), "kind": "dev", "title": format!("Step {i}"), "detail": format!("Do step {i}") }))
+        self.agent_with(writes, qa_writes, vec![])
+    }
+
+    /// [`Env::agent`] with `extra` rules played first. Each dev subtask names, as its `repos`, the
+    /// repositories it writes to, plus one that does not exist (which must be dropped).
+    fn agent_with(&self, writes: &[&[&str]], qa_writes: &[&str], extra: Vec<Value>) -> AgentConfig {
+        let mut subtasks: Vec<Value> = writes
+            .iter()
+            .enumerate()
+            .map(|(i, files)| {
+                let mut repos: Vec<&str> = files.iter().filter_map(|f| f.split_once('/')).map(|(r, _)| r).collect();
+                repos.dedup();
+                repos.push("bogus");
+                let i = i + 1;
+                json!({ "id": format!("dev-{i}"), "kind": "dev", "title": format!("Step {i}"), "detail": format!("Do step {i}"), "repos": repos })
+            })
             .collect();
         subtasks
             .push(json!({ "id": "qa-1", "kind": "qa", "title": "Verify", "detail": "Check it" }));
@@ -70,11 +84,12 @@ impl Env {
         qa_steps.push(structured(
             json!({ "passed": true, "summary": "works", "findings": [] }),
         ));
-        let mut rules = vec![
+        let mut rules = extra;
+        rules.extend([
             json!({ "whenPrompt": "# Planning: implementation plan", "steps": [structured(json!({ "plan": PLAN }))] }),
             json!({ "whenPrompt": "Break the approved plan", "steps": [structured(json!({ "subtasks": subtasks }))] }),
             json!({ "whenPrompt": "(qa-1)", "steps": qa_steps }),
-        ];
+        ]);
         for (i, files) in writes.iter().enumerate() {
             let id = format!("dev-{}", i + 1);
             let mut steps: Vec<Value> = files
@@ -99,7 +114,22 @@ impl Env {
         agent
             .options
             .insert("scenario".into(), json!(scenario.to_str().unwrap()));
+        agent.options.insert(
+            "record".into(),
+            json!(self.path("record.ndjson").to_str().unwrap()),
+        );
         agent
+    }
+
+    /// The prompts the mock agent got that contain `needle`.
+    fn prompts_with(&self, needle: &str) -> Vec<String> {
+        std::fs::read_to_string(self.path("record.ndjson"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter_map(|r| r["prompt"].as_str().map(String::from))
+            .filter(|p| p.contains(needle))
+            .collect()
     }
 
     /// A bare remote as `origin` of `repo`.
@@ -316,4 +346,179 @@ async fn a_repository_that_fails_to_get_a_worktree_rolls_back_the_others() {
         )
         .is_empty()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_are_told_the_layout_and_the_planner_names_each_subtasks_repositories() {
+    let env = Env::new(&["api", "web"]).await;
+    std::fs::write(env.ws.repo("api").join("CLAUDE.md"), "api rules\n").unwrap();
+    git(&env.ws.repo("api"), &["add", "-A"]);
+    git(&env.ws.repo("api"), &["commit", "-q", "-m", "rules"]);
+    std::fs::write(env.ws.path.join("AGENTS.md"), "workspace rules\n").unwrap();
+    let agent = env.agent(&[&["api/a.txt"], &["web/w.txt"]], &[]);
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Layout", "", agent, false)
+        .await
+        .unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview, "{:?}", t.run);
+
+    assert_eq!(
+        t.subtask("dev-1").unwrap().repos,
+        ["api"],
+        "bogus is dropped"
+    );
+    assert_eq!(t.subtask("dev-2").unwrap().repos, ["web"]);
+    let plan = env.prompts_with("# Planning: implementation plan");
+    assert!(plan[0].contains("# Workspace layout"), "{}", plan[0]);
+    assert!(plan[0].contains("- `api/`: its instructions are `api/CLAUDE.md`"));
+    assert!(plan[0].contains("- `web/`\n"));
+    assert!(
+        plan[0].contains("AGENTS.md`"),
+        "the workspace's own instructions"
+    );
+    let dev1 = env.prompts_with("(dev-1)");
+    assert!(
+        dev1[0].contains("this subtask changes: `api/`"),
+        "{}",
+        dev1[0]
+    );
+
+    // What changed, per repository, from the worktrees.
+    let changes = engine.changes(&t.id).await.unwrap();
+    let names: Vec<_> = changes.iter().map(|c| c.repo.as_str()).collect();
+    assert_eq!(names, ["api", "web"]);
+    assert_eq!(changes[0].files[0].path, "a.txt");
+    assert_eq!(changes[0].files[0].status, git::FileChange::Added);
+    assert_eq!(changes[0].files[0].added, Some(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checks_failing_in_one_repository_start_a_rework_that_names_it() {
+    let env = Env::new(&["api", "web"]).await;
+    let project = env.ws.project().await;
+    let mut s = Settings::load(&project).await.unwrap();
+    s.repos.get_mut("web").unwrap().checks = Some(vec![CheckCommand {
+        name: "fixed".into(),
+        command: "test -f fixed.txt".into(),
+    }]);
+    s.save(&project).await.unwrap();
+    let rework = json!({ "whenPrompt": "(rework-", "steps": [
+        { "write": { "path": "web/fixed.txt", "content": "fixed" } },
+        { "result": { "text": "done", "structured": { "summary": "fixed", "handoff": "" } } }
+    ]});
+    let agent = env.agent_with(&[&["api/a.txt", "web/w.txt"]], &[], vec![rework]);
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Checks", "", agent, false)
+        .await
+        .unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview, "{:?}", t.run);
+    let rework = t.subtask("rework-1").expect("a rework round");
+    assert!(rework.detail.contains("In web/"), "{}", rework.detail);
+    assert_eq!(rework.checkpoints.keys().collect::<Vec<_>>(), ["web"]);
+    assert!(t.review.checks.values().all(|c| c.passed));
+    assert_eq!(t.review.checks.keys().collect::<Vec<_>>(), ["api", "web"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn github_pull_requests_list_each_other() {
+    let env = Env::new(&["api", "web"]).await;
+    env.remote("api");
+    env.remote("web");
+    let project = env.ws.project().await;
+    let mut s = Settings::load(&project).await.unwrap();
+    for r in s.repos.values_mut() {
+        r.pull_request_host = Some(PrHost::Github);
+    }
+    s.save(&project).await.unwrap();
+    // A fake gh: each repository's PR is named after its folder; edits are logged.
+    let gh = env.path("gh");
+    let log = env.path("gh-edits");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nrepo=$(basename \"$PWD\")\ncase \"$1 $2\" in\n\
+             \"pr view\") exit 1 ;;\n\
+             \"pr create\") echo https://github.com/o/$repo/pull/1 ;;\n\
+             \"pr edit\") printf '%s\\n---\\n' \"$repo: $*\" >> {log} ;;\n\
+             esac\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let agent = env.agent(&[&["api/a.txt", "web/w.txt"]], &[]);
+    let bins = Binaries::from_env()
+        .with_override(Provider::Mock, env!("CARGO_BIN_EXE_mock-agent"))
+        .with_tool("gh", &gh);
+    let engine = Engine::open(project, bins).await.unwrap();
+    let task = engine.create_task("Links", "", agent, false).await.unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview);
+
+    let report = engine.create_pull_request(&t.id).await.unwrap();
+    assert!(
+        report
+            .rows
+            .iter()
+            .all(|r| matches!(r.result, PrResult::Pushed { .. })),
+        "{report:?}"
+    );
+    let edits = std::fs::read_to_string(&log).unwrap();
+    let api_edit = edits
+        .split("---")
+        .find(|e| e.trim_start().starts_with("api:"))
+        .unwrap();
+    let web_edit = edits
+        .split("---")
+        .find(|e| e.trim_start().starts_with("web:"))
+        .unwrap();
+    assert!(
+        api_edit.contains("Part of a change across") && api_edit.contains("o/web/pull/1"),
+        "{api_edit}"
+    );
+    assert!(web_edit.contains("o/api/pull/1"), "{web_edit}");
+    let api_links = api_edit.split("Part of a change across").nth(1).unwrap();
+    assert!(
+        !api_links.contains("o/api/pull/1"),
+        "a PR does not list itself: {api_edit}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_worktree_list_survives_a_repository_that_is_gone_and_sees_a_new_one() {
+    let env = Env::new(&["api", "web"]).await;
+    let agent = env.agent(&[&["api/a.txt"]], &[]);
+    let engine = env.engine().await;
+    let task = engine.create_task("Gone", "", agent, false).await.unwrap();
+    // A repository added after the engine opened gets the task's worktree too.
+    std::fs::create_dir_all(env.ws.repo("lib")).unwrap();
+    common::init_repo(&env.ws.repo("lib"));
+    let t = run_to_end(&engine, &task.id).await;
+    assert_eq!(t.phase, Phase::HumanReview, "{:?}", t.run);
+    assert_eq!(t.repos().collect::<Vec<_>>(), ["api", "lib", "web"]);
+    let listed: Vec<String> = engine
+        .worktrees()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.worktree.repo)
+        .collect();
+    assert_eq!(listed, ["api", "lib", "web"]);
+
+    // web's main checkout is moved away: the list still works and shows the rest.
+    std::fs::rename(env.ws.repo("web"), env.path("web-moved")).unwrap();
+    let listed: Vec<String> = engine
+        .worktrees()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.worktree.repo)
+        .collect();
+    assert_eq!(listed, ["api", "lib"]);
 }

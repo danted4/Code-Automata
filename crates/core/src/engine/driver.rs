@@ -372,6 +372,13 @@ async fn run_agent(
         run.session_id = None;
     }
     run.provider = Some(task.agent.provider);
+    if kind == RunKind::Dev && !resuming {
+        // Where this run's work starts in each repository (see `Run::heads`).
+        run.heads.clear();
+        for w in inner.task_worktrees(task)? {
+            run.heads.insert(w.repo, git::head(&w.path).await?);
+        }
+    }
     let ctx = Ctx {
         inner,
         id,
@@ -391,11 +398,14 @@ async fn run_agent(
         .await?;
     let sub = subtask_id.as_ref().and_then(|s| task.subtask(s)).cloned();
     let worktrees = inner.task_worktrees(&task)?;
+    let layout = layout_for(inner, &worktrees).await;
+    let layout = layout.as_ref();
 
     match step {
         AgentStep::Questions => {
             let Attempt::Answer(q) =
-                attempt::<QuestionsOut>(&ctx, &task, prompts::questions(&task), None).await?
+                attempt::<QuestionsOut>(&ctx, &task, prompts::questions(&task, layout), None)
+                    .await?
             else {
                 return Ok(false);
             };
@@ -418,8 +428,8 @@ async fn run_agent(
         }
         AgentStep::Plan => {
             let prompt = match &task.planning.revision {
-                Some(feedback) => prompts::plan_revision(&task, feedback),
-                None => prompts::plan(&task, settings),
+                Some(feedback) => prompts::plan_revision(&task, feedback, layout),
+                None => prompts::plan(&task, settings, layout),
             };
             let Attempt::Answer(p) = attempt::<PlanOut>(&ctx, &task, prompt, None).await? else {
                 return Ok(false);
@@ -433,7 +443,7 @@ async fn run_agent(
             .await
         }
         AgentStep::Subtasks => {
-            let prompt = prompts::subtasks(&task, settings);
+            let prompt = prompts::subtasks(&task, settings, layout);
             let Attempt::Answer(s) = attempt::<SubtasksOut>(&ctx, &task, prompt, None).await?
             else {
                 return Ok(false);
@@ -449,6 +459,17 @@ async fn run_agent(
                         };
                         let mut sub = Subtask::new(s.id, kind, s.title, s.detail);
                         sub.progress_label = s.progress_label;
+                        // Guidance only: names that are not the task's repositories are dropped.
+                        sub.repos = s
+                            .repos
+                            .into_iter()
+                            .filter(|r| r != ROOT_REPO && t.base_commits.contains_key(r))
+                            .fold(Vec::new(), |mut v, r| {
+                                if !v.contains(&r) {
+                                    v.push(r);
+                                }
+                                v
+                            });
                         sub
                     })
                     .collect();
@@ -458,7 +479,7 @@ async fn run_agent(
         }
         AgentStep::Qa(sub_id) => {
             let sub = sub.ok_or_else(|| CoreError::Invalid(format!("no subtask {sub_id:?}")))?;
-            let prompt = prompts::qa(&task, &sub);
+            let prompt = prompts::qa(&task, &sub, layout);
             let Attempt::Answer(v) = attempt::<QaOut>(&ctx, &task, prompt, None).await? else {
                 return Ok(false);
             };
@@ -481,16 +502,23 @@ async fn run_agent(
             let caps = agent::capabilities(task.agent.provider);
             let (prompt, resume_session) = if resuming {
                 // A crash during an earlier triage may have left the work parked, and a crash
-                // between two repositories' checkpoint commits may have left one committed.
+                // between two repositories' checkpoint commits may have left one committed: the
+                // run's own commits become uncommitted work again. Never anything older than the
+                // run (a run from before 3.1 has no heads: nothing is undone).
+                let heads = task
+                    .run
+                    .as_ref()
+                    .map(|r| r.heads.clone())
+                    .unwrap_or_default();
                 for w in &worktrees {
                     git::unpark_changes(&w.path).await?;
-                    if let Some(last) = task.last_dev_checkpoint(&w.repo) {
-                        git::uncommit_to(&w.path, last).await?;
+                    if let Some(start) = heads.get(&w.repo) {
+                        git::uncommit_to(&w.path, start).await?;
                     }
                 }
                 let diff = repo_diffs(&worktrees).await?;
                 if settings.triage_on_resume && !diff.is_empty() {
-                    match triage(&ctx, &task, &sub, &diff).await? {
+                    match triage(&ctx, &task, &sub, &diff, layout).await? {
                         None => return Ok(false),
                         Some(TriageVerdict::Done) => {
                             let summary = "Judged complete by triage after an interruption.";
@@ -500,17 +528,18 @@ async fn run_agent(
                             for w in &worktrees {
                                 git::discard_changes(&w.path).await?;
                             }
-                            (prompts::dev(&task, &sub, None), None)
+                            (prompts::dev(&task, &sub, None, layout), None)
                         }
                         Some(TriageVerdict::Partial) => {
-                            resume_prompt(&task, &sub, &diff, session.as_deref(), caps.resume)
+                            let session = session.as_deref();
+                            resume_prompt(&task, &sub, &diff, session, caps.resume, layout)
                         }
                     }
                 } else {
-                    resume_prompt(&task, &sub, &diff, session.as_deref(), caps.resume)
+                    resume_prompt(&task, &sub, &diff, session.as_deref(), caps.resume, layout)
                 }
             } else {
-                (prompts::dev(&task, &sub, None), None)
+                (prompts::dev(&task, &sub, None, layout), None)
             };
             let Attempt::Answer(d) = attempt::<DevOut>(&ctx, &task, prompt, resume_session).await?
             else {
@@ -527,10 +556,11 @@ fn resume_prompt(
     diff: &prompts::RepoDiffs,
     session: Option<&str>,
     provider_resumes: bool,
+    layout: Option<&prompts::Layout>,
 ) -> (String, Option<String>) {
     match session {
         Some(s) if provider_resumes => (prompts::resume_same_session(diff), Some(s.to_string())),
-        _ => (prompts::dev(task, sub, Some(diff)), None),
+        _ => (prompts::dev(task, sub, Some(diff), layout), None),
     }
 }
 
@@ -614,6 +644,7 @@ async fn triage(
     task: &Task,
     sub: &Subtask,
     diff: &prompts::RepoDiffs,
+    layout: Option<&prompts::Layout>,
 ) -> Result<Option<TriageVerdict>> {
     let triage_ctx = Ctx {
         inner: ctx.inner,
@@ -630,8 +661,13 @@ async fn triage(
     for w in &worktrees {
         git::park_changes(&w.path).await?;
     }
-    let result =
-        attempt::<TriageOut>(&triage_ctx, task, prompts::triage(task, sub, diff), None).await;
+    let result = attempt::<TriageOut>(
+        &triage_ctx,
+        task,
+        prompts::triage(task, sub, diff, layout),
+        None,
+    )
+    .await;
     for w in &worktrees {
         git::unpark_changes(&w.path).await?;
     }
@@ -856,7 +892,16 @@ async fn execute(
         }
     }
     if inner.project.is_workspace() {
-        let removed = remove_strays(&cwd, &worktrees).await?;
+        // The run's outcome is known; a file that cannot be removed is noted, never a failure.
+        let removed = match remove_strays(&cwd, &worktrees).await {
+            Ok(removed) => removed,
+            Err(e) => {
+                let note = format!("could not remove files left outside every repository: {e}");
+                log::warn!("task {}: {note}", ctx.id);
+                events_log.note(&note).await;
+                Vec::new()
+            }
+        };
         if !removed.is_empty() {
             let note = format!(
                 "removed after the run, outside every repository: {}",
@@ -944,4 +989,44 @@ async fn remove_strays(dir: &std::path::Path, worktrees: &[RepoWorktree]) -> Res
     }
     removed.sort();
     Ok(removed)
+}
+
+/// What a workspace task's agents are told about their folder (see [`prompts::Layout`]): each
+/// repository with the instruction files at its root, and the workspace folder's own. `None` for a
+/// one-repository project.
+async fn layout_for(inner: &Inner, worktrees: &[RepoWorktree]) -> Option<prompts::Layout> {
+    if !inner.project.is_workspace() {
+        return None;
+    }
+    let present = |dir: std::path::PathBuf| async move {
+        let mut found = Vec::new();
+        for name in prompts::INSTRUCTION_FILES {
+            if tokio::fs::try_exists(dir.join(name)).await.unwrap_or(false) {
+                found.push(name);
+            }
+        }
+        found
+    };
+    let mut repos = Vec::new();
+    for w in worktrees {
+        let instructions = present(w.path.clone())
+            .await
+            .into_iter()
+            .map(|f| format!("{}/{f}", w.repo))
+            .collect();
+        repos.push(prompts::RepoLayout {
+            name: w.repo.clone(),
+            instructions,
+        });
+    }
+    let root = inner.project.root().to_path_buf();
+    let root_instructions = present(root.clone())
+        .await
+        .into_iter()
+        .map(|f| root.join(f).to_string_lossy().into_owned())
+        .collect();
+    Some(prompts::Layout {
+        repos,
+        root_instructions,
+    })
 }

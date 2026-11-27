@@ -113,7 +113,8 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrReport> {
         ));
     }
 
-    // A one-repository task keeps 3.0's behaviour: a failure is the call's error.
+    // A one-repository task keeps 3.0's behaviour: a failure is the call's error. No remote is
+    // a row, not an error, here; the single-result route (the pre-3.1 UI) refuses it.
     if task.base_commits.contains_key(ROOT_REPO) {
         let result = match create_one(inner, &task, ROOT_REPO, &[]).await? {
             Some(outcome) => {

@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 import {
+  changedRepos,
   hasWorktrees,
   lastDevCheckpoint,
   primaryRepo,
   pullRequestAction,
   pullRequestToast,
+  reposToCheck,
   reviewSummary,
   taskBranch,
   taskRepos,
@@ -106,6 +108,45 @@ describe('reviewSummary', () => {
       heading: 'Unresolved after 2 rework rounds',
     });
     expect(s.attention[0]).toBe('Unresolved after 2 rework rounds');
+  });
+});
+
+describe('reviewSummary in a workspace', () => {
+  const ws = (over: Partial<Task>) =>
+    task({
+      baseCommits: { api: 'a0', web: 'w0', docs: 'd0' },
+      subtasks: [sub({ checkpoints: { api: 'a1', web: 'w1' } })],
+      ...over,
+    });
+  const ran = (commit: string, ok = true) => ({ passed: ok, summary: 's', at: 0, commit });
+
+  it('is not clean on one repository when another failed or never ran', () => {
+    const failed = reviewSummary(
+      ws({ review: { reworkCount: 0, checks: { api: ran('a1'), web: ran('w1', false) } } })
+    );
+    expect(failed.attention).toEqual(['The automated checks failed in web']);
+    expect(failed.checks?.commit).toBe('w1');
+    const missing = reviewSummary(ws({ review: { reworkCount: 0, checks: { api: ran('a1') } } }));
+    expect(missing.attention).toEqual(['The automated checks did not run in web']);
+    // docs was never changed: its checks do not count.
+    const clean = reviewSummary(
+      ws({ review: { reworkCount: 0, checks: { api: ran('a1'), web: ran('w1') } } })
+    );
+    expect(clean.attention).toEqual([]);
+    expect(changedRepos(ws({}))).toEqual(['api', 'web']);
+    expect(reposToCheck(ws({}))).toEqual(['api', 'web']);
+  });
+
+  it('is up to date only when every changed repository is', () => {
+    const pr = (pushedCheckpoint: string) => ({
+      url: 'u',
+      host: 'github' as const,
+      pushedCheckpoint,
+    });
+    const partly = ws({ pullRequests: { api: pr('a1') } });
+    expect(pullRequestAction(partly, null).kind).toBe('update');
+    const both = ws({ pullRequests: { api: pr('a1'), web: pr('w1') } });
+    expect(pullRequestAction(both, null).kind).toBe('current');
   });
 });
 

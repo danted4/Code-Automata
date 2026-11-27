@@ -557,6 +557,109 @@ async fn a_folder_of_repositories_opens_as_a_workspace_and_is_checked_on_every_o
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_task_reports_its_changes_and_one_pull_request_row_per_repository() {
+    let h = Harness::new(true);
+    let ws = tempfile::tempdir().unwrap();
+    let root = ca_core::util::plain_path(std::fs::canonicalize(ws.path()).unwrap());
+    for name in ["api", "web"] {
+        let repo = root.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+    }
+    let write_api = json!({ "whenPrompt": "(dev-1)", "steps": [
+        { "write": { "path": "api/x.txt", "content": "x" } },
+        structured(json!({ "summary": "did", "handoff": "" }))
+    ]});
+    let id = h
+        .create(&root, "Across", h.agent(1, vec![write_api]), false)
+        .await;
+    let task = h
+        .wait_for(&root, &id, "human review", |t| {
+            phase(t) == "human_review" && t["run"].is_null()
+        })
+        .await;
+    assert_eq!(task["baseCommits"].as_object().unwrap().len(), 2, "{task}");
+
+    let changes = h
+        .ok("GET", &format!("/api/tasks/{id}/changes"), &root, None)
+        .await;
+    assert_eq!(changes[0]["repo"], "api", "{changes}");
+    assert_eq!(changes[0]["files"][0]["path"], "x.txt");
+    assert_eq!(changes[0]["files"][0]["status"], "added");
+    assert_eq!(changes.as_array().unwrap().len(), 1);
+
+    let report = h
+        .ok(
+            "POST",
+            &format!("/api/tasks/{id}/pull-requests"),
+            &root,
+            None,
+        )
+        .await;
+    assert_eq!(report["rows"][0]["repo"], "api", "{report}");
+    assert_eq!(report["rows"][0]["result"]["result"], "no_remote");
+    assert_eq!(report["rows"][1]["repo"], "web");
+    assert_eq!(report["rows"][1]["result"]["result"], "no_changes");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repository_without_a_remote_is_an_error_on_the_single_pull_request_route() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    let id = h
+        .create(&repo.path, "No remote", h.agent(1, vec![]), false)
+        .await;
+    h.wait_for(&repo.path, &id, "human review", |t| {
+        phase(t) == "human_review" && t["run"].is_null()
+    })
+    .await;
+    let (status, body) = h
+        .call(
+            "POST",
+            &format!("/api/tasks/{id}/pull-request"),
+            &repo.path,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("no `origin` remote"),
+        "{body}"
+    );
+    assert!(!body["error"].as_str().unwrap().starts_with(". "), "{body}");
+    // The per-repository report says it as a row.
+    let report = h
+        .ok(
+            "POST",
+            &format!("/api/tasks/{id}/pull-requests"),
+            &repo.path,
+            None,
+        )
+        .await;
+    assert_eq!(
+        report["rows"][0]["result"]["result"], "no_remote",
+        "{report}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_task_runs_from_creation_to_human_review_and_its_runs_replay() {
     let h = Harness::new(true);
     let repo = Repo::new().await;

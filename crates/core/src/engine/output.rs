@@ -122,6 +122,9 @@ pub struct SubtaskOut {
     pub detail: String,
     #[serde(default)]
     pub progress_label: Option<String>,
+    /// In a workspace, the repository folders the subtask changes (guidance only).
+    #[serde(default)]
+    pub repos: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -143,7 +146,8 @@ impl AgentOutput for SubtasksOut {
                     "kind": { "type": "string", "enum": ["dev", "qa"] },
                     "title": { "type": "string" },
                     "detail": { "type": "string" },
-                    "progressLabel": { "type": "string" }
+                    "progressLabel": { "type": "string" },
+                    "repos": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["id", "kind", "title", "detail"]
             } } },

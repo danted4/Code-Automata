@@ -226,3 +226,26 @@ async fn a_failed_restore_names_the_repository_in_a_workspace() {
         .unwrap_err();
     assert!(err.to_string().contains("branch"), "{err}");
 }
+
+#[tokio::test]
+async fn work_committed_but_never_recorded_becomes_uncommitted_again() {
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    let info = Worktrees::new(project).create("task-1").await.unwrap();
+    let base = info.base_commit.unwrap();
+    std::fs::write(info.path.join("a.txt"), "a").unwrap();
+    git::checkpoint_commit(&info.path, "task-1", "dev-1", "a")
+        .await
+        .unwrap();
+    git::uncommit_to(&info.path, &base).await.unwrap();
+    assert_eq!(git::head(&info.path).await.unwrap(), base);
+    let diff = git::diff_since_checkpoint(&info.path, 10_000)
+        .await
+        .unwrap();
+    assert!(diff.diff.contains("+a"), "{diff:?}");
+    // Already there, or not an ancestor: nothing happens.
+    git::uncommit_to(&info.path, &base).await.unwrap();
+    git::uncommit_to(&info.path, "0000000000000000000000000000000000000000")
+        .await
+        .unwrap();
+}
