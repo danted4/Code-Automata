@@ -9,6 +9,7 @@
 
 mod common;
 
+use ca_core::util::ROOT_REPO;
 use std::time::Duration;
 
 use ca_core::agent::Binaries;
@@ -71,7 +72,7 @@ async fn live_claude_takes_a_task_from_plan_to_human_review() {
         let v = qa.verdict.as_ref().expect("a QA verdict");
         println!("QA {}: passed {} — {}", qa.id, v.passed, v.summary);
     }
-    let base = t.base_commit.clone().unwrap();
+    let base = t.base_commit(ROOT_REPO).unwrap().to_string();
     let commits = git(&wt, &["rev-list", "--count", &format!("{base}..HEAD")]);
     println!("checkpoint commits: {commits}");
     assert!(commits.parse::<u32>().unwrap() >= 1);

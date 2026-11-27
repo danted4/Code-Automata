@@ -19,7 +19,7 @@ use super::reconcile::process_started;
 use super::runlog::{RunLogLine, RunLogWriter};
 use super::settings::Settings;
 use super::step::{AgentStep, Step, apply_finish_review, apply_rework, next_step};
-use super::{Control, EngineEvent, Halt, Inner, checks, prompts};
+use super::{Control, EngineEvent, Halt, Inner, RepoWorktree, checks, prompts};
 use crate::agent::{self, Access, AgentEvent, Outcome, OutcomeKind, RunRequest};
 use crate::error::{CoreError, Result};
 use crate::git::{self, Worktrees};
@@ -28,7 +28,7 @@ use crate::task::{
     SubtaskStatus, Task,
 };
 use crate::transitions::{Mover, apply_move};
-use crate::util::now_ms;
+use crate::util::{ROOT_REPO, now_ms};
 
 /// Diff shown to a resumed agent.
 const DIFF_LIMIT: usize = 64 * 1024;
@@ -156,22 +156,62 @@ pub(crate) async fn record_failure(inner: &Inner, id: &str, error: &str) {
     }
 }
 
+/// Create a worktree in every repository of the project and record each base commit, in one
+/// update. A worktree a previous attempt created but never recorded is kept (its base recovered
+/// from the branch). If one repository fails, the worktrees made by this attempt are removed again
+/// and the step fails naming that repository.
 async fn create_worktree(inner: &Inner, id: &str) -> Result<()> {
-    let path = inner.worktrees.path_for(id)?;
-    let base = if git::is_task_worktree(&path, id).await {
-        // Created by a previous attempt that died before recording it.
-        git::fork_point(inner.project.root(), &Worktrees::branch_for(id)).await?
-    } else {
-        inner
-            .worktrees
-            .create(id)
-            .await?
-            .base_commit
-            .ok_or_else(|| CoreError::Invalid("worktree created without a base commit".into()))?
-    };
+    let mut bases = std::collections::BTreeMap::new();
+    let mut created: Vec<Worktrees> = Vec::new();
+    // The repositories as they are now (a workspace may have gained one since it was opened),
+    // checked by the same rules as opening it.
+    let current = crate::project::ProjectDir::open(inner.project.root()).await?;
+    let repos: Vec<String> = current.repos().iter().map(|r| r.name.clone()).collect();
+    for repo in repos {
+        let worktrees = inner.repo_worktrees(&repo)?;
+        let result = async {
+            let path = worktrees.path_for(id)?;
+            if git::is_task_worktree(&path, id).await {
+                // Created by a previous attempt that died before recording it.
+                git::fork_point(worktrees.main_checkout(), &Worktrees::branch_for(id)).await
+            } else {
+                let info = worktrees.create(id).await?;
+                created.push(worktrees.clone());
+                info.base_commit.ok_or_else(|| {
+                    CoreError::Invalid("worktree created without a base commit".into())
+                })
+            }
+        }
+        .await;
+        match result {
+            Ok(base) => {
+                bases.insert(repo, base);
+            }
+            Err(e) => {
+                for w in created {
+                    let opts = git::DeleteOptions {
+                        force: true,
+                        delete_branch: true,
+                        ..git::DeleteOptions::default()
+                    };
+                    if let Err(undo) = w.delete(id, opts).await {
+                        log::warn!(
+                            "task {id}: could not remove the worktree in {}: {undo}",
+                            w.repo()
+                        );
+                    }
+                }
+                return Err(if inner.project.is_workspace() {
+                    CoreError::Invalid(format!("the worktree in {repo}/ could not be created: {e}"))
+                } else {
+                    e
+                });
+            }
+        }
+    }
     inner
         .update(id, |t| {
-            t.base_commit = Some(base);
+            t.base_commits = bases;
             Ok(())
         })
         .await
@@ -185,25 +225,36 @@ async fn run_checks(
     settings: &Settings,
     control: &Control,
 ) -> Result<bool> {
-    let wt = inner.worktrees.path_for(id)?;
-    // Checks are recorded against the last dev checkpoint, which next_step compares with. If HEAD
-    // is somewhere else (a hand-made commit in the worktree), say so once instead of re-running
-    // checks that could never count as current.
     let task = inner
         .store
         .load(id)
         .await?
         .ok_or_else(|| CoreError::TaskNotFound(id.to_string()))?;
-    let expected = task
-        .last_dev_checkpoint()
-        .ok_or_else(|| CoreError::Invalid("the task has no checkpoint to check".into()))?
-        .to_string();
-    let head = git::head(&wt).await?;
-    if head != expected {
-        return Err(CoreError::Invalid(format!(
-            "the worktree is at {head}, not at the last checkpoint {expected}; commits made by hand \
-             in a task worktree are not supported. Reset the worktree to the checkpoint or replan."
-        )));
+    // Checks are recorded against each repository's last dev checkpoint, which next_step compares
+    // with. If HEAD is somewhere else (a hand-made commit in the worktree), say so once instead of
+    // re-running checks that could never count as current.
+    let mut plan = Vec::new();
+    for repo in task.repos_to_check() {
+        let wt = inner.repo_worktrees(repo)?.path_for(id)?;
+        let expected = task
+            .last_dev_checkpoint(repo)
+            .ok_or_else(|| CoreError::Invalid("the task has no checkpoint to check".into()))?
+            .to_string();
+        let head = git::head(&wt).await?;
+        if head != expected {
+            let place = if repo == ROOT_REPO {
+                "the worktree".to_string()
+            } else {
+                format!("the worktree of {repo}/")
+            };
+            return Err(CoreError::Invalid(format!(
+                "{place} is at {head}, not at the last checkpoint {expected}; commits made by hand \
+                 in a task worktree are not supported. Reset the worktree to the checkpoint or \
+                 replan."
+            )));
+        }
+        let commands = checks::commands_for(&inner.project, settings, repo, &wt).await;
+        plan.push((repo.to_string(), wt, expected, commands));
     }
     let mut run = Run::new(RunKind::Checks, RunState::Running, None);
     run.boot_id = Some(inner.boot_id.clone());
@@ -214,35 +265,35 @@ async fn run_checks(
             Ok(())
         })
         .await?;
-    let commands = settings
-        .checks
-        .clone()
-        .unwrap_or_else(|| checks::detect(&wt));
-    // A halt drops the running check, whose guard kills its process group.
-    let runs = tokio::select! {
-        runs = checks::run_all(&wt, &commands, inner.bins.path_var(), settings.timeouts.check()) => runs,
-        () = control.halted() => {
-            git::discard_to(&wt, &expected).await?;
-            let state = control.halt_requested().map_or(RunState::Interrupted, halted_state);
-            inner
-                .update(id, |t| {
-                    if let Some(r) = t.run.as_mut()
-                        && r.id == run_id
-                    {
-                        r.state = state;
-                    }
-                    Ok(())
-                })
-                .await?;
-            return Ok(false);
-        }
-    };
-    // Checks must not leave files that a later checkpoint would commit (ignored build output stays).
-    git::discard_to(&wt, &expected).await?;
-    let summary = checks::summarize(&runs, &expected);
+    let mut results = std::collections::BTreeMap::new();
+    for (repo, wt, expected, commands) in plan {
+        // A halt drops the running check, whose guard kills its process group.
+        let runs = tokio::select! {
+            runs = checks::run_all(&wt, &commands.commands, inner.bins.path_var(), settings.timeouts.check()) => runs,
+            () = control.halted() => {
+                git::discard_to(&wt, &expected).await?;
+                let state = control.halt_requested().map_or(RunState::Interrupted, halted_state);
+                inner
+                    .update(id, |t| {
+                        if let Some(r) = t.run.as_mut()
+                            && r.id == run_id
+                        {
+                            r.state = state;
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                return Ok(false);
+            }
+        };
+        // Checks must not leave files that a later checkpoint would commit (ignored build output
+        // stays).
+        git::discard_to(&wt, &expected).await?;
+        results.insert(repo, checks::summarize(&runs, &expected));
+    }
     inner
         .update(id, |t| {
-            t.review.checks = Some(summary);
+            t.review.checks = results;
             t.run = None;
             Ok(())
         })
@@ -271,6 +322,15 @@ struct Ctx<'a> {
     /// resume. A repair turn adds `-repair`. Side runs share the step's run id, so the label is
     /// what keeps their logs apart.
     log_label: &'static str,
+    /// Files removed from a workspace task's folder after this context's runs (outside every
+    /// repository), for the dev subtask's handoff note.
+    removed: std::sync::Mutex<Vec<String>>,
+}
+
+impl Ctx<'_> {
+    fn take_removed(&self) -> Vec<String> {
+        std::mem::take(&mut *self.removed.lock().unwrap_or_else(|p| p.into_inner()))
+    }
 }
 
 /// Run one agent step to its written result. `Ok(false)` means the task stopped (halted or
@@ -321,6 +381,7 @@ async fn run_agent(
         access,
         record_session: true,
         log_label: "run",
+        removed: std::sync::Mutex::new(Vec::new()),
     };
     let task = inner
         .update(id, |t| {
@@ -329,7 +390,7 @@ async fn run_agent(
         })
         .await?;
     let sub = subtask_id.as_ref().and_then(|s| task.subtask(s)).cloned();
-    let wt = inner.worktrees.path_for(id)?;
+    let worktrees = inner.task_worktrees(&task)?;
 
     match step {
         AgentStep::Questions => {
@@ -419,9 +480,15 @@ async fn run_agent(
             let sub = sub.ok_or_else(|| CoreError::Invalid(format!("no subtask {sub_id:?}")))?;
             let caps = agent::capabilities(task.agent.provider);
             let (prompt, resume_session) = if resuming {
-                // A crash during an earlier triage may have left the work parked.
-                git::unpark_changes(&wt).await?;
-                let diff = git::diff_since_checkpoint(&wt, DIFF_LIMIT).await?;
+                // A crash during an earlier triage may have left the work parked, and a crash
+                // between two repositories' checkpoint commits may have left one committed.
+                for w in &worktrees {
+                    git::unpark_changes(&w.path).await?;
+                    if let Some(last) = task.last_dev_checkpoint(&w.repo) {
+                        git::uncommit_to(&w.path, last).await?;
+                    }
+                }
+                let diff = repo_diffs(&worktrees).await?;
                 if settings.triage_on_resume && !diff.is_empty() {
                     match triage(&ctx, &task, &sub, &diff).await? {
                         None => return Ok(false),
@@ -430,7 +497,9 @@ async fn run_agent(
                             return finish_dev(&ctx, &task, &sub, summary, "").await;
                         }
                         Some(TriageVerdict::Broken) => {
-                            git::discard_changes(&wt).await?;
+                            for w in &worktrees {
+                                git::discard_changes(&w.path).await?;
+                            }
                             (prompts::dev(&task, &sub, None), None)
                         }
                         Some(TriageVerdict::Partial) => {
@@ -455,7 +524,7 @@ async fn run_agent(
 fn resume_prompt(
     task: &Task,
     sub: &Subtask,
-    diff: &git::WorkingDiff,
+    diff: &prompts::RepoDiffs,
     session: Option<&str>,
     provider_resumes: bool,
 ) -> (String, Option<String>) {
@@ -473,7 +542,6 @@ async fn finish_dev(
     summary: &str,
     handoff: &str,
 ) -> Result<bool> {
-    let wt = ctx.inner.worktrees.path_for(ctx.id)?;
     let label = if summary.trim().is_empty() {
         sub.title.clone()
     } else {
@@ -483,14 +551,33 @@ async fn finish_dev(
             summary.lines().next().unwrap_or_default()
         )
     };
-    let checkpoint = git::checkpoint_commit(&wt, &task.id, &sub.id, &label).await?;
+    // Only repositories whose HEAD moves get a checkpoint. All commits are made before the one
+    // update that records them; a crash in between is undone on resume (`uncommit_to`).
+    let mut checkpoints = std::collections::BTreeMap::new();
+    for w in ctx.inner.task_worktrees(task)? {
+        let checkpoint = git::checkpoint_commit(&w.path, &task.id, &sub.id, &label).await?;
+        // A commit the agent made itself moves HEAD too, and counts as the checkpoint.
+        if checkpoint.created || task.last_dev_checkpoint(&w.repo) != Some(&checkpoint.commit) {
+            checkpoints.insert(w.repo, checkpoint.commit);
+        }
+    }
     let sub_id = sub.id.clone();
-    let handoff = handoff.trim().to_string();
+    let mut handoff = handoff.trim().to_string();
+    let removed = ctx.take_removed();
+    if !removed.is_empty() {
+        if !handoff.is_empty() {
+            handoff.push_str("\n\n");
+        }
+        handoff.push_str(&format!(
+            "Removed after the run, because they were outside every repository: {}",
+            removed.join(", ")
+        ));
+    }
     finish(ctx, |t| {
         if let Some(s) = t.subtask_mut(&sub_id) {
             s.status = SubtaskStatus::Done;
             s.finished_at = Some(now_ms());
-            s.checkpoint = Some(checkpoint.commit);
+            s.checkpoints = checkpoints;
             s.handoff = (!handoff.is_empty()).then_some(handoff);
         }
         Ok(())
@@ -526,7 +613,7 @@ async fn triage(
     ctx: &Ctx<'_>,
     task: &Task,
     sub: &Subtask,
-    diff: &git::WorkingDiff,
+    diff: &prompts::RepoDiffs,
 ) -> Result<Option<TriageVerdict>> {
     let triage_ctx = Ctx {
         inner: ctx.inner,
@@ -537,12 +624,17 @@ async fn triage(
         access: Access::Review,
         record_session: false,
         log_label: "triage",
+        removed: std::sync::Mutex::new(Vec::new()),
     };
-    let wt = ctx.inner.worktrees.path_for(ctx.id)?;
-    git::park_changes(&wt).await?;
+    let worktrees = ctx.inner.task_worktrees(task)?;
+    for w in &worktrees {
+        git::park_changes(&w.path).await?;
+    }
     let result =
         attempt::<TriageOut>(&triage_ctx, task, prompts::triage(task, sub, diff), None).await;
-    git::unpark_changes(&wt).await?;
+    for w in &worktrees {
+        git::unpark_changes(&w.path).await?;
+    }
     Ok(match result? {
         Attempt::Answer(t) => Some(t.verdict),
         Attempt::Stopped => None,
@@ -657,14 +749,15 @@ async fn execute(
     label: &str,
 ) -> Result<Outcome> {
     let inner = ctx.inner;
-    let wt = inner.worktrees.path_for(ctx.id)?;
+    let cwd = inner.task_dir(ctx.id)?;
+    let worktrees = inner.task_worktrees(task)?;
     let attempt_no = task.run.as_ref().map_or(1, |r| r.attempt);
     let log_path = inner
         .store
         .task_dir(ctx.id)?
         .join("runs")
         .join(format!("{}-{attempt_no}-{label}.ndjson", ctx.run_id));
-    let mut req = RunRequest::new(task.agent.clone(), &wt, prompt, log_path.clone());
+    let mut req = RunRequest::new(task.agent.clone(), &cwd, prompt, log_path.clone());
     req.resume = session;
     req.access = ctx.access;
     req.json_schema = schema;
@@ -681,8 +774,11 @@ async fn execute(
     if ctx.control.halt_requested().is_some() {
         return Ok(stopped_outcome());
     }
-    // Where a run that may not change anything must leave the worktree.
-    let head_before = git::head(&wt).await?;
+    // Where a run that may not change anything must leave each worktree.
+    let mut heads_before = Vec::new();
+    for w in &worktrees {
+        heads_before.push(git::head(&w.path).await?);
+    }
     let mut events_log = RunLogWriter::create(
         &log_path,
         RunLogLine::Start {
@@ -755,7 +851,24 @@ async fn execute(
         .unwrap_or_else(|p| p.into_inner()) = None;
     if ctx.access != Access::Full {
         // Changes and any commits the agent made during this run; earlier commits stay.
-        git::discard_to(&wt, &head_before).await?;
+        for (w, head) in worktrees.iter().zip(&heads_before) {
+            git::discard_to(&w.path, head).await?;
+        }
+    }
+    if inner.project.is_workspace() {
+        let removed = remove_strays(&cwd, &worktrees).await?;
+        if !removed.is_empty() {
+            let note = format!(
+                "removed after the run, outside every repository: {}",
+                removed.join(", ")
+            );
+            log::info!("task {}: {note}", ctx.id);
+            events_log.note(&note).await;
+            ctx.removed
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .extend(removed);
+        }
     }
     Ok(outcome.unwrap_or_else(stopped_outcome))
 }
@@ -785,4 +898,50 @@ fn stopped_outcome() -> Outcome {
         turns: None,
         cost_usd: None,
     }
+}
+
+/// The uncommitted work in each of the task's worktrees, for a resumed subtask's prompt.
+async fn repo_diffs(worktrees: &[RepoWorktree]) -> Result<prompts::RepoDiffs> {
+    let mut diffs = Vec::new();
+    // The limit is shared, so a resume prompt is no bigger with several repositories.
+    let per_repo = DIFF_LIMIT / worktrees.len().max(1);
+    for w in worktrees {
+        diffs.push((
+            w.repo.clone(),
+            git::diff_since_checkpoint(&w.path, per_repo).await?,
+        ));
+    }
+    Ok(prompts::RepoDiffs(diffs))
+}
+
+/// Remove whatever an agent left directly in a workspace task's folder: nothing there belongs to a
+/// repository, so it would never be checkpointed or reach a pull request. Returns the names.
+async fn remove_strays(dir: &std::path::Path, worktrees: &[RepoWorktree]) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return Ok(removed);
+    };
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(crate::error::io_at(dir))?
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if worktrees.iter().any(|w| w.repo == name) {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = tokio::fs::symlink_metadata(&path)
+            .await
+            .is_ok_and(|m| m.is_dir());
+        let result = if is_dir {
+            tokio::fs::remove_dir_all(&path).await
+        } else {
+            tokio::fs::remove_file(&path).await
+        };
+        result.map_err(crate::error::io_at(&path))?;
+        removed.push(name);
+    }
+    removed.sort();
+    Ok(removed)
 }

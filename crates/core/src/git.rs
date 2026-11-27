@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use crate::error::{CoreError, Result, io_at};
 use crate::project::ProjectDir;
-use crate::util::validate_task_id;
+use crate::util::{ROOT_REPO, validate_repo_name, validate_task_id};
 
 /// Limit for commands that talk to a remote.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -171,6 +171,9 @@ async fn git_output_once(cwd: &Path, args: &[&str], timeout: Option<Duration>) -
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .kill_on_drop(true);
+    if let Some(ceiling) = worktree_ceiling(cwd) {
+        cmd.env("GIT_CEILING_DIRECTORIES", ceiling);
+    }
     let run = cmd.output();
     let result = match timeout {
         Some(limit) => tokio::time::timeout(limit, run)
@@ -179,6 +182,18 @@ async fn git_output_once(cwd: &Path, args: &[&str], timeout: Option<Duration>) -
         None => run.await,
     };
     result.map_err(|e| git_error(args, format!("could not run git: {e}")))
+}
+
+/// For a directory inside Code-Automata's worktrees, its parent: git run there must find the
+/// worktree at that very directory or nothing, never walk up to whatever repository holds the
+/// folder above (a workspace task's folder is in no repository; a folder left by a failed removal
+/// has no `.git`). Without this, a reset meant for a worktree could hit an enclosing repository.
+fn worktree_ceiling(cwd: &Path) -> Option<&Path> {
+    let parts: Vec<_> = cwd.components().map(|c| c.as_os_str()).collect();
+    let inside = parts
+        .windows(3)
+        .any(|w| w[0] == ".code-automata" && w[1] == "worktrees" && !w[2].is_empty());
+    if inside { cwd.parent() } else { None }
 }
 
 fn check(args: &[&str], out: Output) -> Result<Vec<u8>> {
@@ -238,6 +253,8 @@ async fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeInfo {
     pub task_id: String,
+    /// The repository it belongs to ([`ROOT_REPO`] in a one-repository project).
+    pub repo: String,
     pub path: PathBuf,
     /// `None` for a worktree on a detached HEAD.
     pub branch_name: Option<String>,
@@ -441,24 +458,65 @@ pub async fn status_at(path: &Path) -> WorktreeStatus {
     }
 }
 
-/// Worktree operations for one project.
+/// The folder a task's agents run in: `.code-automata/worktrees/<id>`. In a one-repository
+/// project it is the task's worktree; in a workspace, a plain folder holding one worktree per
+/// repository (`<id>/<repo>`).
+pub fn task_dir(project: &ProjectDir, task_id: &str) -> Result<PathBuf> {
+    validate_task_id(task_id)?;
+    Ok(project.worktrees_dir().join(task_id))
+}
+
+/// Worktree operations for one repository of a project.
 #[derive(Debug, Clone)]
 pub struct Worktrees {
     project: ProjectDir,
+    /// The repository's key: [`ROOT_REPO`], or its folder name in a workspace.
+    repo: String,
+    /// Its main checkout.
+    main: PathBuf,
 }
 
 impl Worktrees {
+    /// The repository of a one-repository project.
     pub fn new(project: ProjectDir) -> Self {
-        Worktrees { project }
+        Worktrees {
+            main: project.root().to_path_buf(),
+            project,
+            repo: ROOT_REPO.to_string(),
+        }
+    }
+
+    /// The repository `repo` of the project (a task file's key).
+    pub fn for_repo(project: &ProjectDir, repo: &str) -> Result<Self> {
+        Ok(Worktrees {
+            main: project.repo_path(repo)?,
+            project: project.clone(),
+            repo: repo.to_string(),
+        })
+    }
+
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    /// The repository's main checkout.
+    pub fn main_checkout(&self) -> &Path {
+        &self.main
     }
 
     pub fn base_path(&self) -> PathBuf {
         self.project.worktrees_dir()
     }
 
+    /// `<worktrees>/<id>`, or `<worktrees>/<id>/<repo>` in a workspace.
     pub fn path_for(&self, task_id: &str) -> Result<PathBuf> {
-        validate_task_id(task_id)?;
-        Ok(self.base_path().join(task_id))
+        let dir = task_dir(&self.project, task_id)?;
+        if self.repo == ROOT_REPO {
+            Ok(dir)
+        } else {
+            validate_repo_name(&self.repo)?;
+            Ok(dir.join(&self.repo))
+        }
     }
 
     pub fn branch_for(task_id: &str) -> String {
@@ -467,7 +525,7 @@ impl Worktrees {
 
     /// `origin`'s default branch, else a local `main` or `master`, else `main`.
     pub async fn main_branch(&self) -> String {
-        let repo = self.project.root();
+        let repo = self.main.as_path();
         if let Ok(full) = run_git(
             repo,
             &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -490,7 +548,7 @@ impl Worktrees {
     /// main checkout's current HEAD. The start commit is returned as `base_commit`.
     pub async fn create(&self, task_id: &str) -> Result<WorktreeInfo> {
         let path = self.path_for(task_id)?;
-        let repo = self.project.root();
+        let repo = self.main.as_path();
         let branch = Self::branch_for(task_id);
         let add = ["worktree", "add"];
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
@@ -509,10 +567,12 @@ impl Worktrees {
             ));
         }
         self.project.ensure_git_exclude().await?;
-        let base = self.base_path();
-        tokio::fs::create_dir_all(&base)
+        let parent = path
+            .parent()
+            .map_or_else(|| self.base_path(), Path::to_path_buf);
+        tokio::fs::create_dir_all(&parent)
             .await
-            .map_err(io_at(&base))?;
+            .map_err(io_at(&parent))?;
 
         let base_commit = run_git(repo, &["rev-parse", "HEAD"]).await?;
         let path_str = path.to_string_lossy().to_string();
@@ -524,6 +584,7 @@ impl Worktrees {
 
         Ok(WorktreeInfo {
             task_id: task_id.to_string(),
+            repo: self.repo.clone(),
             path: crate::util::canonicalize(&path)
                 .await
                 .map_err(io_at(&path))?,
@@ -563,10 +624,13 @@ impl Worktrees {
                     path.display()
                 )));
             }
-            Probe::NotWorktree => true,
+            Probe::NotWorktree => {
+                refuse_if_holds_worktrees(&path).await?;
+                true
+            }
             Probe::Missing => false,
         };
-        let repo = self.project.root();
+        let repo = self.main.as_path();
         if !branch_exists(repo, &branch).await? {
             return Err(CoreError::Invalid(format!(
                 "the task's branch {branch} is gone, so its worktree cannot be brought back"
@@ -598,10 +662,12 @@ impl Worktrees {
             }
             run_git(repo, &["worktree", "prune"]).await?;
         }
-        let base = self.base_path();
-        tokio::fs::create_dir_all(&base)
+        let parent = path
+            .parent()
+            .map_or_else(|| self.base_path(), Path::to_path_buf);
+        tokio::fs::create_dir_all(&parent)
             .await
-            .map_err(io_at(&base))?;
+            .map_err(io_at(&parent))?;
         let path_str = path.to_string_lossy().to_string();
         run_git(repo, &["worktree", "add", &path_str, &branch]).await?;
         Ok(())
@@ -622,7 +688,7 @@ impl Worktrees {
         let computed = self.path_for(task_id)?;
         let path = opts.path_override.clone().unwrap_or(computed);
         self.ensure_inside_base(&path).await?;
-        let repo = self.project.root();
+        let repo = self.main.as_path();
         let remove = ["worktree", "remove"];
 
         match probe(&path).await {
@@ -631,6 +697,7 @@ impl Worktrees {
             }
             Probe::NotWorktree => {
                 // Nothing git would track: a leftover folder inside our own worktrees directory.
+                refuse_if_holds_worktrees(&path).await?;
                 remove_dir_if_exists(&path).await?;
                 run_git(repo, &["worktree", "prune"]).await?;
             }
@@ -696,9 +763,10 @@ impl Worktrees {
         Ok(report)
     }
 
-    /// Worktrees git knows about whose directory sits directly in `.code-automata/worktrees/`.
+    /// This repository's worktrees that git knows about at a task path: directly in
+    /// `.code-automata/worktrees/` for a one-repository project, at `<id>/<repo>` in a workspace.
     pub async fn list(&self) -> Result<Vec<WorktreeInfo>> {
-        let repo = self.project.root();
+        let repo = self.main.as_path();
         let raw = run_git_raw(repo, &["worktree", "list", "--porcelain", "-z"]).await?;
         let main_branch = self.main_branch().await;
         let base = crate::util::canonicalize(self.base_path())
@@ -726,7 +794,19 @@ impl Worktrees {
             };
             // Compare canonical forms: on Windows canonicalize yields \\?\C:\... while git
             // prints C:/..., and on macOS /var vs /private/var. A gone directory keeps its raw parent.
-            let Some(parent) = path.parent() else {
+            // The folder that must sit directly in the worktrees directory: the worktree itself,
+            // or in a workspace the task folder holding `<repo>`.
+            let task_folder = if self.repo == ROOT_REPO {
+                Some(path.as_path())
+            } else if path.file_name().is_some_and(|n| n == self.repo.as_str()) {
+                path.parent()
+            } else {
+                None
+            };
+            let Some(task_folder) = task_folder else {
+                continue;
+            };
+            let Some(parent) = task_folder.parent() else {
                 continue;
             };
             let parent = crate::util::canonicalize(parent)
@@ -735,7 +815,10 @@ impl Worktrees {
             if parent != base {
                 continue;
             }
-            let Some(task_id) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            let Some(task_id) = task_folder
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+            else {
                 continue;
             };
             if validate_task_id(&task_id).is_err() {
@@ -744,6 +827,7 @@ impl Worktrees {
             let is_dirty = status_at(&path).await.has_changes;
             found.push(WorktreeInfo {
                 task_id,
+                repo: self.repo.clone(),
                 path,
                 branch_name: branch,
                 main_repo: repo.to_path_buf(),
@@ -792,6 +876,123 @@ impl Worktrees {
             ))
         }
     }
+}
+
+/// A folder that is not a worktree but holds one (a workspace task's folder, reached as if it were a
+/// worktree) must never be removed as a leftover: that would delete every repository's worktree in
+/// it, uncommitted work included.
+async fn refuse_if_holds_worktrees(path: &Path) -> Result<()> {
+    let Ok(mut entries) = tokio::fs::read_dir(path).await else {
+        return Ok(());
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if tokio::fs::symlink_metadata(entry.path().join(".git"))
+            .await
+            .is_ok()
+        {
+            return Err(CoreError::Invalid(format!(
+                "{} holds the worktree {}; refusing to remove it as a leftover folder",
+                path.display(),
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// A task's worktrees, across its repositories
+// ---------------------------------------------------------------------------------------------
+
+/// The repositories that may hold a task's worktrees: the ones the task file names plus every
+/// repository of the project (an orphan has no task file; a crash can leave a worktree the file
+/// never recorded). Repositories whose main checkout is gone are left out.
+async fn candidate_repos(project: &ProjectDir, named: &[String]) -> Vec<Worktrees> {
+    let mut names: Vec<String> = project.repos().iter().map(|r| r.name.clone()).collect();
+    for n in named {
+        if !names.contains(n) {
+            names.push(n.clone());
+        }
+    }
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        if let Ok(w) = Worktrees::for_repo(project, &name)
+            && tokio::fs::try_exists(w.main_checkout())
+                .await
+                .unwrap_or(false)
+        {
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// The combined status of a task's worktrees: present if any is, with changes if any has them (or
+/// cannot be read).
+pub async fn task_status(
+    project: &ProjectDir,
+    task_id: &str,
+    named: &[String],
+) -> Result<WorktreeStatus> {
+    let mut combined = WorktreeStatus::default();
+    for w in candidate_repos(project, named).await {
+        let status = w.status(task_id).await?;
+        if !status.exists {
+            continue;
+        }
+        combined.exists = true;
+        combined.path = Some(task_dir(project, task_id)?);
+        combined.branch_name = Some(Worktrees::branch_for(task_id));
+        let dirty = status.error.is_some() || status.has_changes != Some(false);
+        combined.has_changes = Some(combined.has_changes.unwrap_or(false) || dirty);
+        if let Some(e) = status.error {
+            combined.error = Some(match combined.error.take() {
+                Some(prev) => format!("{prev}; {}: {e}", w.repo()),
+                None => format!("{}: {e}", w.repo()),
+            });
+        }
+    }
+    Ok(combined)
+}
+
+/// Remove a task's worktrees in every repository (see [`Worktrees::delete`]), then, in a
+/// workspace, the task folder that held them, but only once every repository's removal succeeded:
+/// what is left in it then is no repository's (files an agent wrote outside them).
+pub async fn delete_task_worktrees(
+    project: &ProjectDir,
+    task_id: &str,
+    named: &[String],
+    opts: DeleteOptions,
+) -> Result<DeleteReport> {
+    let mut report = DeleteReport::default();
+    let mut first_error = None;
+    for w in candidate_repos(project, named).await {
+        match w.delete(task_id, opts.clone()).await {
+            Ok(r) => report.warnings.extend(r.warnings),
+            Err(e) if first_error.is_none() => first_error = Some(e),
+            Err(e) => report.warnings.push(format!("{}: {e}", w.repo())),
+        }
+    }
+    if let Some(e) = first_error {
+        return Err(e);
+    }
+    if project.is_workspace() {
+        remove_dir_if_exists(&task_dir(project, task_id)?).await?;
+    }
+    Ok(report)
+}
+
+/// Bring back a task's worktrees in each of its repositories (see [`Worktrees::restore`]).
+pub async fn restore_task_worktrees(
+    project: &ProjectDir,
+    task_id: &str,
+    repos: &[String],
+) -> Result<()> {
+    for repo in repos {
+        Worktrees::for_repo(project, repo)?.restore(task_id).await?;
+    }
+    Ok(())
 }
 
 async fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -907,6 +1108,20 @@ pub async fn discard_changes(worktree: &Path) -> Result<()> {
 pub async fn discard_to(worktree: &Path, commit: &str) -> Result<()> {
     run_git(worktree, &["reset", "--hard", "-q", commit]).await?;
     run_git(worktree, &["clean", "-fdq"]).await?;
+    Ok(())
+}
+
+/// Undo commits after `commit` but keep their changes in the worktree: a crash between the
+/// checkpoint commits of a workspace task's repositories leaves some committed but unrecorded, and
+/// the resumed subtask must see that work as uncommitted, like the rest. Does nothing when HEAD is
+/// `commit`, or when `commit` is not an ancestor of HEAD.
+pub async fn uncommit_to(worktree: &Path, commit: &str) -> Result<()> {
+    if head(worktree).await? == commit {
+        return Ok(());
+    }
+    if git_succeeds(worktree, &["merge-base", "--is-ancestor", commit, "HEAD"]).await? {
+        run_git(worktree, &["reset", "-q", "--soft", commit]).await?;
+    }
     Ok(())
 }
 
@@ -1144,6 +1359,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn git_never_walks_up_out_of_a_task_worktree() {
+        let wt = std::env::temp_dir()
+            .join("ws")
+            .join(".code-automata")
+            .join("worktrees");
+        let task = wt.join("task-1");
+        assert_eq!(worktree_ceiling(&task), Some(wt.as_path()));
+        assert_eq!(worktree_ceiling(&task.join("api")), Some(task.as_path()));
+        assert_eq!(worktree_ceiling(&wt), None);
+        assert_eq!(worktree_ceiling(&std::env::temp_dir().join("ws")), None);
+    }
 
     #[test]
     fn retry_safety_looks_past_identity_options() {

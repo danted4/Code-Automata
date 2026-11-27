@@ -14,6 +14,7 @@ use ca_core::agent::Binaries;
 use ca_core::engine::Engine;
 use ca_core::engine::settings::{CheckCommand, Settings};
 use ca_core::task::{Answer, Task};
+use ca_core::util::ROOT_REPO;
 use ca_core::{
     AgentConfig, CoreError, Phase, PlanningStage, ProjectDir, Provider, RunKind, RunState,
     SubtaskStatus, TaskStore,
@@ -300,7 +301,7 @@ async fn a_crash_mid_subtask_resumes_on_that_subtask_with_its_partial_work() {
         "the resumed prompt must show the partial work"
     );
     assert_eq!(env.prompts_with("(dev-3)").len(), 1);
-    let base = t.base_commit.clone().unwrap();
+    let base = t.base_commit(ROOT_REPO).unwrap().to_string();
     assert_eq!(
         commits_since(&wt, &base),
         3,
@@ -415,9 +416,15 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     assert!(prompt.contains("note from dev-1") && prompt.contains("note from dev-2"));
 
     let wt = env.worktree(&task.id);
-    let base = t.base_commit.clone().unwrap();
+    let base = t.base_commit(ROOT_REPO).unwrap().to_string();
     assert_eq!(commits_since(&wt, &base), 3);
-    assert!(t.subtasks.iter().filter(|s| s.checkpoint.is_some()).count() == 3);
+    assert!(
+        t.subtasks
+            .iter()
+            .filter(|s| !s.checkpoints.is_empty())
+            .count()
+            == 3
+    );
 
     // The repository's pre-push hook runs for the PR push.
     let hook_ran = env.path("pre-push-ran");
@@ -451,8 +458,8 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     // The PR records the newest checkpoint it holds; the UI calls it current while that is still
     // the task's newest.
     let current = |t: &ca_core::Task| {
-        let pushed = t.pull_request.clone().unwrap().pushed_checkpoint;
-        pushed.is_some() && pushed.as_deref() == t.newest_dev_checkpoint()
+        let pushed = t.pull_requests[ROOT_REPO].clone().pushed_checkpoint;
+        pushed.is_some() && pushed.as_deref() == t.newest_dev_checkpoint(ROOT_REPO)
     };
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert!(current(&t), "the PR holds the newest checkpoint");
@@ -493,7 +500,10 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     engine.wait_idle(&task.id).await;
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(t.phase, Phase::HumanReview);
-    assert!(t.pull_request.is_some(), "a replan keeps the PR");
+    assert!(
+        t.pull_requests.contains_key(ROOT_REPO),
+        "a replan keeps the PR"
+    );
     assert!(!current(&t), "the replan's new work is not in the PR");
     assert_eq!(pr_url(&engine, &task.id).await, url);
     let t = engine.get_task(&task.id).await.unwrap().unwrap();
@@ -508,7 +518,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
 /// Open (or update) the task's PR and return its link.
 #[cfg(unix)]
 async fn pr_url(engine: &Engine, id: &str) -> String {
-    let pr = engine.create_pull_request(id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(id).await.unwrap());
     pr.url.expect("the PR has a link")
 }
 
@@ -611,7 +621,10 @@ async fn a_pr_that_gh_made_but_failed_to_report_is_still_found() {
     let url = pr_url(&engine, &id).await;
     assert_eq!(url, "https://github.com/example/repo/pull/9");
     let t = engine.get_task(&id).await.unwrap().unwrap();
-    assert_eq!(t.pull_request.unwrap().url.as_deref(), Some(url.as_str()));
+    assert_eq!(
+        t.pull_requests[ROOT_REPO].clone().url.as_deref(),
+        Some(url.as_str())
+    );
 }
 
 /// A remote hook that prints `lines` the way a host does (git shows them as `remote:` lines) and
@@ -664,7 +677,7 @@ async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
         "View merge request for the branch:\n  https://gitlab.corp/g/r/-/merge_requests/12",
         true,
     );
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(pr.host, Some(ca_core::PrHost::Gitlab));
     assert_eq!(
         pr.url.as_deref(),
@@ -683,7 +696,7 @@ async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
     // The next push (an update) sends the options again, so GitLab refreshes the description or
     // reopens a merge request that was closed; the link stays. (It may also send nothing at all:
     // a re-squash in the same second is the same commit.)
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(
         pr.url.as_deref(),
         Some("https://gitlab.corp/g/r/-/merge_requests/12")
@@ -694,7 +707,10 @@ async fn gitlab_merge_requests_are_opened_with_push_options_and_no_cli() {
         "{second}"
     );
     let t = engine.get_task(&id).await.unwrap().unwrap();
-    assert_eq!(t.pull_request.unwrap().host, Some(ca_core::PrHost::Gitlab));
+    assert_eq!(
+        t.pull_requests[ROOT_REPO].clone().host,
+        Some(ca_core::PrHost::Gitlab)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -714,8 +730,8 @@ async fn gitlab_that_reports_no_merge_request_is_an_error_not_up_to_date() {
             .await
             .unwrap()
             .unwrap()
-            .pull_request
-            .is_none()
+            .pull_requests
+            .is_empty()
     );
 }
 
@@ -730,11 +746,11 @@ async fn a_link_from_another_host_is_not_taken_for_a_github_pr() {
         "Create a pull request:\n  https://github.com/example/repo/pull/new/x",
         false,
     );
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(pr.host, Some(ca_core::PrHost::Other));
     // Then the project says GitHub: the kept page is not an open PR, so gh opens one.
     use_github(&engine).await;
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(pr.host, Some(ca_core::PrHost::Github));
     assert_eq!(
         pr.url.as_deref(),
@@ -760,8 +776,8 @@ async fn a_remote_without_push_options_is_named_when_set_to_gitlab() {
             .await
             .unwrap()
             .unwrap()
-            .pull_request
-            .is_none()
+            .pull_requests
+            .is_empty()
     );
 }
 
@@ -776,7 +792,7 @@ async fn other_hosts_get_the_branch_pushed_and_their_own_link() {
         "Create pull request for code-automata/x:\n  https://bitbucket.org/o/r/pull-requests/new?source=x",
         false,
     );
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(pr.host, Some(ca_core::PrHost::Other));
     assert_eq!(
         pr.url.as_deref(),
@@ -795,10 +811,10 @@ async fn a_host_that_prints_no_link_still_gets_the_branch() {
     let env = Env::new().await;
     let (engine, id) = reviewed_task_on(&env, true, Some(ca_core::PrHost::Other)).await;
     remote_says(&env, "thanks", false);
-    let pr = engine.create_pull_request(&id).await.unwrap().pull_request;
+    let pr = pushed(engine.create_pull_request(&id).await.unwrap());
     assert_eq!(pr.url, None);
     let t = engine.get_task(&id).await.unwrap().unwrap();
-    let recorded = t.pull_request.unwrap();
+    let recorded = t.pull_requests[ROOT_REPO].clone();
     assert_eq!(recorded.host, Some(ca_core::PrHost::Other));
     assert!(recorded.pushed_checkpoint.is_some());
 }
@@ -958,7 +974,7 @@ async fn failing_checks_start_a_rework_round_with_the_output() {
             .contains("fixed.txt is missing"),
         "the rework prompt must carry the check output"
     );
-    assert!(t.review.checks.as_ref().unwrap().passed);
+    assert!(t.review.checks[ROOT_REPO].passed);
     assert_eq!(t.subtask("qa-1").unwrap().status, SubtaskStatus::Done);
 }
 
@@ -1084,7 +1100,7 @@ async fn a_worktree_moved_by_hand_fails_checks_once_instead_of_looping() {
     TaskStore::new(engine.project())
         .update(&task.id, |t| {
             t.phase = Phase::AiReview;
-            t.review.checks = None;
+            t.review.checks.clear();
             if let Some(q) = t.subtask_mut("qa-1") {
                 q.status = SubtaskStatus::Pending;
                 q.verdict = None;
@@ -1188,7 +1204,7 @@ async fn triage_done_checkpoints_the_partial_work_and_moves_on() {
             "show",
             "--name-only",
             "--format=",
-            t.subtask("dev-1").unwrap().checkpoint.as_deref().unwrap(),
+            t.subtask("dev-1").unwrap().checkpoints[ROOT_REPO].as_str(),
         ],
     );
     assert!(
@@ -1428,7 +1444,7 @@ async fn skipping_a_halted_subtask_drops_its_partial_work() {
             "show",
             "--name-only",
             "--format=",
-            t.subtask("dev-2").unwrap().checkpoint.as_deref().unwrap(),
+            t.subtask("dev-2").unwrap().checkpoints[ROOT_REPO].as_str(),
         ],
     );
     assert!(
@@ -1487,12 +1503,12 @@ async fn one_bad_task_does_not_stop_the_project_opening() {
         .create(Task::new("Bad", "", env.agent(1, vec![])))
         .await
         .unwrap();
-    // Running under some other boot, and invalid: a finished dev subtask with no checkpoint.
+    // Running under some other boot, and invalid: a finished dev subtask with no finish time.
     let path = env.project.tasks_dir().join(&task.id).join("task.json");
     let mut json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     json["phase"] = "in_progress".into();
     json["subtasks"] = json!([
-        { "id": "dev-1", "kind": "dev", "title": "a", "detail": "a", "status": "done", "finishedAt": 1 },
+        { "id": "dev-1", "kind": "dev", "title": "a", "detail": "a", "status": "done" },
         { "id": "dev-2", "kind": "dev", "title": "b", "detail": "b", "status": "pending" },
         { "id": "qa-1", "kind": "qa", "title": "q", "detail": "q", "status": "pending" }
     ]);
@@ -1697,4 +1713,13 @@ async fn reopening_never_removes_a_worktree_that_may_hold_the_users_work() {
         engine.get_task(&id).await.unwrap().unwrap().phase,
         Phase::Done
     );
+}
+
+/// The one repository's pull request of a one-repository task's report.
+#[cfg(unix)]
+fn pushed(report: ca_core::engine::pr::PrReport) -> ca_core::task::PullRequest {
+    match report.rows.into_iter().next().map(|r| r.result) {
+        Some(ca_core::engine::pr::PrResult::Pushed { pull_request, .. }) => pull_request,
+        other => panic!("expected a pushed pull request, got {other:?}"),
+    }
 }

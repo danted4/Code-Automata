@@ -63,7 +63,7 @@ pub fn next_step(task: &Task, settings: &Settings) -> Step {
     }
     match task.phase {
         Phase::Planning => {
-            if task.base_commit.is_none() {
+            if !task.has_worktrees() {
                 return Step::CreateWorktree;
             }
             match task.planning.stage {
@@ -98,7 +98,7 @@ pub fn next_step(task: &Task, settings: &Settings) -> Step {
                 return Step::RunChecks;
             }
             let rework_left = task.review.rework_count < settings.rework_limit;
-            if task.review.checks.as_ref().is_some_and(|c| !c.passed) {
+            if task.checks_failed() {
                 return if rework_left {
                     Step::Rework(ReworkCause::Checks)
                 } else {
@@ -124,13 +124,19 @@ fn first_pending(task: &Task, kind: SubtaskKind) -> Option<String> {
         .map(|s| s.id.clone())
 }
 
-/// Checks are current when they ran against the last dev checkpoint. Commits, not clock times:
-/// a clock that steps back cannot make them look stale forever.
+/// Checks are current when every repository that counts has checks run against its last dev
+/// checkpoint. Commits, not clock times: a clock that steps back cannot make them look stale
+/// forever. A workspace task that changed nothing has nothing to check.
 fn checks_are_current(task: &Task) -> bool {
-    match (&task.review.checks, task.last_dev_checkpoint()) {
-        (Some(checks), Some(commit)) => checks.commit == commit,
-        _ => false,
-    }
+    task.repos_to_check().iter().all(|repo| {
+        match (
+            task.review.checks.get(*repo),
+            task.last_dev_checkpoint(repo),
+        ) {
+            (Some(checks), Some(commit)) => checks.commit == commit,
+            _ => false,
+        }
+    })
 }
 
 fn failed_qa(task: &Task) -> impl Iterator<Item = &Subtask> {
@@ -142,12 +148,32 @@ fn failed_qa(task: &Task) -> impl Iterator<Item = &Subtask> {
 pub fn rework_feedback(task: &Task, cause: ReworkCause) -> String {
     match cause {
         ReworkCause::Checks => {
-            let c = task.review.checks.as_ref();
-            format!(
-                "The automated checks failed ({}). Fix the cause of each failure:\n\n{}",
-                c.map_or("", |c| c.summary.as_str()),
-                c.and_then(|c| c.details.as_deref()).unwrap_or("")
-            )
+            let failed: Vec<_> = task
+                .repos_to_check()
+                .into_iter()
+                .filter_map(|r| task.review.checks.get(r).map(|c| (r, c)))
+                .filter(|(_, c)| !c.passed)
+                .collect();
+            match failed.as_slice() {
+                [(crate::util::ROOT_REPO, c)] => format!(
+                    "The automated checks failed ({}). Fix the cause of each failure:\n\n{}",
+                    c.summary,
+                    c.details.as_deref().unwrap_or("")
+                ),
+                _ => {
+                    let mut s = String::from(
+                        "The automated checks failed. Fix the cause of each failure:\n",
+                    );
+                    for (repo, c) in failed {
+                        s.push_str(&format!(
+                            "\n## In {repo}/ ({})\n\n{}\n",
+                            c.summary,
+                            c.details.as_deref().unwrap_or("")
+                        ));
+                    }
+                    s
+                }
+            }
         }
         ReworkCause::Qa => {
             let mut s = String::from("QA review found problems. Fix each finding:\n");
@@ -230,7 +256,7 @@ fn add_rework(task: &mut Task, feedback: String, settings: &Settings) -> Result<
         qa.status = SubtaskStatus::Pending;
         qa.verdict = None;
         qa.finished_at = None;
-        qa.checkpoint = None;
+        qa.checkpoints.clear();
         qa.skipped_reason = None;
     }
     task.review.rework_count = round;
@@ -243,7 +269,7 @@ fn add_rework(task: &mut Task, feedback: String, settings: &Settings) -> Result<
 /// Finish AI review. When the rework limit ran out with checks still failing, the QA subtasks never
 /// ran; they are marked skipped and the failure stays in `review` for the human reviewer.
 pub fn apply_finish_review(task: &mut Task) -> Result<()> {
-    let checks_failed = task.review.checks.as_ref().is_some_and(|c| !c.passed);
+    let checks_failed = task.checks_failed();
     let qa_failed = failed_qa(task).next().is_some();
     if !checks_failed && !qa_failed {
         // Earlier rounds' findings are resolved; nothing is left for the reviewer.
@@ -279,6 +305,8 @@ pub fn apply_finish_review(task: &mut Task) -> Result<()> {
 mod tests {
     use super::*;
     use crate::task::{AgentConfig, Checks, Provider, QaVerdict, Run, RunKind, RunState};
+    use crate::util::ROOT_REPO;
+    use std::collections::BTreeMap;
 
     fn settings() -> Settings {
         Settings::default()
@@ -286,7 +314,7 @@ mod tests {
 
     fn base() -> Task {
         let mut t = Task::new("t", "", AgentConfig::new(Provider::Mock));
-        t.base_commit = Some("abc".into());
+        t.base_commits.insert(ROOT_REPO.into(), "abc".into());
         t
     }
 
@@ -304,8 +332,8 @@ mod tests {
     }
 
     /// Checks that ran against `commit`.
-    fn checks(passed: bool, commit: &str) -> Option<Checks> {
-        Some(Checks {
+    fn checks(passed: bool, commit: &str) -> BTreeMap<String, Checks> {
+        let checks = Checks {
             passed,
             summary: if passed {
                 "✓ build".into()
@@ -315,12 +343,13 @@ mod tests {
             details: (!passed).then(|| "error at x".into()),
             at: 0,
             commit: commit.into(),
-        })
+        };
+        BTreeMap::from([(ROOT_REPO.to_string(), checks)])
     }
 
     fn done_dev(id: &str, checkpoint: &str) -> Subtask {
         let mut s = sub(id, SubtaskKind::Dev, SubtaskStatus::Done, Some(1));
-        s.checkpoint = Some(checkpoint.into());
+        s.checkpoints.insert(ROOT_REPO.into(), checkpoint.into());
         s
     }
 
@@ -341,7 +370,7 @@ mod tests {
         let s = settings();
         let mut t = Task::new("t", "", AgentConfig::new(Provider::Mock));
         assert_eq!(next_step(&t, &s), Step::CreateWorktree);
-        t.base_commit = Some("abc".into());
+        t.base_commits.insert(ROOT_REPO.into(), "abc".into());
         assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Plan));
         t.require_plan_approval = true;
         assert_eq!(next_step(&t, &s), Step::Agent(AgentStep::Questions));
@@ -623,7 +652,7 @@ mod tests {
         let rework = t.subtask_mut("rework-1").unwrap();
         rework.status = SubtaskStatus::Done;
         rework.finished_at = Some(3);
-        rework.checkpoint = Some("c2".into());
+        rework.checkpoints.insert(ROOT_REPO.into(), "c2".into());
         t.review.checks = checks(true, "c2");
         let qa = t.subtask_mut("qa-1").unwrap();
         qa.status = SubtaskStatus::Done;

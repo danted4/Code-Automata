@@ -15,7 +15,11 @@ orphan: boolean,
 /**
  * The task is done: its worktree can be removed on its own (the task and branch stay).
  */
-taskDone: boolean, taskId: string, path: string, 
+taskDone: boolean, taskId: string, 
+/**
+ * The repository it belongs to ([`ROOT_REPO`] in a one-repository project).
+ */
+repo: string, path: string, 
 /**
  * `None` for a worktree on a detached HEAD.
  */

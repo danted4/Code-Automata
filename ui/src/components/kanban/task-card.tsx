@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import type { Task } from '@/lib/api/types/Task';
+import { hasWorktrees } from '@/lib/review-summary';
 import {
   ACTION_LABELS,
   primaryAction,
@@ -165,7 +166,7 @@ export function TaskCard({ task }: { task: Task }) {
             <span data-testid="task-agent">
               {PROVIDER_LABELS[task.agent.provider] ?? task.agent.provider}
             </span>
-            {task.baseCommit && (
+            {hasWorktrees(task) && (
               <span className="flex items-center gap-1 min-w-0">
                 <GitBranch className="w-3 h-3 shrink-0" />
                 <span className="font-mono truncate">code-automata/{task.id}</span>

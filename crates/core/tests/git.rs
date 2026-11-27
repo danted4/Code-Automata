@@ -32,11 +32,16 @@ async fn project_dir_rejects_bad_paths() {
 }
 
 #[tokio::test]
-async fn a_subfolder_opens_its_repository() {
+async fn a_subfolder_of_a_repository_is_refused() {
     let repo = TempRepo::new();
     let sub = repo.path.join("packages").join("app");
     std::fs::create_dir_all(&sub).unwrap();
-    let project = ProjectDir::open(&sub).await.unwrap();
+    let err = ProjectDir::open(&sub).await.unwrap_err();
+    assert!(
+        matches!(&err, CoreError::InvalidProject { reason, .. } if reason.contains("open the repository root")),
+        "{err:?}"
+    );
+    let project = ProjectDir::open(&repo.path).await.unwrap();
     assert_eq!(project.root(), repo.path);
     assert!(project.tasks_dir().starts_with(&repo.path));
     assert!(project.worktrees_dir().starts_with(&repo.path));

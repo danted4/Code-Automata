@@ -15,6 +15,7 @@ use super::output::{AgentOutput, DevOut, PlanOut, QaOut, QuestionsOut, SubtasksO
 use super::settings::Settings;
 use crate::git::WorkingDiff;
 use crate::task::{Subtask, SubtaskKind, SubtaskStatus, Task};
+use crate::util::ROOT_REPO;
 
 /// Replace `{{name}}` placeholders in one pass over the template. Inserted values are never
 /// scanned again, so a `{{plan}}` inside a task description stays literal. Unknown placeholders are
@@ -238,13 +239,47 @@ fn handoffs(task: &Task) -> String {
     s
 }
 
-/// The partial work an interrupted attempt left in the worktree.
-pub fn diff_block(diff: &WorkingDiff) -> String {
-    if diff.is_empty() {
-        return "The worktree has no changes since the last checkpoint.".into();
+/// The uncommitted work in each of a task's worktrees since its last checkpoint, by repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoDiffs(pub Vec<(String, WorkingDiff)>);
+
+impl RepoDiffs {
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|(_, d)| d.is_empty())
     }
-    let mut s = String::from(
-        "These changes are in the worktree since the last checkpoint (the previous attempt's \
+}
+
+/// The partial work an interrupted attempt left in the worktree (or, in a workspace, in each
+/// repository's worktree).
+pub fn diff_block(diffs: &RepoDiffs) -> String {
+    match diffs.0.as_slice() {
+        [(repo, diff)] if repo == ROOT_REPO => one_diff_block(diff, "the worktree"),
+        all => {
+            if diffs.is_empty() {
+                return "No repository has changes since its last checkpoint.".into();
+            }
+            let mut s = String::new();
+            for (repo, diff) in all.iter().filter(|(_, d)| !d.is_empty()) {
+                let _ = write!(
+                    s,
+                    "\n## In {repo}/\n\n{}\n",
+                    one_diff_block(diff, &format!("{repo}/"))
+                );
+            }
+            s
+        }
+    }
+}
+
+fn one_diff_block(diff: &WorkingDiff, place: &str) -> String {
+    if diff.is_empty() {
+        return format!(
+            "{} has no changes since the last checkpoint.",
+            capitalize(place)
+        );
+    }
+    let mut s = format!(
+        "These changes are in {place} since the last checkpoint (the previous attempt's \
          work). Build on them; do not start over unless they are wrong.\n",
     );
     if !diff.diff.is_empty() {
@@ -257,16 +292,26 @@ pub fn diff_block(diff: &WorkingDiff) -> String {
         }
     }
     if diff.truncated {
-        s.push_str(
-            "\n(The list above is cut short; run `git status` and `git diff` to see all of it.)\n",
+        let _ = writeln!(
+            s,
+            "\n(The list above is cut short; run `git status` and `git diff` in {place} to see all \
+             of it.)"
         );
     }
     s
 }
 
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// A dev subtask, with everything the agent needs. `resume` carries the partial work when a
 /// previous attempt was interrupted and this is a fresh session.
-pub fn dev(task: &Task, subtask: &Subtask, resume: Option<&WorkingDiff>) -> String {
+pub fn dev(task: &Task, subtask: &Subtask, resume: Option<&RepoDiffs>) -> String {
     let mut s = format!(
         "You are a developer working through an approved plan one subtask at a time.\n\n{}\n\
          # Approved plan\n\n{}\n\n# Subtasks\n\n{}{}\n\
@@ -304,7 +349,7 @@ pub fn dev(task: &Task, subtask: &Subtask, resume: Option<&WorkingDiff>) -> Stri
 }
 
 /// Continue the same provider session after an interruption.
-pub fn resume_same_session(diff: &WorkingDiff) -> String {
+pub fn resume_same_session(diff: &RepoDiffs) -> String {
     format!(
         "You were interrupted before finishing this subtask (the app was closed or paused). \
          Continue the same subtask from where you stopped.\n\n{}\n\n\
@@ -348,7 +393,7 @@ pub fn qa(task: &Task, subtask: &Subtask) -> String {
     )
 }
 
-pub fn triage(task: &Task, subtask: &Subtask, diff: &WorkingDiff) -> String {
+pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs) -> String {
     format!(
         "A developer was interrupted while working on a subtask. Judge the state they left; do \
          not change anything.\n\n{}\n# The subtask: {} ({})\n\n{}\n\n# What is in the \
@@ -433,6 +478,7 @@ mod tests {
             untracked: vec!["src/new.rs".into()],
             truncated: false,
         };
+        let diff = RepoDiffs(vec![(ROOT_REPO.to_string(), diff)]);
         let p = dev(&t, &t.subtasks[1], Some(&diff));
         assert!(p.contains("Resuming an interrupted attempt"));
         assert!(p.contains("+fn next() {}"));

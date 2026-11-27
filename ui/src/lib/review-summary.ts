@@ -39,13 +39,37 @@ export function unresolvedHeading(reworkCount: number): string {
   return `Unresolved after ${plural(reworkCount, 'rework round')}`;
 }
 
+/** The project itself as a task's repository, in a project that is one repository. */
+export const ROOT_REPO = '.';
+
+/** Whether the task's worktrees exist (they are made when planning starts). */
+export function hasWorktrees(task: Task): boolean {
+  return Object.keys(task.baseCommits ?? {}).length > 0;
+}
+
+/** The task's repositories, in name order (`.` for a one-repository project). */
+export function taskRepos(task: Task): string[] {
+  return Object.keys(task.baseCommits ?? {}).sort();
+}
+
+/** The repository the single-repository views show: the project itself, else the first. */
+export function primaryRepo(task: Task): string {
+  const repos = taskRepos(task);
+  return repos.includes(ROOT_REPO) || repos.length === 0 ? ROOT_REPO : repos[0];
+}
+
+/** The newest dev checkpoint in `repo`: the last work a squash puts in its pull request. */
+export function newestDevCheckpoint(task: Task, repo: string = primaryRepo(task)): string | null {
+  const devs = (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoints?.[repo]);
+  return devs.length ? (devs[devs.length - 1].checkpoints?.[repo] ?? null) : null;
+}
+
 /**
- * The commit the checks should have run against: the last dev checkpoint, else the commit the
- * branch started from (as the engine decides it).
+ * The commit `repo`'s checks should have run against: its last dev checkpoint, else the commit
+ * its branch started from (as the engine decides it).
  */
-export function lastDevCheckpoint(task: Task): string | null {
-  const devs = (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoint);
-  return devs.length ? (devs[devs.length - 1].checkpoint ?? null) : (task.baseCommit ?? null);
+export function lastDevCheckpoint(task: Task, repo: string = primaryRepo(task)): string | null {
+  return newestDevCheckpoint(task, repo) ?? task.baseCommits?.[repo] ?? null;
 }
 
 /** The engine starts its feedback with the same heading the modal shows; drop it there. */
@@ -62,7 +86,7 @@ export function reviewSummary(task: Task): ReviewSummary {
     .filter((s) => s.kind === 'qa')
     .map((subtask) => ({ subtask, verdict: subtask.verdict ?? null }));
 
-  const checks = task.review?.checks ?? null;
+  const checks = task.review?.checks?.[primaryRepo(task)] ?? null;
   const last = lastDevCheckpoint(task);
   const checksStale = !!checks && !!last && checks.commit !== last;
 
@@ -107,12 +131,6 @@ export type PullRequestAction = {
   done: string;
 };
 
-/** The newest dev checkpoint: the last work a squash puts in the pull request. */
-export function newestDevCheckpoint(task: Task): string | null {
-  const devs = (task.subtasks ?? []).filter((s) => s.kind === 'dev' && s.checkpoint);
-  return devs.length ? (devs[devs.length - 1].checkpoint ?? null) : null;
-}
-
 function linkLabel(host: PrHost): string {
   switch (host) {
     case 'github':
@@ -136,7 +154,7 @@ export function pullRequestAction(
   created: PullRequestResponse | null
 ): PullRequestAction {
   const branch = taskBranch(task.id);
-  const pr = task.pullRequest ?? null;
+  const pr = task.pullRequests?.[primaryRepo(task)] ?? null;
   if (!pr && !created) {
     return {
       kind: 'create',

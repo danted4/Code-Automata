@@ -17,8 +17,13 @@ requirePlanApproval: boolean, planning: Planning,
  */
 subtasks?: Array<Subtask>, review?: Review, 
 /**
- * Commit the task's branch started from, set when its worktree is created. The branch
- * (`code-automata/<id>`) and worktree path (`.code-automata/worktrees/<id>`) follow from the
- * id and are not stored.
+ * The commit each repository's task branch started from, set when the worktrees are created.
+ * Its keys are the task's repositories; empty until then. The branch (`code-automata/<id>` in
+ * each repository) and worktree paths (`.code-automata/worktrees/<id>`, or `<id>/<repo>` in a
+ * workspace) follow from the id and are not stored.
  */
-baseCommit?: string | null, pullRequest?: PullRequest | null, run?: Run | null, };
+baseCommits?: { [key in string]: string }, 
+/**
+ * The pull request of each repository that has one.
+ */
+pullRequests?: { [key in string]: PullRequest }, run?: Run | null, };

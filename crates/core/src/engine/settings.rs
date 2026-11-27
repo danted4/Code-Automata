@@ -3,6 +3,7 @@
 //! A missing file means defaults. The file is strict like task files: unknown keys and any schema
 //! other than 1 are refused, so a typo cannot silently fall back to a default.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,20 @@ pub struct PromptOverrides {
     pub subtasks: Option<String>,
 }
 
+/// A workspace's settings for one of its repositories.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RepoSettings {
+    /// Check commands run in this repository's worktree. `None`: the repository's own saved
+    /// commands (from opening it on its own), else detected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<CheckCommand>>,
+    /// How this repository's pull requests are opened; `None` detects it from its `origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_host: Option<PrHost>,
+}
+
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -106,6 +121,10 @@ pub struct Settings {
     /// a self-hosted GitLab whose address does not say "gitlab".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request_host: Option<PrHost>,
+    /// A workspace's settings per repository, by folder name. `checks` and `pullRequestHost`
+    /// above apply to a one-repository project only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repos: BTreeMap<String, RepoSettings>,
 }
 
 fn default_concurrency() -> u32 {
@@ -129,6 +148,7 @@ impl Default for Settings {
             triage_on_resume: false,
             prompts: PromptOverrides::default(),
             pull_request_host: None,
+            repos: BTreeMap::new(),
         }
     }
 }
@@ -140,7 +160,35 @@ impl Settings {
 
     /// The project's settings, or defaults when there is no file.
     pub async fn load(project: &ProjectDir) -> Result<Settings> {
-        let path = Self::path(project);
+        Self::load_file(Self::path(project)).await
+    }
+
+    /// The settings saved in a repository's own `.code-automata/` (from opening it on its own),
+    /// for a workspace's fallback check commands. A missing or unreadable file gives `None`.
+    pub async fn load_repo_own(main_checkout: &std::path::Path) -> Option<Settings> {
+        let path = main_checkout.join(".code-automata").join("settings.json");
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return None;
+        }
+        match Self::load_file(path).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::warn!("ignoring a repository's own settings: {e}");
+                None
+            }
+        }
+    }
+
+    /// The pull request host setting for `repo` (a task file's repository key).
+    pub fn pull_request_host_for(&self, repo: &str) -> Option<PrHost> {
+        if repo == crate::util::ROOT_REPO {
+            self.pull_request_host
+        } else {
+            self.repos.get(repo).and_then(|r| r.pull_request_host)
+        }
+    }
+
+    async fn load_file(path: std::path::PathBuf) -> Result<Settings> {
         let bytes = match tokio::fs::read(&path).await {
             Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
@@ -182,12 +230,20 @@ impl Settings {
         {
             return bad("timeouts must be more than 0 and at most 24 hours");
         }
-        if let Some(checks) = &self.checks
-            && checks
-                .iter()
-                .any(|c| c.name.trim().is_empty() || c.command.trim().is_empty())
-        {
+        let incomplete = |checks: &Option<Vec<CheckCommand>>| {
+            checks.as_ref().is_some_and(|checks| {
+                checks
+                    .iter()
+                    .any(|c| c.name.trim().is_empty() || c.command.trim().is_empty())
+            })
+        };
+        if incomplete(&self.checks) || self.repos.values().any(|r| incomplete(&r.checks)) {
             return bad("every check needs a name and a command");
+        }
+        for name in self.repos.keys() {
+            if name == crate::util::ROOT_REPO || crate::util::validate_repo_name(name).is_err() {
+                return bad(&format!("{name:?} is not a repository folder name"));
+            }
         }
         Ok(())
     }

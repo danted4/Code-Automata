@@ -4,8 +4,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use ca_core::engine::Engine;
+use ca_core::engine::pr::{PrReport, PrResult};
 use ca_core::engine::runlog::{RunLogInfo, RunLogLine};
-use ca_core::{PrHost, Provider, Task, TaskList};
+use ca_core::{CoreError, PrHost, Provider, Task, TaskList};
 use serde_json::{Map, Value};
 
 use super::types::{
@@ -188,13 +189,42 @@ pub async fn pull_request(
     Project(engine): Project,
     Path(id): Path<String>,
 ) -> ApiResult<PullRequestResponse> {
-    let outcome = engine.create_pull_request(&id).await?;
-    let pr = outcome.pull_request;
-    Ok(Json(PullRequestResponse {
-        url: pr.url,
-        host: pr.host.unwrap_or(PrHost::Github),
-        note: outcome.note,
-    }))
+    let report = engine.create_pull_request(&id).await?;
+    let first = report
+        .rows
+        .into_iter()
+        .find(|r| !matches!(r.result, PrResult::NoChanges));
+    let response = match first.map(|r| r.result) {
+        Some(PrResult::Pushed { pull_request, note }) => PullRequestResponse {
+            url: pull_request.url,
+            host: pull_request.host.unwrap_or(PrHost::Github),
+            note,
+        },
+        Some(PrResult::NoRemote { branch }) => PullRequestResponse {
+            url: None,
+            host: PrHost::Other,
+            note: Some(format!(
+                "The repository has no `origin` remote, so nothing was pushed; the work is on \
+                 branch {branch}."
+            )),
+        },
+        Some(PrResult::Failed { error }) => return Err(CoreError::Invalid(error).into()),
+        Some(PrResult::NoChanges) | None => {
+            return Err(CoreError::Invalid(
+                "nothing to open a pull request for: the task changed no repository".into(),
+            )
+            .into());
+        }
+    };
+    Ok(Json(response))
+}
+
+/// Open or update the pull request of every repository the task changed.
+pub async fn pull_requests(
+    Project(engine): Project,
+    Path(id): Path<String>,
+) -> ApiResult<PrReport> {
+    Ok(Json(engine.create_pull_request(&id).await?))
 }
 
 pub async fn runs(Project(engine): Project, Path(id): Path<String>) -> ApiResult<Vec<RunLogInfo>> {

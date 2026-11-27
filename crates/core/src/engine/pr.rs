@@ -18,9 +18,15 @@
 //!   print for a pushed branch (Bitbucket, Gitea, GitHub and GitLab do) is kept as the task's
 //!   link. Without one, the branch is still pushed: the user opens the PR on the host.
 //!
-//! A replan keeps the PR: approving the new plan resets the worktree to the base commit, the new
-//! run commits fresh checkpoints, and the next update squashes those and force-pushes them over
-//! the old commit on the same branch.
+//! A replan keeps the PR: the new run commits fresh checkpoints on the same branch, and the next
+//! update squashes everything since the base commit and force-pushes it over the old commit.
+//!
+//! A workspace task does this for each repository it changed, one after another: a repository
+//! that fails does not stop the rest, each success is recorded as it happens, and a retry skips
+//! nothing but opens nothing twice (an open PR is found again and updated). A repository with no
+//! `origin` remote is reported, not failed: its work stays on the task branch. Once the PRs exist,
+//! each description lists the others where the host allows it (GitHub: always kept complete;
+//! GitLab: as known at its push).
 
 use std::path::Path;
 use std::time::Duration;
@@ -29,12 +35,13 @@ use super::Inner;
 use crate::error::{CoreError, Result};
 use crate::git::{self, Worktrees};
 use crate::task::{Phase, PrHost, PullRequest, SubtaskKind, SubtaskStatus, Task};
+use crate::util::ROOT_REPO;
 
 const NETWORK: Duration = Duration::from_secs(90);
 /// Local checks while detecting the host (`gh auth token`, `ssh -G`): config files only.
 const LOCAL_CHECK: Duration = Duration::from_secs(10);
 
-/// What opening or updating a pull request did.
+/// What opening or updating one repository's pull request did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrOutcome {
     /// The record now on the task.
@@ -43,7 +50,49 @@ pub struct PrOutcome {
     pub note: Option<String>,
 }
 
-pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrOutcome> {
+/// What happened in one repository.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "result",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum PrResult {
+    /// Opened, updated or already up to date.
+    Pushed {
+        pull_request: PullRequest,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    /// No `origin` remote: the work is on the task branch in this repository.
+    NoRemote {
+        branch: String,
+    },
+    /// The task did not change this repository (or its changes add up to none).
+    NoChanges,
+    Failed {
+        error: String,
+    },
+}
+
+/// One row of a [`PrReport`].
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrRow {
+    pub repo: String,
+    pub result: PrResult,
+}
+
+/// What "Create pull requests" did, one row per repository of the task, in name order.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct PrReport {
+    pub rows: Vec<PrRow>,
+}
+
+pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrReport> {
     let task = inner
         .store
         .load(id)
@@ -54,20 +103,128 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrOutcome> {
             "a pull request is opened from human review".into(),
         ));
     }
-    let base = task
-        .base_commit
-        .clone()
-        .ok_or_else(|| CoreError::Invalid("the task has no worktree".into()))?;
-    let wt = inner.worktrees.path_for(id)?;
-    if !inner.worktrees.status(id).await?.exists {
+    if !task.has_worktrees() {
+        return Err(CoreError::Invalid("the task has no worktree".into()));
+    }
+    let named: Vec<String> = task.repos().map(String::from).collect();
+    if !git::task_status(&inner.project, id, &named).await?.exists {
         return Err(CoreError::Invalid(
             "the task's worktree was removed; reopen the task to bring it back".into(),
         ));
     }
+
+    // A one-repository task keeps 3.0's behaviour: a failure is the call's error.
+    if task.base_commits.contains_key(ROOT_REPO) {
+        let result = match create_one(inner, &task, ROOT_REPO, &[]).await? {
+            Some(outcome) => {
+                record(inner, id, ROOT_REPO, &outcome.pull_request).await?;
+                PrResult::Pushed {
+                    pull_request: outcome.pull_request,
+                    note: outcome.note,
+                }
+            }
+            None => PrResult::NoRemote {
+                branch: Worktrees::branch_for(id),
+            },
+        };
+        return Ok(PrReport {
+            rows: vec![PrRow {
+                repo: ROOT_REPO.to_string(),
+                result,
+            }],
+        });
+    }
+
+    let changed = task.changed_repos();
+    // Links known so far, for the "part of a change across" list in each description.
+    let mut known: Vec<(String, String)> = task
+        .pull_requests
+        .iter()
+        .filter_map(|(r, p)| Some((r.clone(), p.url.clone()?)))
+        .collect();
+    let mut rows = Vec::new();
+    for repo in task.repos() {
+        let result = if !changed.contains(&repo) {
+            PrResult::NoChanges
+        } else {
+            let others: Vec<(String, String)> =
+                known.iter().filter(|(r, _)| r != repo).cloned().collect();
+            match create_one(inner, &task, repo, &others).await {
+                Ok(Some(outcome)) => {
+                    // Recorded at once: a later repository's failure must not lose it.
+                    record(inner, id, repo, &outcome.pull_request).await?;
+                    if let Some(url) = &outcome.pull_request.url {
+                        known.retain(|(r, _)| r != repo);
+                        known.push((repo.to_string(), url.clone()));
+                    }
+                    PrResult::Pushed {
+                        pull_request: outcome.pull_request,
+                        note: outcome.note,
+                    }
+                }
+                Ok(None) => PrResult::NoRemote {
+                    branch: Worktrees::branch_for(id),
+                },
+                Err(CoreError::Invalid(msg)) if msg.starts_with(NO_NET_CHANGE) => {
+                    PrResult::NoChanges
+                }
+                Err(e) => PrResult::Failed {
+                    error: e.to_string(),
+                },
+            }
+        };
+        rows.push(PrRow {
+            repo: repo.to_string(),
+            result,
+        });
+    }
+    cross_link(inner, &task, &rows, &known).await;
+    Ok(PrReport { rows })
+}
+
+async fn record(inner: &Inner, id: &str, repo: &str, pr: &PullRequest) -> Result<()> {
+    let (repo, pr) = (repo.to_string(), pr.clone());
+    inner
+        .update(id, move |t| {
+            t.pull_requests.insert(repo, pr);
+            Ok(())
+        })
+        .await
+        .map(drop)
+}
+
+const NO_NET_CHANGE: &str = "nothing to open a pull request for";
+
+/// Squash, push and open or update `repo`'s pull request. `None` when the repository has no
+/// `origin` remote. `related` lists the task's other PRs (repository, link) for the description.
+async fn create_one(
+    inner: &Inner,
+    task: &Task,
+    repo: &str,
+    related: &[(String, String)],
+) -> Result<Option<PrOutcome>> {
+    let id = task.id.as_str();
+    let worktrees = inner.repo_worktrees(repo)?;
+    let wt = worktrees.path_for(id)?;
+    let base = task
+        .base_commit(repo)
+        .ok_or_else(|| CoreError::Invalid("the task has no worktree".into()))?
+        .to_string();
+    if !git::status_at(&wt).await.exists {
+        return Err(CoreError::Invalid(
+            "the task's worktree was removed; reopen the task to bring it back".into(),
+        ));
+    }
+    if git::run_git(&wt, &["remote", "get-url", "origin"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
     let branch = Worktrees::branch_for(id);
 
     // Everything that can fail without changing anything comes first: the host, and gh for it.
-    let (host, mut note) = pr_host(inner, &wt).await?;
+    let (host, mut note) = pr_host(inner, repo, &wt).await?;
     let gh = match host {
         PrHost::Github => Some(inner.bins.locate_tool("gh")?),
         PrHost::Gitlab | PrHost::Other => None,
@@ -83,24 +240,30 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrOutcome> {
         .await?
         .is_none()
     {
-        return Err(CoreError::Invalid(
-            "nothing to open a pull request for: the task's changes add up to no change".into(),
-        ));
+        return Err(CoreError::Invalid(format!(
+            "{NO_NET_CHANGE}: the task's changes add up to no change"
+        )));
     }
 
     // The newest work the pushed commit holds, for the UI's "up to date".
-    let pushed_checkpoint = task.newest_dev_checkpoint().map(str::to_string);
-    let previous = task.pull_request.clone();
+    let pushed_checkpoint = task.newest_dev_checkpoint(repo).map(str::to_string);
+    let previous = task.pull_requests.get(repo).cloned();
+    let main = worktrees.main_branch().await;
+    let pr = PrTarget {
+        wt: &wt,
+        branch: &branch,
+        main: &main,
+        related,
+    };
 
     let (host, url) = match (host, gh) {
         (PrHost::Github, Some(gh)) => {
             push(&wt, &branch, &[]).await?;
-            let url = github(inner, &gh, &wt, &branch, &task, previous.as_ref()).await?;
+            let url = github(inner, &gh, &pr, task, previous.as_ref()).await?;
             (PrHost::Github, Some(url))
         }
         (PrHost::Gitlab, _) => {
-            let (host, url, gitlab_note) =
-                gitlab(inner, &wt, &branch, &task, previous.as_ref()).await?;
+            let (host, url, gitlab_note) = gitlab(&pr, task, previous.as_ref()).await?;
             note = gitlab_note.or(note);
             (host, url)
         }
@@ -112,22 +275,65 @@ pub(crate) async fn create(inner: &Inner, id: &str) -> Result<PrOutcome> {
             )
         }
     };
-    let record = PullRequest {
-        url,
-        host: Some(host),
-        pushed_checkpoint,
-    };
-    let stored = record.clone();
-    inner
-        .update(id, move |t| {
-            t.pull_request = Some(stored);
-            Ok(())
-        })
-        .await?;
-    Ok(PrOutcome {
-        pull_request: record,
+    Ok(Some(PrOutcome {
+        pull_request: PullRequest {
+            url,
+            host: Some(host),
+            pushed_checkpoint,
+        },
         note,
-    })
+    }))
+}
+
+/// Where one repository's pull request goes.
+struct PrTarget<'a> {
+    wt: &'a Path,
+    branch: &'a str,
+    /// The branch it targets.
+    main: &'a str,
+    /// The task's other PRs, for the description.
+    related: &'a [(String, String)],
+}
+
+/// Bring every GitHub PR's "part of a change across" list up to date once all repositories are
+/// done, since a PR opened early could not list the ones opened after it. Best effort: a failure
+/// is reported as an engine error, never fails the call.
+async fn cross_link(inner: &Inner, task: &Task, rows: &[PrRow], known: &[(String, String)]) {
+    if known.len() < 2 {
+        return;
+    }
+    let Ok(gh) = inner.bins.locate_tool("gh") else {
+        return;
+    };
+    for row in rows {
+        let PrResult::Pushed { pull_request, .. } = &row.result else {
+            continue;
+        };
+        let (Some(PrHost::Github), Some(url)) = (pull_request.host, &pull_request.url) else {
+            continue;
+        };
+        let Ok(wt) = inner
+            .repo_worktrees(&row.repo)
+            .and_then(|w| w.path_for(&task.id))
+        else {
+            continue;
+        };
+        let others: Vec<(String, String)> = known
+            .iter()
+            .filter(|(r, _)| *r != row.repo)
+            .cloned()
+            .collect();
+        let body = body(task, &others);
+        if let Err(e) = gh_output(inner, &gh, &wt, &["pr", "edit", url, "--body", &body]).await {
+            inner.emit(super::EngineEvent::Error {
+                task_id: task.id.clone(),
+                message: format!(
+                    "{}: the PR description could not list the others: {e}",
+                    row.repo
+                ),
+            });
+        }
+    }
 }
 
 /// The link to keep: an existing request the push reported, else the link already kept, else a
@@ -143,8 +349,8 @@ fn better_link(found: Option<PushLink>, previous: Option<&PullRequest>) -> Optio
 
 /// The host from the project setting, else detected from `origin`, with a note for the user
 /// when a remote host fell back to push only.
-async fn pr_host(inner: &Inner, wt: &Path) -> Result<(PrHost, Option<String>)> {
-    if let Some(host) = inner.settings().pull_request_host {
+async fn pr_host(inner: &Inner, repo: &str, wt: &Path) -> Result<(PrHost, Option<String>)> {
+    if let Some(host) = inner.settings().pull_request_host_for(repo) {
         return Ok((host, None));
     }
     let url = git::run_git(wt, &["remote", "get-url", "origin"])
@@ -389,19 +595,19 @@ async fn push(wt: &Path, branch: &str, options: &[String]) -> Result<String> {
 async fn github(
     inner: &Inner,
     gh: &Path,
-    wt: &Path,
-    branch: &str,
+    pr: &PrTarget<'_>,
     task: &Task,
     previous: Option<&PullRequest>,
 ) -> Result<String> {
+    let (wt, branch) = (pr.wt, pr.branch);
     // Only a link recorded for GitHub is a GitHub PR (records from before 3.0.1 have no host).
     let open = previous
         .filter(|p| matches!(p.host, None | Some(PrHost::Github)))
         .and_then(|p| p.url.clone());
     if let Some(url) = open {
         // Already open: the push updated the code; bring the description up to date too.
-        if let Err(e) = gh_output(inner, gh, wt, &["pr", "edit", &url, "--body", &body(task)]).await
-        {
+        let body = body(task, pr.related);
+        if let Err(e) = gh_output(inner, gh, wt, &["pr", "edit", &url, "--body", &body]).await {
             inner.emit(super::EngineEvent::Error {
                 task_id: task.id.clone(),
                 message: format!(
@@ -413,7 +619,7 @@ async fn github(
     }
     match existing_pr(inner, gh, wt, branch).await {
         Some(url) => Ok(url),
-        None => match open_pr(inner, gh, wt, branch, task).await {
+        None => match open_pr(inner, gh, pr, task).await {
             Ok(url) => Ok(url),
             // It may have been created even though the call failed (a timeout, no URL printed).
             Err(e) => existing_pr(inner, gh, wt, branch).await.ok_or(e),
@@ -434,20 +640,18 @@ async fn github(
 ///   recorded as "other" with that page, and the user is told.
 /// - No link at all: an error, and nothing is recorded, so the UI does not call it up to date.
 async fn gitlab(
-    inner: &Inner,
-    wt: &Path,
-    branch: &str,
+    pr: &PrTarget<'_>,
     task: &Task,
     previous: Option<&PullRequest>,
 ) -> Result<(PrHost, Option<String>, Option<String>)> {
-    let main = inner.worktrees.main_branch().await;
+    let (wt, branch) = (pr.wt, pr.branch);
     let options = vec![
         "merge_request.create".to_string(),
-        format!("merge_request.target={main}"),
+        format!("merge_request.target={}", pr.main),
         format!("merge_request.title={}", one_line(&task.title, 250)),
         format!(
             "merge_request.description={}",
-            one_line(&gitlab_description(task), 2000)
+            one_line(&gitlab_description(task, pr.related), 2000)
         ),
     ];
     let out = push(wt, branch, &options).await?;
@@ -484,7 +688,7 @@ fn one_line(text: &str, max: usize) -> String {
 }
 
 /// The merge request description on one line (see `one_line`).
-fn gitlab_description(task: &Task) -> String {
+fn gitlab_description(task: &Task, related: &[(String, String)]) -> String {
     let mut parts = Vec::new();
     if !task.description.trim().is_empty() {
         parts.push(task.description.trim().to_string());
@@ -500,11 +704,15 @@ fn gitlab_description(task: &Task) -> String {
     if let Some(feedback) = &task.review.feedback {
         parts.push(format!("Unresolved review findings: {feedback}"));
     }
+    if !related.is_empty() {
+        let list: Vec<String> = related.iter().map(|(r, u)| format!("{r}: {u}")).collect();
+        parts.push(format!("Part of a change across: {}.", list.join("; ")));
+    }
     parts.push("Opened by Code-Automata.".into());
     parts.join(" ")
 }
 
-fn body(task: &Task) -> String {
+fn body(task: &Task, related: &[(String, String)]) -> String {
     let mut body = String::new();
     if !task.description.trim().is_empty() {
         body.push_str(task.description.trim());
@@ -520,6 +728,12 @@ fn body(task: &Task) -> String {
     // Set only when review ended with checks or QA still failing.
     if let Some(feedback) = &task.review.feedback {
         body.push_str(&format!("\n## Unresolved review findings\n\n{feedback}\n"));
+    }
+    if !related.is_empty() {
+        body.push_str("\n## Part of a change across\n\n");
+        for (repo, url) in related {
+            body.push_str(&format!("- {repo}: {url}\n"));
+        }
     }
     body.push_str("\nOpened by Code-Automata.\n");
     body
@@ -575,9 +789,9 @@ async fn existing_pr(inner: &Inner, gh: &Path, wt: &Path, branch: &str) -> Optio
     first_url(&out)
 }
 
-async fn open_pr(inner: &Inner, gh: &Path, wt: &Path, branch: &str, task: &Task) -> Result<String> {
-    let main = inner.worktrees.main_branch().await;
-    let body = body(task);
+async fn open_pr(inner: &Inner, gh: &Path, pr: &PrTarget<'_>, task: &Task) -> Result<String> {
+    let (wt, branch, main) = (pr.wt, pr.branch, pr.main);
+    let body = body(task, pr.related);
     let out = gh_output(
         inner,
         gh,
@@ -590,7 +804,7 @@ async fn open_pr(inner: &Inner, gh: &Path, wt: &Path, branch: &str, task: &Task)
             "--body",
             &body,
             "--base",
-            &main,
+            main,
             "--head",
             branch,
         ],

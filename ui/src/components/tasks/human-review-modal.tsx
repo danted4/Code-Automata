@@ -42,6 +42,7 @@ import { api, errorMessage } from '@/lib/api';
 import { native, type AvailableEditor, type EditorId, type NativeApi } from '@/lib/native';
 import type { PullRequestResponse } from '@/lib/api/types/PullRequestResponse';
 import {
+  primaryRepo,
   pullRequestAction,
   pullRequestToast,
   reviewSummary,
@@ -91,7 +92,7 @@ export function HumanReviewModal({ taskId, open, onOpenChange }: TaskModalProps)
     try {
       const pr = await api.tasks.pullRequest(task.id);
       setCreated(pr);
-      const t = pullRequestToast(task.id, task.pullRequest ?? null, pr);
+      const t = pullRequestToast(task.id, task.pullRequests?.[primaryRepo(task)] ?? null, pr);
       (t.warn ? toast.warning : toast.success)(t.title, { description: t.description });
       try {
         useTaskStore.getState().upsert(await api.tasks.get(task.id));

@@ -33,19 +33,52 @@ impl TempRepo {
         let dir = tempfile::tempdir().unwrap();
         // The same plain form (no `\\?\` on Windows) the project code uses.
         let path = ca_core::util::plain_path(std::fs::canonicalize(dir.path()).unwrap());
-        git(&path, &["init", "-q", "-b", "main"]);
-        git(&path, &["config", "user.name", "Test"]);
-        git(&path, &["config", "user.email", "test@example.com"]);
-        git(&path, &["config", "commit.gpgsign", "false"]);
-        std::fs::write(path.join("README.md"), "# test\n").unwrap();
-        git(&path, &["add", "-A"]);
-        git(&path, &["commit", "-q", "-m", "init"]);
+        init_repo(&path);
         TempRepo { _dir: dir, path }
     }
 
     pub async fn project(&self) -> ProjectDir {
         ProjectDir::open(&self.path).await.unwrap()
     }
+}
+
+/// A temporary workspace: a plain folder holding one repository per name (each like
+/// [`TempRepo`]). Dropping it deletes it.
+pub struct TempWorkspace {
+    _dir: TempDir,
+    pub path: PathBuf,
+}
+
+impl TempWorkspace {
+    pub fn new(repos: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ca_core::util::plain_path(std::fs::canonicalize(dir.path()).unwrap());
+        for name in repos {
+            let repo = path.join(name);
+            std::fs::create_dir_all(&repo).unwrap();
+            init_repo(&repo);
+        }
+        TempWorkspace { _dir: dir, path }
+    }
+
+    pub fn repo(&self, name: &str) -> PathBuf {
+        self.path.join(name)
+    }
+
+    pub async fn project(&self) -> ProjectDir {
+        ProjectDir::open(&self.path).await.unwrap()
+    }
+}
+
+/// `git init` with one commit on `main` and a local identity.
+pub fn init_repo(path: &Path) {
+    git(path, &["init", "-q", "-b", "main"]);
+    git(path, &["config", "user.name", "Test"]);
+    git(path, &["config", "user.email", "test@example.com"]);
+    git(path, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(path.join("README.md"), "# test\n").unwrap();
+    git(path, &["add", "-A"]);
+    git(path, &["commit", "-q", "-m", "init"]);
 }
 
 pub fn fixture_path(name: &str) -> PathBuf {

@@ -2,6 +2,7 @@
 import type { CheckCommand } from "./CheckCommand";
 import type { PrHost } from "./PrHost";
 import type { PromptOverrides } from "./PromptOverrides";
+import type { RepoSettings } from "./RepoSettings";
 import type { Timeouts } from "./Timeouts";
 
 export type Settings = { schema: number, 
@@ -23,4 +24,9 @@ triageOnResume: boolean, prompts?: PromptOverrides,
  * How pull requests are opened. `None` means detect it from the `origin` remote; set it for
  * a self-hosted GitLab whose address does not say "gitlab".
  */
-pullRequestHost?: PrHost | null, };
+pullRequestHost?: PrHost | null, 
+/**
+ * A workspace's settings per repository, by folder name. `checks` and `pullRequestHost`
+ * above apply to a one-repository project only.
+ */
+repos?: { [key in string]: RepoSettings }, };

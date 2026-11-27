@@ -32,9 +32,13 @@ async fn example_file_loads_with_every_field() {
     assert_eq!(task.subtasks[0].status, SubtaskStatus::Done);
     assert_eq!(task.subtasks[2].kind, SubtaskKind::Qa);
     assert_eq!(task.review.rework_count, 1);
-    assert!(!task.review.checks.as_ref().unwrap().passed);
-    assert!(task.base_commit.as_ref().unwrap().starts_with("9d8c"));
-    assert!(task.pull_request.is_some());
+    assert!(!task.review.checks["api"].passed);
+    assert_eq!(task.repos().collect::<Vec<_>>(), ["api", "web"]);
+    assert!(task.base_commit("api").unwrap().starts_with("9d8c"));
+    assert_eq!(task.subtasks[0].checkpoints.len(), 2);
+    assert_eq!(task.subtasks[1].repos, ["web"]);
+    assert_eq!(task.changed_repos(), ["api", "web"]);
+    assert!(task.pull_requests.contains_key("api"));
 
     let run = task.run.as_ref().unwrap();
     assert_eq!(run.kind, RunKind::Dev);
@@ -95,7 +99,7 @@ async fn unknown_keys_are_refused_at_every_level() {
 #[tokio::test]
 async fn other_schema_versions_are_refused() {
     let (_repo, project, store, id) = store_with_example().await;
-    for schema in [json!(0), json!(2), json!("1"), json!(null)] {
+    for schema in [json!(0), json!(3), json!("2"), json!(null)] {
         let mut bad = fixture_json("task-example.json");
         bad["schema"] = schema.clone();
         write_task_json(&project, &id, &bad);
@@ -204,7 +208,7 @@ async fn validate_keeps_run_phase_and_subtasks_consistent() {
         |t| {
             t.subtasks[2].status = SubtaskStatus::Skipped;
             t.subtasks[2].finished_at = Some(1);
-            t.subtasks[2].checkpoint = Some("abc".into());
+            t.subtasks[2].checkpoints.insert("api".into(), "abc".into());
         },
         "skipped subtask with a checkpoint",
     )
@@ -232,5 +236,123 @@ async fn a_file_must_carry_its_directory_id_on_every_path() {
         list.skipped[0].error.contains("does not match"),
         "{:?}",
         list.skipped
+    );
+}
+
+#[tokio::test]
+async fn a_repository_the_task_does_not_have_is_refused() {
+    assert_refused(
+        |t| {
+            t.subtasks[0]
+                .checkpoints
+                .insert("docs".into(), "abc".into());
+        },
+        "a checkpoint in another repository",
+    )
+    .await;
+    assert_refused(
+        |t| t.subtasks[1].repos.push("docs".into()),
+        "a subtask naming another repository",
+    )
+    .await;
+    assert_refused(
+        |t| {
+            t.base_commits.insert("../up".into(), "abc".into());
+        },
+        "a repository name that is a path",
+    )
+    .await;
+    assert_refused(
+        |t| {
+            t.base_commits.insert(".".into(), "abc".into());
+        },
+        "the project itself beside workspace repositories",
+    )
+    .await;
+}
+
+/// A 3.0 task file (schema 1, one repository).
+async fn store_with_v1(
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (
+    common::TempRepo,
+    ca_core::ProjectDir,
+    ca_core::TaskStore,
+    String,
+) {
+    let repo = common::TempRepo::new();
+    let project = repo.project().await;
+    let mut json = fixture_json("task-example-v1.json");
+    edit(&mut json);
+    let id = json["id"].as_str().unwrap().to_string();
+    write_task_json(&project, &id, &json);
+    let store = ca_core::TaskStore::new(&project);
+    (repo, project, store, id)
+}
+
+#[tokio::test]
+async fn a_schema_1_file_reads_as_a_one_repository_task() {
+    let (_repo, _project, store, id) = store_with_v1(|_| {}).await;
+    let task = store.load(&id).await.unwrap().unwrap();
+    assert_eq!(task.schema, SCHEMA);
+    assert_eq!(task.repos().collect::<Vec<_>>(), ["."]);
+    assert!(task.base_commit(".").unwrap().starts_with("9d8c"));
+    assert_eq!(
+        task.subtasks[0].checkpoints["."],
+        "3f1c2a9e0b7d4c5f8a6e2d1b0c9f8e7d6a5b4c3d"
+    );
+    assert!(task.subtasks[1].checkpoints.is_empty());
+    assert!(!task.review.checks["."].passed);
+    let pr = &task.pull_requests["."];
+    assert_eq!(
+        pr.url.as_deref(),
+        Some("https://github.com/example/repo/pull/7")
+    );
+    // Interrupted mid-subtask: the run is kept as it was.
+    let run = task.run.as_ref().unwrap();
+    assert_eq!(run.state, RunState::Interrupted);
+    assert_eq!(run.subtask_id.as_deref(), Some("dev-2"));
+    assert_eq!(
+        task.last_dev_checkpoint("."),
+        task.subtasks[0].checkpoints.get(".").map(String::as_str)
+    );
+}
+
+#[tokio::test]
+async fn a_paused_schema_1_task_without_a_pr_converts_too() {
+    let (_repo, _project, store, id) = store_with_v1(|j| {
+        j["run"]["state"] = json!("paused");
+        j.as_object_mut().unwrap().remove("pullRequest");
+        j["review"].as_object_mut().unwrap().remove("checks");
+    })
+    .await;
+    let task = store.load(&id).await.unwrap().unwrap();
+    assert_eq!(task.run.as_ref().unwrap().state, RunState::Paused);
+    assert!(task.pull_requests.is_empty());
+    assert!(task.review.checks.is_empty());
+}
+
+#[tokio::test]
+async fn a_schema_1_file_is_rewritten_as_schema_2_only_on_update() {
+    let (_repo, project, store, id) = store_with_v1(|_| {}).await;
+    let path = common::task_file(&project, &id);
+    let before = std::fs::read(&path).unwrap();
+    store.load(&id).await.unwrap();
+    store.list().await.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), before, "reads never write");
+
+    store.update(&id, |_| Ok(())).await.unwrap();
+    let after = read_task_json(&project, &id);
+    assert_eq!(after["schema"], 2);
+    assert_eq!(
+        after["baseCommits"]["."],
+        "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c"
+    );
+    assert!(after.get("baseCommit").is_none());
+    assert!(after.get("pullRequest").is_none());
+    assert_eq!(after["pullRequests"]["."]["host"], "github");
+    assert_eq!(
+        after["subtasks"][0]["checkpoints"]["."],
+        "3f1c2a9e0b7d4c5f8a6e2d1b0c9f8e7d6a5b4c3d"
     );
 }

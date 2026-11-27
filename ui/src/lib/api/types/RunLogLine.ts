@@ -17,4 +17,4 @@ label: string, kind: RunKind, subtaskId?: string | null, provider: Provider, } |
  * Logs written before `seq` existed read as 0 (3.0 has no users yet; kept so old logs
  * still replay rather than vanish).
  */
-seq: number, event: AgentEvent, } | { "line": "abandoned", at: number, reason: string, };
+seq: number, event: AgentEvent, } | { "line": "note", at: number, text: string, } | { "line": "abandoned", at: number, reason: string, };

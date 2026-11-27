@@ -20,8 +20,11 @@ pub struct OpenProjectRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenProjectResponse {
-    /// The repository root, which is the project from now on (a subfolder opens its repository).
+    /// The project folder: a repository root, or a workspace folder.
     pub root: PathBuf,
+    pub kind: ca_core::project::ProjectKind,
+    /// The repositories: `["."]` for a repository, the folder names in a workspace.
+    pub repos: Vec<String>,
     /// Tasks that could not be reconciled when the project was opened, with why.
     pub reconcile_problems: Vec<String>,
 }

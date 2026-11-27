@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 import {
+  hasWorktrees,
   lastDevCheckpoint,
+  primaryRepo,
   pullRequestAction,
   pullRequestToast,
   reviewSummary,
   taskBranch,
+  taskRepos,
   unresolvedHeading,
   worktreePath,
 } from './review-summary';
@@ -36,11 +39,11 @@ describe('reviewSummary', () => {
   it('is all green when checks pass on the last checkpoint and QA passed', () => {
     const t = task({
       subtasks: [
-        sub({ id: 'dev-1', checkpoint: 'c1', handoff: 'Added the parser' }),
-        sub({ id: 'dev-2', checkpoint: 'c2' }),
+        sub({ id: 'dev-1', checkpoints: { '.': 'c1' }, handoff: 'Added the parser' }),
+        sub({ id: 'dev-2', checkpoints: { '.': 'c2' } }),
         sub({ id: 'qa-1', kind: 'qa', verdict: { passed: true, summary: 'Looks right' } }),
       ],
-      review: { reworkCount: 0, checks: passed },
+      review: { reworkCount: 0, checks: { '.': passed } },
     });
     const s = reviewSummary(t);
     expect(s.built.map((b) => b.id)).toEqual(['dev-1', 'dev-2']);
@@ -54,7 +57,7 @@ describe('reviewSummary', () => {
   it('names failing checks, failed and skipped QA, and skipped dev subtasks', () => {
     const t = task({
       subtasks: [
-        sub({ id: 'dev-1', checkpoint: 'c2' }),
+        sub({ id: 'dev-1', checkpoints: { '.': 'c2' } }),
         sub({ id: 'dev-2', status: 'skipped', skippedReason: 'not needed' }),
         sub({
           id: 'qa-1',
@@ -64,7 +67,7 @@ describe('reviewSummary', () => {
         sub({ id: 'qa-2', kind: 'qa', status: 'skipped', skippedReason: 'not run' }),
         sub({ id: 'qa-3', kind: 'qa', status: 'pending' }),
       ],
-      review: { reworkCount: 0, checks: { ...passed, passed: false } },
+      review: { reworkCount: 0, checks: { '.': { ...passed, passed: false } } },
     });
     expect(reviewSummary(t).attention).toEqual([
       'The automated checks failed',
@@ -76,21 +79,23 @@ describe('reviewSummary', () => {
   });
 
   it('flags missing and stale checks', () => {
-    const subtasks = [sub({ checkpoint: 'c3' })];
+    const subtasks = [sub({ checkpoints: { '.': 'c3' } })];
     expect(reviewSummary(task({ subtasks })).attention).toEqual([
       'The automated checks did not run',
     ]);
-    const stale = reviewSummary(task({ subtasks, review: { reworkCount: 0, checks: passed } }));
+    const stale = reviewSummary(
+      task({ subtasks, review: { reworkCount: 0, checks: { '.': passed } } })
+    );
     expect(stale.checksStale).toBe(true);
     expect(stale.attention).toEqual(['The checks ran against an older commit']);
   });
 
   it('reports unresolved feedback without repeating the engine heading', () => {
     const t = task({
-      subtasks: [sub({ checkpoint: 'c2' })],
+      subtasks: [sub({ checkpoints: { '.': 'c2' } })],
       review: {
         reworkCount: 2,
-        checks: passed,
+        checks: { '.': passed },
         feedback: 'Unresolved after 2 rework round(s):\n\nFix the login test.',
       },
     });
@@ -110,10 +115,26 @@ describe('helpers', () => {
     expect(unresolvedHeading(3)).toBe('Unresolved after 3 rework rounds');
   });
 
+  it('reads each repository of a workspace task on its own', () => {
+    const t = task({
+      baseCommits: { web: 'w0', api: 'a0' },
+      subtasks: [sub({ checkpoints: { api: 'a1' } })],
+    });
+    expect(taskRepos(t)).toEqual(['api', 'web']);
+    expect(primaryRepo(t)).toBe('api');
+    expect(lastDevCheckpoint(t, 'api')).toBe('a1');
+    expect(lastDevCheckpoint(t, 'web')).toBe('w0');
+    expect(hasWorktrees(t)).toBe(true);
+    expect(hasWorktrees(task())).toBe(false);
+  });
+
   it('falls back to the base commit when no dev subtask has a checkpoint', () => {
-    expect(lastDevCheckpoint(task({ baseCommit: 'b0' }))).toBe('b0');
+    expect(lastDevCheckpoint(task({ baseCommits: { '.': 'b0' } }))).toBe('b0');
     expect(lastDevCheckpoint(task())).toBeNull();
-    const t = task({ baseCommit: 'b0', subtasks: [sub({ checkpoint: 'c1' }), sub({})] });
+    const t = task({
+      baseCommits: { '.': 'b0' },
+      subtasks: [sub({ checkpoints: { '.': 'c1' } }), sub({})],
+    });
     expect(lastDevCheckpoint(t)).toBe('c1');
   });
 
@@ -131,7 +152,7 @@ describe('pullRequestAction', () => {
       id,
       kind: 'dev',
       status: checkpoint ? 'done' : 'pending',
-      checkpoint,
+      checkpoints: checkpoint ? { '.': checkpoint } : {},
     }) as unknown as Subtask;
   const url = 'https://github.com/o/r/pull/1';
 
@@ -145,7 +166,7 @@ describe('pullRequestAction', () => {
   it('is up to date when the PR holds the newest dev checkpoint', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('d2', 'a2')],
-      pullRequest: { url, pushedCheckpoint: 'a2' },
+      pullRequests: { '.': { url, pushedCheckpoint: 'a2' } },
     });
     const a = pullRequestAction(t, null);
     expect(a.kind).toBe('current');
@@ -156,7 +177,7 @@ describe('pullRequestAction', () => {
   it('offers the update after a rework round added a checkpoint', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('d2', 'a2'), dev('rework-1', 'a3')],
-      pullRequest: { url, pushedCheckpoint: 'a2' },
+      pullRequests: { '.': { url, pushedCheckpoint: 'a2' } },
     });
     const a = pullRequestAction(t, null);
     expect(a.kind).toBe('update');
@@ -168,13 +189,13 @@ describe('pullRequestAction', () => {
     // Same count, different work: only the checkpoint tells them apart.
     const t = task({
       subtasks: [dev('d1', 'b1'), dev('d2', 'b2')],
-      pullRequest: { url, pushedCheckpoint: 'a2' },
+      pullRequests: { '.': { url, pushedCheckpoint: 'a2' } },
     });
     expect(pullRequestAction(t, null).kind).toBe('update');
   });
 
   it('offers the update for a PR recorded before checkpoints were', () => {
-    const t = task({ subtasks: [dev('d1', 'a1')], pullRequest: { url } });
+    const t = task({ subtasks: [dev('d1', 'a1')], pullRequests: { '.': { url } } });
     expect(pullRequestAction(t, null).kind).toBe('update');
   });
 
@@ -191,14 +212,20 @@ describe('pullRequestAction', () => {
   it('names the link after the host', () => {
     const at = (host: 'github' | 'gitlab' | 'other') =>
       pullRequestAction(
-        task({ subtasks: [dev('d1', 'a1')], pullRequest: { url, host, pushedCheckpoint: 'a1' } }),
+        task({
+          subtasks: [dev('d1', 'a1')],
+          pullRequests: { '.': { url, host, pushedCheckpoint: 'a1' } },
+        }),
         null
       ).linkLabel;
     expect(at('github')).toBe('Open pull request');
     expect(at('gitlab')).toBe('Open merge request');
     expect(at('other')).toBe('Open the pull request page');
     // Before 3.0.1 there was no host: GitHub.
-    const old = task({ subtasks: [dev('d1', 'a1')], pullRequest: { url, pushedCheckpoint: 'a1' } });
+    const old = task({
+      subtasks: [dev('d1', 'a1')],
+      pullRequests: { '.': { url, pushedCheckpoint: 'a1' } },
+    });
     expect(pullRequestAction(old, null).linkLabel).toBe('Open pull request');
   });
 
@@ -207,7 +234,7 @@ describe('pullRequestAction', () => {
       pullRequestAction(
         task({
           subtasks: [dev('d1', 'a1'), dev('d2', newest)],
-          pullRequest: { url, host, pushedCheckpoint: 'a2' },
+          pullRequests: { '.': { url, host, pushedCheckpoint: 'a2' } },
         }),
         null
       );
@@ -253,7 +280,7 @@ describe('pullRequestAction', () => {
   it('updates a pushed branch whose host printed no link, and says so', () => {
     const t = task({
       subtasks: [dev('d1', 'a1'), dev('rework-1', 'a2')],
-      pullRequest: { url: null, host: 'other', pushedCheckpoint: 'a1' },
+      pullRequests: { '.': { url: null, host: 'other', pushedCheckpoint: 'a1' } },
     });
     const a = pullRequestAction(t, null);
     expect(a.kind).toBe('update');

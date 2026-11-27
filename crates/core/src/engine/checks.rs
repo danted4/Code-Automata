@@ -22,9 +22,10 @@ use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 
-use super::settings::CheckCommand;
+use super::settings::{CheckCommand, Settings};
+use crate::project::ProjectDir;
 use crate::task::Checks;
-use crate::util::now_ms;
+use crate::util::{ROOT_REPO, now_ms};
 
 /// Output kept per command.
 const TAIL_BYTES: usize = 64 * 1024;
@@ -39,6 +40,56 @@ pub struct CheckRun {
     /// The end of stdout and stderr together.
     pub output: String,
     pub duration: Duration,
+}
+
+/// Where a repository's check commands came from.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckSource {
+    /// The project's settings (a one-repository project's `checks`).
+    Project,
+    /// The workspace's settings for this repository.
+    Workspace,
+    /// The repository's own settings, saved when it was opened on its own.
+    Repo,
+    /// Detected from the worktree's files.
+    Detected,
+}
+
+/// A repository's check commands and where they came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedChecks {
+    pub commands: Vec<CheckCommand>,
+    pub source: CheckSource,
+}
+
+/// The check commands for `repo`, whose worktree is `worktree`: a one-repository project's
+/// settings, else detected; in a workspace, the workspace's setting for the repository, else the
+/// repository's own saved commands, else detected.
+pub async fn commands_for(
+    project: &ProjectDir,
+    settings: &Settings,
+    repo: &str,
+    worktree: &Path,
+) -> ResolvedChecks {
+    let resolved = |commands, source| ResolvedChecks { commands, source };
+    if repo == ROOT_REPO {
+        return match &settings.checks {
+            Some(c) => resolved(c.clone(), CheckSource::Project),
+            None => resolved(detect(worktree), CheckSource::Detected),
+        };
+    }
+    if let Some(c) = settings.repos.get(repo).and_then(|r| r.checks.clone()) {
+        return resolved(c, CheckSource::Workspace);
+    }
+    if let Ok(main) = project.repo_path(repo)
+        && let Some(own) = Settings::load_repo_own(&main).await
+        && let Some(c) = own.checks
+    {
+        return resolved(c, CheckSource::Repo);
+    }
+    resolved(detect(worktree), CheckSource::Detected)
 }
 
 /// The checks to run in `worktree` when settings name none.

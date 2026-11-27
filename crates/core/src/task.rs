@@ -1,4 +1,4 @@
-//! The task file, schema 1.
+//! The task file, schema 2 (schema 1 files, from 3.0, are converted on read: see `store`).
 //!
 //! One file per task at `.code-automata/tasks/<id>/task.json`. Every piece of state lives in exactly
 //! one place:
@@ -8,21 +8,25 @@
 //! * a subtask is `pending`, `done` or `skipped` ("running" is `run.subtaskId`);
 //! * `planning.stage` says where planning stands ("generating" is a `plan` run).
 //!
-//! Nothing derivable is stored (the branch and worktree path follow from the id; the last checkpoint
-//! is the worktree's HEAD), and [`Task::validate`] rejects the combinations that could still
-//! disagree, such as a run whose kind does not belong to the phase. Files are strict: unknown keys
+//! A task works on one or more repositories, keyed by name ([`ROOT_REPO`] when the project is
+//! itself a repository): every per-repository value is a map with those keys.
+//!
+//! Nothing derivable is stored (the branch and worktree paths follow from the id; each repository's
+//! last checkpoint is its worktree's HEAD), and [`Task::validate`] rejects the combinations that
+//! could still disagree, such as a run whose kind does not belong to the phase. Files are strict: unknown keys
 //! and any other schema version are refused rather than guessed at.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{CoreError, Result};
-use crate::util::{now_ms, random_base36, validate_task_id};
+use crate::util::{ROOT_REPO, now_ms, random_base36, validate_repo_name, validate_task_id};
 
 /// Version of the task file format. Files with any other value are refused.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The Kanban column. Fixed order; see `transitions` for which moves are allowed.
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -203,9 +207,14 @@ pub struct Subtask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
     pub finished_at: Option<i64>,
-    /// Commit made when it finished.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checkpoint: Option<String>,
+    /// The repositories the plan says it touches: guidance for the agent and the card, not a
+    /// limit. Empty for a one-repository project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// The commit made in each repository it changed when it finished. A finished dev subtask that
+    /// changed nothing has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checkpoints: BTreeMap<String, String>,
     /// The agent's note for the subtasks after this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<String>,
@@ -246,7 +255,8 @@ impl Subtask {
             status: SubtaskStatus::Pending,
             progress_label: None,
             finished_at: None,
-            checkpoint: None,
+            repos: Vec::new(),
+            checkpoints: BTreeMap::new(),
             handoff: None,
             rework_round: None,
             verdict: None,
@@ -277,8 +287,9 @@ pub struct Review {
     /// Rework rounds so far; capped by the engine.
     #[serde(default)]
     pub rework_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checks: Option<Checks>,
+    /// The last checks of each repository that has changes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checks: BTreeMap<String, Checks>,
     /// What the next rework round has to fix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
@@ -318,16 +329,6 @@ pub enum PrHost {
     Gitlab,
     /// Any other host: the branch is pushed and the host's own page opens the pull request.
     Other,
-}
-
-impl Task {
-    /// The checkpoint of the newest dev subtask that has one: the last work a squash puts in the
-    /// PR.
-    pub fn newest_dev_checkpoint(&self) -> Option<&str> {
-        self.subtasks_of(SubtaskKind::Dev)
-            .filter_map(|s| s.checkpoint.as_deref())
-            .last()
-    }
 }
 
 /// What a run is doing. One run at a time per task.
@@ -480,13 +481,15 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Review::is_empty")]
     pub review: Review,
 
-    /// Commit the task's branch started from, set when its worktree is created. The branch
-    /// (`code-automata/<id>`) and worktree path (`.code-automata/worktrees/<id>`) follow from the
-    /// id and are not stored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pull_request: Option<PullRequest>,
+    /// The commit each repository's task branch started from, set when the worktrees are created.
+    /// Its keys are the task's repositories; empty until then. The branch (`code-automata/<id>` in
+    /// each repository) and worktree paths (`.code-automata/worktrees/<id>`, or `<id>/<repo>` in a
+    /// workspace) follow from the id and are not stored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_commits: BTreeMap<String, String>,
+    /// The pull request of each repository that has one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pull_requests: BTreeMap<String, PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Run>,
 }
@@ -514,8 +517,8 @@ impl Task {
             planning: Planning::default(),
             subtasks: Vec::new(),
             review: Review::default(),
-            base_commit: None,
-            pull_request: None,
+            base_commits: BTreeMap::new(),
+            pull_requests: BTreeMap::new(),
             run: None,
         }
     }
@@ -544,12 +547,60 @@ impl Task {
         any
     }
 
-    /// The commit the latest finished dev subtask was checkpointed at, or the base commit.
-    pub fn last_dev_checkpoint(&self) -> Option<&str> {
+    /// The task's repositories (the keys of `base_commits`); none before its worktrees exist.
+    pub fn repos(&self) -> impl Iterator<Item = &str> {
+        self.base_commits.keys().map(String::as_str)
+    }
+
+    /// Have the task's worktrees been created?
+    pub fn has_worktrees(&self) -> bool {
+        !self.base_commits.is_empty()
+    }
+
+    /// The commit `repo`'s task branch started from.
+    pub fn base_commit(&self, repo: &str) -> Option<&str> {
+        self.base_commits.get(repo).map(String::as_str)
+    }
+
+    /// The checkpoint of the newest dev subtask that changed `repo`: the last work a squash puts in
+    /// that repository's PR. None while no dev subtask has changed it.
+    pub fn newest_dev_checkpoint(&self, repo: &str) -> Option<&str> {
         self.subtasks_of(SubtaskKind::Dev)
-            .filter_map(|s| s.checkpoint.as_deref())
+            .filter_map(|s| s.checkpoints.get(repo).map(String::as_str))
             .last()
-            .or(self.base_commit.as_deref())
+    }
+
+    /// The commit `repo`'s latest finished dev work was checkpointed at, or its base commit.
+    pub fn last_dev_checkpoint(&self, repo: &str) -> Option<&str> {
+        self.newest_dev_checkpoint(repo)
+            .or_else(|| self.base_commit(repo))
+    }
+
+    /// The repositories some dev subtask has changed (whose last checkpoint is not the base).
+    pub fn changed_repos(&self) -> Vec<&str> {
+        self.repos()
+            .filter(|r| {
+                self.newest_dev_checkpoint(r)
+                    .is_some_and(|c| Some(c) != self.base_commit(r))
+            })
+            .collect()
+    }
+
+    /// The repositories whose checks count: a one-repository task's repository always (as in
+    /// 3.0), otherwise the ones some dev subtask changed.
+    pub fn repos_to_check(&self) -> Vec<&str> {
+        if self.base_commits.contains_key(ROOT_REPO) {
+            vec![ROOT_REPO]
+        } else {
+            self.changed_repos()
+        }
+    }
+
+    /// Did the checks of a repository that counts fail?
+    pub fn checks_failed(&self) -> bool {
+        self.repos_to_check()
+            .iter()
+            .any(|r| self.review.checks.get(*r).is_some_and(|c| !c.passed))
     }
 
     pub fn has_active_run(&self) -> bool {
@@ -575,7 +626,7 @@ impl Task {
                 return Err(Invalid(format!("duplicate subtask id {:?}", s.id)));
             }
             match s.status {
-                SubtaskStatus::Pending if s.finished_at.is_some() || s.checkpoint.is_some() => {
+                SubtaskStatus::Pending if s.finished_at.is_some() || !s.checkpoints.is_empty() => {
                     return Err(Invalid(format!(
                         "pending subtask {:?} has a finish time or checkpoint",
                         s.id
@@ -587,7 +638,7 @@ impl Task {
                         s.id
                     )));
                 }
-                SubtaskStatus::Skipped if s.checkpoint.is_some() => {
+                SubtaskStatus::Skipped if !s.checkpoints.is_empty() => {
                     return Err(Invalid(format!(
                         "skipped subtask {:?} has a checkpoint",
                         s.id
@@ -602,14 +653,8 @@ impl Task {
                     s.id
                 )));
             }
-            if s.kind == SubtaskKind::Dev
-                && s.status == SubtaskStatus::Done
-                && s.checkpoint.is_none()
-            {
-                return Err(Invalid(format!(
-                    "finished dev subtask {:?} has no checkpoint",
-                    s.id
-                )));
+            for repo in s.checkpoints.keys().chain(&s.repos) {
+                self.known_repo(repo, &format!("subtask {:?}", s.id))?;
             }
             if s.skipped_reason.is_some() && s.status != SubtaskStatus::Skipped {
                 return Err(Invalid(format!(
@@ -624,6 +669,20 @@ impl Task {
                 )));
             }
         }
+        for repo in self.base_commits.keys() {
+            validate_repo_name(repo)?;
+        }
+        if self.base_commits.len() > 1 && self.base_commits.contains_key(ROOT_REPO) {
+            return Err(Invalid(format!(
+                "{ROOT_REPO:?} is the only repository of a one-repository task"
+            )));
+        }
+        for repo in self.review.checks.keys() {
+            self.known_repo(repo, "the checks")?;
+        }
+        for repo in self.pull_requests.keys() {
+            self.known_repo(repo, "a pull request")?;
+        }
         let mut seen = std::collections::HashSet::new();
         for q in &self.planning.questions {
             if !seen.insert(q.id.as_str()) {
@@ -634,6 +693,17 @@ impl Task {
             self.validate_run(run)?;
         }
         Ok(())
+    }
+
+    /// `repo` must be one of the task's repositories.
+    fn known_repo(&self, repo: &str, owner: &str) -> Result<()> {
+        if self.base_commits.contains_key(repo) {
+            Ok(())
+        } else {
+            Err(CoreError::Invalid(format!(
+                "{owner} names repository {repo:?}, which is not one of the task's"
+            )))
+        }
     }
 
     /// A run must belong to the task's phase, and a `dev`/`qa` run must point at a subtask of its

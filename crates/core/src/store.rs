@@ -26,6 +26,7 @@ use crate::error::{CoreError, Result, io_at};
 use crate::project::ProjectDir;
 use crate::task::{Phase, SCHEMA, Task};
 use crate::transitions::{Mover, apply_move, apply_patch};
+use crate::util::ROOT_REPO;
 use crate::util::{now_ms, unique_u64, validate_task_id};
 
 const TASK_FILE: &str = "task.json";
@@ -208,9 +209,12 @@ async fn read_task(path: &Path, expected_id: &str) -> Result<Option<Task>> {
     };
     // Check the version before the strict parse, so a file in another format gets a clear error
     // rather than "unknown field".
-    let value: Value = serde_json::from_slice(&bytes).map_err(corrupt)?;
+    let mut value: Value = serde_json::from_slice(&bytes).map_err(corrupt)?;
     match value.get("schema") {
         Some(Value::Number(n)) if n.as_u64() == Some(u64::from(SCHEMA)) => {}
+        // 3.0's format: one repository. Converted in memory; the file is rewritten as schema 2 on
+        // the task's next update (reads never write).
+        Some(Value::Number(n)) if n.as_u64() == Some(1) => upgrade_v1(&mut value),
         other => {
             return Err(CoreError::UnsupportedSchema {
                 path: path.to_path_buf(),
@@ -227,6 +231,46 @@ async fn read_task(path: &Path, expected_id: &str) -> Result<Option<Task>> {
         });
     }
     Ok(Some(task))
+}
+
+/// Turn a schema-1 task (3.0: one repository, no repository keys) into schema 2, where every
+/// per-repository value is keyed by repository: here the project itself, [`ROOT_REPO`]. Only the
+/// keys that moved are touched; anything else malformed is left for the strict parse to refuse.
+fn upgrade_v1(task: &mut Value) {
+    let Some(obj) = task.as_object_mut() else {
+        return;
+    };
+    let keyed = |v: Value| Value::Object(Map::from_iter([(ROOT_REPO.to_string(), v)]));
+    obj.insert("schema".into(), Value::from(SCHEMA));
+    for (from, to) in [
+        ("baseCommit", "baseCommits"),
+        ("pullRequest", "pullRequests"),
+    ] {
+        match obj.remove(from) {
+            Some(Value::Null) | None => {}
+            Some(v) => {
+                obj.insert(to.into(), keyed(v));
+            }
+        }
+    }
+    if let Some(Value::Array(subtasks)) = obj.get_mut("subtasks") {
+        for sub in subtasks.iter_mut().filter_map(Value::as_object_mut) {
+            match sub.remove("checkpoint") {
+                Some(Value::Null) | None => {}
+                Some(v) => {
+                    sub.insert("checkpoints".into(), keyed(v));
+                }
+            }
+        }
+    }
+    if let Some(Value::Object(review)) = obj.get_mut("review") {
+        match review.remove("checks") {
+            Some(Value::Null) | None => {}
+            Some(v) => {
+                review.insert("checks".into(), keyed(v));
+            }
+        }
+    }
 }
 
 /// Rename `from` over `to`. On Windows the rename is refused while another program (a virus

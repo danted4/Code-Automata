@@ -5,7 +5,11 @@ export type Review = {
 /**
  * Rework rounds so far; capped by the engine.
  */
-reworkCount: number, checks?: Checks | null, 
+reworkCount: number, 
+/**
+ * The last checks of each repository that has changes.
+ */
+checks?: { [key in string]: Checks }, 
 /**
  * What the next rework round has to fix.
  */

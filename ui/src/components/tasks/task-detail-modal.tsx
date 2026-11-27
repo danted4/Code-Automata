@@ -29,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import type { Task } from '@/lib/api/types/Task';
+import { ROOT_REPO, primaryRepo } from '@/lib/review-summary';
 import {
   ACTION_LABELS,
   PHASE_LABELS,
@@ -376,7 +377,9 @@ function SubtaskItem({
   const halted = row.current && !row.running ? HALTED_LABELS[task.run?.state ?? ''] : undefined;
   const meta: string[] = [];
   if (s.reworkRound) meta.push(`Rework round ${s.reworkRound}`);
-  if (s.checkpoint) meta.push(`Checkpoint ${shortSha(s.checkpoint)}`);
+  for (const [repo, sha] of Object.entries(s.checkpoints ?? {}).sort()) {
+    meta.push(repo === ROOT_REPO ? `Checkpoint ${shortSha(sha)}` : `${repo}: ${shortSha(sha)}`);
+  }
   if (s.finishedAt) meta.push(`Finished ${formatTime(s.finishedAt)}`);
 
   return (
@@ -536,7 +539,7 @@ function ReviewTab({ task }: { task: Task }) {
       </p>
     );
   }
-  const checks = review.checks;
+  const checks = review.checks?.[primaryRepo(task)] ?? null;
   return (
     <div data-testid="task-detail-review" className="space-y-4 text-sm">
       <section data-testid="task-detail-checks" className="space-y-2">

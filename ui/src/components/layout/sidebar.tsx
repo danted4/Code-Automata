@@ -15,6 +15,7 @@ import { ThemeSwitcher } from '@/components/theme/theme-switcher';
 import { useProjectStore } from '@/store/project-store';
 import { api } from '@/lib/api';
 import { useTaskStore } from '@/store/task-store';
+import { hasWorktrees } from '@/lib/review-summary';
 
 /** Fetches worktree count for the current project. Refetches when projectPath or worktreeRefreshKey changes. */
 function useWorktreeCount(): number {
@@ -22,7 +23,7 @@ function useWorktreeCount(): number {
   const worktreeRefreshKey = useProjectStore((s) => s.worktreeRefreshKey);
   // A task gets its worktree when planning starts and loses it when deleted; a done task's can be
   // removed, and reopening the task (leaving Done) brings it back.
-  const tasksWithWorktrees = useTaskStore((s) => s.tasks.filter((t) => t.baseCommit).length);
+  const tasksWithWorktrees = useTaskStore((s) => s.tasks.filter(hasWorktrees).length);
   const doneTasks = useTaskStore((s) => s.tasks.filter((t) => t.phase === 'done').length);
   const [count, setCount] = useState(0);
 

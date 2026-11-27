@@ -18,9 +18,14 @@ pub async fn open(
     State(state): State<Arc<AppState>>,
     Body(req): Body<OpenProjectRequest>,
 ) -> Result<Json<OpenProjectResponse>, ApiError> {
-    let engine = state.engine(&req.path).await?;
+    // Checked on every open, even when the engine is already open: a workspace that gained a
+    // folder that is not a repository is refused until it is moved out.
+    let project = ca_core::ProjectDir::open(&req.path).await?;
+    let engine = state.engine(project.root()).await?;
     Ok(Json(OpenProjectResponse {
-        root: engine.project().root().to_path_buf(),
+        root: project.root().to_path_buf(),
+        kind: project.kind(),
+        repos: project.repos().iter().map(|r| r.name.clone()).collect(),
         reconcile_problems: engine.reconcile_problems().to_vec(),
     }))
 }

@@ -74,6 +74,30 @@ pub fn validate_task_id(id: &str) -> Result<()> {
     }
 }
 
+/// The repository key of a project that is itself a repository (see [`crate::project`]).
+pub const ROOT_REPO: &str = ".";
+
+/// A repository's key in a task file and in a workspace task's folder (`<id>/<name>`): the
+/// repository folder's own name, or [`ROOT_REPO`]. It becomes a path segment and a JSON key, so it
+/// must be a single plain name: no separators, nothing hidden, no `..`, no control characters.
+pub fn validate_repo_name(name: &str) -> Result<()> {
+    let ok = name == ROOT_REPO
+        || (!name.is_empty()
+            && name.len() <= 255
+            && !name.starts_with('.')
+            && name.trim() == name
+            && !name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':')));
+    if ok {
+        Ok(())
+    } else {
+        Err(CoreError::Invalid(format!(
+            "{name:?} cannot be used as a repository name"
+        )))
+    }
+}
+
 /// `canonicalize`, giving the everyday path form on Windows (see [`plain_path`]).
 pub async fn canonicalize(
     path: impl AsRef<std::path::Path>,

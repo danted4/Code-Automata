@@ -29,7 +29,7 @@ use tokio::sync::{Semaphore, broadcast, watch};
 
 use crate::agent::{AgentEvent, Binaries, Stopper};
 use crate::error::{CoreError, Result};
-use crate::git::{DeleteOptions, Worktrees};
+use crate::git::{self, DeleteOptions, Worktrees};
 use crate::project::ProjectDir;
 use crate::store::TaskStore;
 use crate::task::{
@@ -116,7 +116,6 @@ impl Control {
 pub(crate) struct Inner {
     pub project: ProjectDir,
     pub store: TaskStore,
-    pub worktrees: Worktrees,
     pub bins: Binaries,
     pub settings: StdMutex<Settings>,
     pub boot_id: String,
@@ -163,12 +162,50 @@ impl Inner {
             .cloned()
     }
 
+    /// The folder the task's agents run in (see [`git::task_dir`]).
+    pub fn task_dir(&self, id: &str) -> Result<std::path::PathBuf> {
+        git::task_dir(&self.project, id)
+    }
+
+    /// Worktree operations on one repository of the project.
+    pub fn repo_worktrees(&self, repo: &str) -> Result<Worktrees> {
+        Worktrees::for_repo(&self.project, repo)
+    }
+
+    /// The task's repositories with their worktree paths, in name order. Empty before the
+    /// worktrees exist.
+    pub fn task_worktrees(&self, task: &Task) -> Result<Vec<RepoWorktree>> {
+        task.repos()
+            .map(|repo| {
+                Ok(RepoWorktree {
+                    repo: repo.to_string(),
+                    path: self.repo_worktrees(repo)?.path_for(&task.id)?,
+                })
+            })
+            .collect()
+    }
+
+    /// The repositories a new task gets: every repository of the project.
+    pub fn project_repos(&self) -> Vec<String> {
+        self.project
+            .repos()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect()
+    }
+
     async fn load(&self, id: &str) -> Result<Task> {
         self.store
             .load(id)
             .await?
             .ok_or_else(|| CoreError::TaskNotFound(id.to_string()))
     }
+}
+
+/// One repository's worktree for a task.
+pub(crate) struct RepoWorktree {
+    pub repo: String,
+    pub path: std::path::PathBuf,
 }
 
 /// One project's engine. Cheap to clone; all clones share the same state.
@@ -193,7 +230,6 @@ impl Engine {
         let report = reconcile::reconcile(&store, &boot_id).await?;
         let (events, _) = broadcast::channel(1024);
         let inner = Inner {
-            worktrees: Worktrees::new(project.clone()),
             store,
             bins,
             // Fixed for the engine's lifetime; a changed maxConcurrentAgents applies on reopen.
@@ -266,7 +302,10 @@ impl Engine {
     /// Every worktree under `.code-automata/worktrees/`, with its task's title. A worktree whose
     /// task file exists but cannot be read is not an orphan.
     pub async fn worktrees(&self) -> Result<Vec<WorktreeEntry>> {
-        let list = self.inner.worktrees.list().await?;
+        let mut list = Vec::new();
+        for repo in self.inner.project_repos() {
+            list.extend(self.inner.repo_worktrees(&repo)?.list().await?);
+        }
         let tasks = self.inner.store.list().await?;
         let unreadable: Vec<String> = tasks
             .skipped
@@ -326,7 +365,8 @@ impl Engine {
                 )));
             }
         };
-        let status = self.inner.worktrees.status(task_id).await?;
+        let named = self.task_repo_names(task_id).await;
+        let status = git::task_status(&self.inner.project, task_id, &named).await?;
         if !status.exists {
             return Err(CoreError::NotFound(format!("worktree {task_id}")));
         }
@@ -337,18 +377,17 @@ impl Engine {
                     .into(),
             ));
         }
-        let report = self
-            .inner
-            .worktrees
-            .delete(
-                task_id,
-                DeleteOptions {
-                    force: true,
-                    delete_branch: !done_task,
-                    ..DeleteOptions::default()
-                },
-            )
-            .await?;
+        let report = git::delete_task_worktrees(
+            &self.inner.project,
+            task_id,
+            &named,
+            DeleteOptions {
+                force: true,
+                delete_branch: !done_task,
+                ..DeleteOptions::default()
+            },
+        )
+        .await?;
         drop(guard);
         if done_task {
             self.inner.emit(EngineEvent::TaskChanged {
@@ -358,6 +397,14 @@ impl Engine {
             self.drop_pr_lock(task_id);
         }
         Ok(report)
+    }
+
+    /// The repositories a task file names, or none when it has no readable file.
+    async fn task_repo_names(&self, id: &str) -> Vec<String> {
+        match self.inner.store.load(id).await {
+            Ok(Some(t)) => t.repos().map(String::from).collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn pr_lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -380,7 +427,9 @@ impl Engine {
     }
 
     pub async fn worktree_usage(&self) -> Result<crate::git::DiskUsage> {
-        self.inner.worktrees.disk_usage().await
+        Worktrees::new(self.inner.project.clone())
+            .disk_usage()
+            .await
     }
 
     pub fn settings(&self) -> Settings {
@@ -700,12 +749,14 @@ impl Engine {
     /// checkpoint so its half-done edits (or work parked by a triage) cannot end up in another
     /// subtask's checkpoint.
     async fn discard_dropped_dev_work(&self, task: &Task) -> Result<()> {
-        if task.run.as_ref().is_some_and(|r| r.kind == RunKind::Dev)
-            && let Some(checkpoint) = task.last_dev_checkpoint()
-        {
-            let wt = self.inner.worktrees.path_for(&task.id)?;
-            crate::git::unpark_changes(&wt).await?;
-            crate::git::discard_to(&wt, checkpoint).await?;
+        if !task.run.as_ref().is_some_and(|r| r.kind == RunKind::Dev) {
+            return Ok(());
+        }
+        for w in self.inner.task_worktrees(task)? {
+            if let Some(checkpoint) = task.last_dev_checkpoint(&w.repo) {
+                git::unpark_changes(&w.path).await?;
+                git::discard_to(&w.path, checkpoint).await?;
+            }
         }
         Ok(())
     }
@@ -755,7 +806,8 @@ impl Engine {
             None => None,
         };
         if reopening {
-            self.inner.worktrees.restore(id).await?;
+            let repos: Vec<String> = task.repos().map(String::from).collect();
+            git::restore_task_worktrees(&self.inner.project, id, &repos).await?;
         }
         let task = self.inner.store.move_phase(id, to, Mover::User).await?;
         self.inner.emit(EngineEvent::TaskChanged {
@@ -765,7 +817,7 @@ impl Engine {
     }
 
     /// Open the task's pull request, or push new work to the one already open.
-    pub async fn create_pull_request(&self, id: &str) -> Result<pr::PrOutcome> {
+    pub async fn create_pull_request(&self, id: &str) -> Result<pr::PrReport> {
         let lock = self.pr_lock(id);
         let _guard = lock.lock().await;
         self.settle(id, "opening a pull request").await?;
@@ -778,18 +830,18 @@ impl Engine {
             control.request(Halt::Shutdown);
             self.wait_idle(id).await;
         }
-        let _ = self
-            .inner
-            .worktrees
-            .delete(
-                id,
-                DeleteOptions {
-                    force: true,
-                    delete_branch: true,
-                    ..DeleteOptions::default()
-                },
-            )
-            .await?;
+        let named = self.task_repo_names(id).await;
+        let _ = git::delete_task_worktrees(
+            &self.inner.project,
+            id,
+            &named,
+            DeleteOptions {
+                force: true,
+                delete_branch: true,
+                ..DeleteOptions::default()
+            },
+        )
+        .await?;
         self.inner.store.delete(id).await?;
         self.drop_pr_lock(id);
         self.inner.emit(EngineEvent::TaskChanged {

@@ -17,9 +17,15 @@ detail: string, status: SubtaskStatus,
  */
 progressLabel?: string | null, finishedAt?: number | null, 
 /**
- * Commit made when it finished.
+ * The repositories the plan says it touches: guidance for the agent and the card, not a
+ * limit. Empty for a one-repository project.
  */
-checkpoint?: string | null, 
+repos?: Array<string>, 
+/**
+ * The commit made in each repository it changed when it finished. A finished dev subtask that
+ * changed nothing has none.
+ */
+checkpoints?: { [key in string]: string }, 
 /**
  * The agent's note for the subtasks after this one.
  */

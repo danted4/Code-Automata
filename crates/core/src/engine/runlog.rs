@@ -51,6 +51,13 @@ pub enum RunLogLine {
         seq: u64,
         event: AgentEvent,
     },
+    /// Something the engine did around the run, such as removing files a workspace agent left
+    /// outside every repository.
+    Note {
+        #[cfg_attr(feature = "ts", ts(as = "f64"))]
+        at: i64,
+        text: String,
+    },
     /// The agent never started. Always the last line.
     Abandoned {
         #[cfg_attr(feature = "ts", ts(as = "f64"))]
@@ -132,6 +139,15 @@ impl RunLogWriter {
         };
         self.write(&line).await;
         self.seq
+    }
+
+    /// A note from the engine (see [`RunLogLine::Note`]).
+    pub async fn note(&mut self, text: &str) {
+        let line = RunLogLine::Note {
+            at: now_ms(),
+            text: text.to_string(),
+        };
+        self.write(&line).await;
     }
 
     /// The agent could not be started: end the log with why.

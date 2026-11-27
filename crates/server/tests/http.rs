@@ -467,18 +467,30 @@ async fn projects_are_checked_and_a_project_open_elsewhere_is_refused() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "invalid_project");
 
-    // A subfolder opens its repository.
+    // A subfolder of a repository is refused; its root opens.
     let sub = repo.path.join("src").join("deep");
     std::fs::create_dir_all(&sub).unwrap();
-    let opened = h
-        .ok(
+    let (status, body) = h
+        .call(
             "POST",
             "/api/projects/open",
             &repo.path,
             Some(json!({ "path": sub })),
         )
         .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_project");
+    let opened = h
+        .ok(
+            "POST",
+            "/api/projects/open",
+            &repo.path,
+            Some(json!({ "path": repo.path })),
+        )
+        .await;
     assert_eq!(opened["root"], json!(repo.path));
+    assert_eq!(opened["kind"], "repo");
+    assert_eq!(opened["repos"], json!(["."]));
     assert_eq!(opened["reconcileProblems"], json!([]));
 
     // Another app holding the project.
@@ -499,6 +511,49 @@ async fn projects_are_checked_and_a_project_open_elsewhere_is_refused() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "project_locked");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_folder_of_repositories_opens_as_a_workspace_and_is_checked_on_every_open() {
+    let h = Harness::new(true);
+    let ws = tempfile::tempdir().unwrap();
+    let root = ca_core::util::plain_path(std::fs::canonicalize(ws.path()).unwrap());
+    for name in ["web", "api"] {
+        let repo = root.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+    }
+    let body = json!({ "path": root });
+    let opened = h
+        .ok("POST", "/api/projects/open", &root, Some(body.clone()))
+        .await;
+    assert_eq!(opened["root"], json!(root));
+    assert_eq!(opened["kind"], "workspace");
+    assert_eq!(opened["repos"], json!(["api", "web"]));
+    h.ok("GET", "/api/tasks", &root, None).await;
+
+    // A folder that is not a repository appears: the next open is refused, naming it, although
+    // the engine is already open.
+    std::fs::create_dir_all(root.join("notes")).unwrap();
+    let (status, err) = h
+        .call("POST", "/api/projects/open", &root, Some(body))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("notes"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
