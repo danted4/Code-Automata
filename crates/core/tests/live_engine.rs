@@ -79,3 +79,86 @@ async fn live_claude_takes_a_task_from_plan_to_human_review() {
     // Planning and QA must have left nothing uncommitted behind.
     assert!(git(&wt, &["status", "--porcelain"]).is_empty());
 }
+
+/// A workspace of two repositories: the change needs both (a constant in `lib/`, used in `app/`).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "makes Claude model calls"]
+async fn live_claude_changes_two_repositories_of_a_workspace() {
+    let ws = common::TempWorkspace::new(&["app", "lib"]);
+    std::fs::write(ws.repo("lib").join("constants.py"), "# Shared constants.\n").unwrap();
+    std::fs::write(
+        ws.repo("app").join("main.py"),
+        "def main():\n    print(\"hello\")\n",
+    )
+    .unwrap();
+    for r in ["app", "lib"] {
+        git(&ws.repo(r), &["add", "-A"]);
+        git(&ws.repo(r), &["commit", "-q", "-m", "start"]);
+    }
+    let project = ws.project().await;
+    let mut settings = Settings::default();
+    for r in ["app", "lib"] {
+        settings.repos.insert(
+            r.into(),
+            ca_core::engine::settings::RepoSettings {
+                checks: Some(vec![]),
+                pull_request_host: None,
+            },
+        );
+    }
+    settings.timeouts.idle_minutes = 5.0;
+    settings.timeouts.total_minutes = 15.0;
+    settings.save(&project).await.unwrap();
+
+    let engine = Engine::open(project, Binaries::from_env()).await.unwrap();
+    let mut agent = AgentConfig::new(Provider::Claude);
+    agent.model = Some("sonnet".into());
+    let task = engine
+        .create_task(
+            "Share the greeting",
+            "Add GREETING = \"hello\" to lib/constants.py, and make app/main.py print a string \
+             literal equal to it with a comment saying it must match lib's GREETING. Keep it tiny: \
+             one dev subtask is enough.",
+            agent,
+            false,
+        )
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(20 * 60), engine.wait_idle(&task.id))
+        .await
+        .expect("the task did not finish in 20 minutes");
+
+    let t = engine.get_task(&task.id).await.unwrap().unwrap();
+    println!(
+        "phase {:?}, subtasks {:?}, run {:?}",
+        t.phase,
+        t.subtasks
+            .iter()
+            .map(|s| (
+                &s.id,
+                s.kind,
+                s.status,
+                &s.repos,
+                s.checkpoints.keys().collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        t.run
+    );
+    assert_eq!(t.phase, Phase::HumanReview, "{:?}", t.run);
+    assert_eq!(t.changed_repos(), ["app", "lib"]);
+    let dir = ca_core::git::task_dir(engine.project(), &t.id).unwrap();
+    let constants = std::fs::read_to_string(dir.join("lib/constants.py")).unwrap();
+    assert!(constants.contains("GREETING"), "{constants}");
+    for r in ["app", "lib"] {
+        let status = git(&dir.join(r), &["status", "--porcelain"]);
+        assert!(status.is_empty(), "{r} left uncommitted: {status}");
+    }
+    let strays: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "app" && n != "lib")
+        .collect();
+    assert!(strays.is_empty(), "left in the task folder: {strays:?}");
+}
