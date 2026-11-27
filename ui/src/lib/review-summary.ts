@@ -183,7 +183,13 @@ export function pullRequestAction(
   created: PullRequestResponse | null
 ): PullRequestAction {
   const branch = taskBranch(task.id);
-  const pr = task.pullRequests?.[primaryRepo(task)] ?? null;
+  // In a workspace the record shown is the first changed repository's that has one. Repositories
+  // with no record (never opened, or no remote, which leaves none) are left out of "up to date".
+  const workspace = !taskRepos(task).includes(ROOT_REPO) && taskRepos(task).length > 0;
+  const recorded = workspace
+    ? changedRepos(task).filter((r) => task.pullRequests?.[r])
+    : [primaryRepo(task)].filter((r) => task.pullRequests?.[r]);
+  const pr = recorded.length ? (task.pullRequests?.[recorded[0]] ?? null) : null;
   if (!pr && !created) {
     return {
       kind: 'create',
@@ -210,9 +216,7 @@ export function pullRequestAction(
     const pushed = record?.pushedCheckpoint ?? null;
     return pushed !== null && pushed === newestDevCheckpoint(task, repo);
   };
-  // In a workspace, up to date only when every changed repository's request is.
-  const others = changedRepos(task).filter((r) => r !== primaryRepo(task));
-  const current = pr ? upToDate(primaryRepo(task)) && others.every(upToDate) : true;
+  const current = pr ? recorded.every(upToDate) : true;
   const noun = requestNoun(host);
   if (current) {
     return {

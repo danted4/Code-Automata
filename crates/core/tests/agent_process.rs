@@ -470,11 +470,12 @@ async fn a_long_quiet_tool_call_is_not_an_idle_timeout() {
     let m = Mock::new();
     let mut req = m.request(json!({ "steps": [
         { "text": "starting the build" },
-        { "tool": { "name": "Bash", "input": { "command": "yarn build" }, "output": "ok", "durationMs": 3000 } },
+        { "tool": { "name": "Bash", "input": { "command": "yarn build" }, "output": "ok", "durationMs": 6000 } },
         { "result": { "text": "built" } }
     ]}));
-    // Generous enough for process start-up under parallel test load, far shorter than the tool.
-    req.idle_timeout = Some(Duration::from_millis(1000));
+    // Generous enough for process start-up under parallel test load (1 s was not), far shorter
+    // than the tool.
+    req.idle_timeout = Some(Duration::from_millis(2500));
     let o = start(req, &Mock::bins()).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::Completed, "{o:?}");
 }
@@ -488,17 +489,17 @@ async fn a_tool_call_that_never_returns_hits_the_tool_timeout() {
     ]}));
     // The idle limit covers process start-up until the tool call is seen, so it must leave room
     // for a slow start under parallel test load; the tool limit is well beyond it.
-    req.idle_timeout = Some(Duration::from_millis(1000));
-    req.tool_timeout = Some(Duration::from_millis(3000));
+    req.idle_timeout = Some(Duration::from_millis(2500));
+    req.tool_timeout = Some(Duration::from_millis(6000));
     let began = Instant::now();
     let o = start(req, &Mock::bins()).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::TimedOut);
     let took = began.elapsed();
     assert!(
-        took >= Duration::from_millis(2900),
+        took >= Duration::from_millis(5900),
         "the idle timeout fired during the tool: {took:?}"
     );
-    assert!(took < Duration::from_secs(6), "{took:?}");
+    assert!(took < Duration::from_secs(10), "{took:?}");
 }
 
 #[tokio::test]

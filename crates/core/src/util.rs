@@ -98,6 +98,17 @@ pub fn validate_repo_name(name: &str) -> Result<()> {
     }
 }
 
+/// A repository name as an agent may write it (`api/`, `./api`, ` api `) reduced to the folder
+/// name a task file keys it by.
+pub fn plain_repo_name(name: &str) -> &str {
+    let name = name.trim();
+    let name = name
+        .strip_prefix("./")
+        .or_else(|| name.strip_prefix(".\\"))
+        .unwrap_or(name);
+    name.trim_end_matches(['/', '\\'])
+}
+
 /// `canonicalize`, giving the everyday path form on Windows (see [`plain_path`]).
 pub async fn canonicalize(
     path: impl AsRef<std::path::Path>,
@@ -157,6 +168,15 @@ fn plain_keeps_meaning(rest: &str) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repository_name_as_an_agent_writes_it_is_reduced_to_the_folder() {
+        assert_eq!(plain_repo_name("api"), "api");
+        assert_eq!(plain_repo_name(" api/ "), "api");
+        assert_eq!(plain_repo_name("./api/"), "api");
+        assert_eq!(plain_repo_name(".\\web\\"), "web");
+        assert_eq!(plain_repo_name("."), ".");
+    }
 
     #[test]
     fn task_ids() {

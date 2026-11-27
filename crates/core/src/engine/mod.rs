@@ -335,6 +335,8 @@ impl Engine {
         let mut list = Vec::new();
         for repo in repos {
             let listed = match self.inner.repo_worktrees(&repo) {
+                // A one-repository project lists (or fails) as before.
+                Ok(w) if !self.inner.project.is_workspace() => w.list().await,
                 Ok(w)
                     if tokio::fs::try_exists(w.main_checkout())
                         .await
@@ -389,7 +391,10 @@ impl Engine {
             let Some(base) = task.base_commit(&w.repo) else {
                 continue;
             };
-            let (files, total) = if git::status_at(&w.path).await.exists {
+            // Only a readable worktree: a leftover folder (no `.git`, or one git cannot read)
+            // would fail or diff the wrong repository, so the branch is read instead.
+            let status = git::status_at(&w.path).await;
+            let (files, total) = if status.exists && status.error.is_none() {
                 git::changed_files(&w.path, base, None).await?
             } else {
                 let main = self.inner.repo_worktrees(&w.repo)?;

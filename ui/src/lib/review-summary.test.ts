@@ -137,14 +137,40 @@ describe('reviewSummary in a workspace', () => {
     expect(reposToCheck(ws({}))).toEqual(['api', 'web']);
   });
 
+  it('takes the record of a changed repository that has one', () => {
+    const pr = (pushedCheckpoint: string) => ({
+      url: 'u',
+      host: 'github' as const,
+      pushedCheckpoint,
+    });
+    // Only web changed and has its PR: not "create" again, and up to date.
+    const t = task({
+      baseCommits: { api: 'a0', web: 'w0' },
+      subtasks: [sub({ checkpoints: { web: 'w1' } })],
+      pullRequests: { web: pr('w1') },
+    });
+    expect(pullRequestAction(t, null).kind).toBe('current');
+    expect(pullRequestAction(t, null).url).toBe('u');
+    // web has new work since: update.
+    const stale = task({ ...t, subtasks: [sub({ checkpoints: { web: 'w2' } })] });
+    expect(pullRequestAction(stale, null).kind).toBe('update');
+    // api changed too but has no record (no remote): left out.
+    const noRemote = task({ ...t, subtasks: [sub({ checkpoints: { web: 'w1', api: 'a1' } })] });
+    expect(pullRequestAction(noRemote, null).kind).toBe('current');
+  });
+
   it('is up to date only when every changed repository is', () => {
     const pr = (pushedCheckpoint: string) => ({
       url: 'u',
       host: 'github' as const,
       pushedCheckpoint,
     });
+    // web has no record: until the per-repository rows (batch 3), a repository without one
+    // (never opened, or no remote) is left out rather than holding the button at "update".
     const partly = ws({ pullRequests: { api: pr('a1') } });
-    expect(pullRequestAction(partly, null).kind).toBe('update');
+    expect(pullRequestAction(partly, null).kind).toBe('current');
+    const staleApi = ws({ pullRequests: { api: pr('a0'), web: pr('w1') } });
+    expect(pullRequestAction(staleApi, null).kind).toBe('update');
     const both = ws({ pullRequests: { api: pr('a1'), web: pr('w1') } });
     expect(pullRequestAction(both, null).kind).toBe('current');
   });

@@ -462,7 +462,8 @@ async fn run_agent(
                         // Guidance only: names that are not the task's repositories are dropped.
                         sub.repos = s
                             .repos
-                            .into_iter()
+                            .iter()
+                            .map(|r| crate::util::plain_repo_name(r).to_string())
                             .filter(|r| r != ROOT_REPO && t.base_commits.contains_key(r))
                             .fold(Vec::new(), |mut v, r| {
                                 if !v.contains(&r) {

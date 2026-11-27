@@ -67,9 +67,17 @@ impl Env {
             .iter()
             .enumerate()
             .map(|(i, files)| {
-                let mut repos: Vec<&str> = files.iter().filter_map(|f| f.split_once('/')).map(|(r, _)| r).collect();
+                let mut repos: Vec<String> = files
+                    .iter()
+                    .filter_map(|f| f.split_once('/'))
+                    .map(|(r, _)| r.to_string())
+                    .collect();
                 repos.dedup();
-                repos.push("bogus");
+                // Written the way an agent may: `./api/` is api.
+                if let Some(first) = repos.first_mut() {
+                    *first = format!("./{first}/");
+                }
+                repos.push("bogus".into());
                 let i = i + 1;
                 json!({ "id": format!("dev-{i}"), "kind": "dev", "title": format!("Step {i}"), "detail": format!("Do step {i}"), "repos": repos })
             })
@@ -392,6 +400,22 @@ async fn agents_are_told_the_layout_and_the_planner_names_each_subtasks_reposito
     assert_eq!(changes[0].files[0].path, "a.txt");
     assert_eq!(changes[0].files[0].status, git::FileChange::Added);
     assert_eq!(changes[0].files[0].added, Some(1));
+
+    // web's worktree is gone and an empty folder is left where it was: its changes come from the
+    // task branch, not from git run in that folder.
+    let dir = git::task_dir(engine.project(), &t.id).unwrap();
+    let web_wt = dir.join("web");
+    git(
+        &env.ws.repo("web"),
+        &["worktree", "remove", "--force", web_wt.to_str().unwrap()],
+    );
+    std::fs::create_dir_all(&web_wt).unwrap();
+    let changes = engine.changes(&t.id).await.unwrap();
+    let web = changes
+        .iter()
+        .find(|c| c.repo == "web")
+        .expect("web is listed");
+    assert_eq!(web.files[0].path, "w.txt");
 }
 
 #[tokio::test(flavor = "multi_thread")]
