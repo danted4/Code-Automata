@@ -251,12 +251,8 @@ fn write_script(path: &Path, contents: &str) {
         .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(contents.as_bytes())
-        .unwrap();
+    // If sh fails early (a missing folder) this write fails too; the assert below names the file.
+    let _ = child.stdin.take().unwrap().write_all(contents.as_bytes());
     assert!(
         child.wait().unwrap().success(),
         "writing {}",
@@ -1402,10 +1398,11 @@ async fn sigterm_stops_the_server_and_leaves_runs_interrupted() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    // Keep stdout open until the server exits: it prints a second line (the token) after the
+    // first, and a closed pipe makes that println panic and kill the server.
+    let mut stdout = std::io::BufReader::new(server.stdout.take().unwrap());
     let mut first = String::new();
-    std::io::BufReader::new(server.stdout.take().unwrap())
-        .read_line(&mut first)
-        .unwrap();
+    stdout.read_line(&mut first).unwrap();
     let port: u16 = first.trim().rsplit(':').next().unwrap().parse().unwrap();
 
     let p = repo.path.clone();
@@ -1439,6 +1436,7 @@ async fn sigterm_stops_the_server_and_leaves_runs_interrupted() {
         .unwrap()
         .unwrap();
     assert!(exit.success(), "{exit:?}");
+    drop(stdout);
 
     let task = ca_core::TaskStore::new(&ProjectDir::open(&p).await.unwrap())
         .load(&id)

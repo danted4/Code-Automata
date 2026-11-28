@@ -152,12 +152,8 @@ pub fn write_script(path: &Path, contents: &str) {
         .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(contents.as_bytes())
-        .unwrap();
+    // If sh fails early (a missing folder) this write fails too; the assert below names the file.
+    let _ = child.stdin.take().unwrap().write_all(contents.as_bytes());
     assert!(
         child.wait().unwrap().success(),
         "writing {}",
