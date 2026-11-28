@@ -283,7 +283,9 @@ fn retryable(e: &tauri_plugin_updater::Error) -> bool {
     }
 }
 
-/// The HTTP status in the plugin's "… failed with status: 503 Service Unavailable".
+/// The HTTP status in the plugin's "… failed with status: 503 Service Unavailable". That text is
+/// tauri-plugin-updater's (2.14, `Update::download`): check it when upgrading the plugin, or a
+/// reworded message quietly makes every server error final.
 fn status_in(message: &str) -> Option<u16> {
     let (_, rest) = message.rsplit_once("status: ")?;
     rest.split_whitespace().next()?.parse().ok()
@@ -684,20 +686,13 @@ mod tests {
                 marker = marker.display()
             )
         });
-        std::fs::write(
+        write_script(
             &open,
-            format!(
+            &format!(
                 "#!/bin/sh\necho \"$*\" >> {calls}\n{starts}exit 0\n",
                 calls = calls.display()
             ),
-        )
-        .unwrap();
-        let chmod = std::process::Command::new("chmod")
-            .arg("755")
-            .arg(&open)
-            .status()
-            .unwrap();
-        assert!(chmod.success());
+        );
         let check = format!("test -f {}", marker.display());
         let status = std::process::Command::new("/bin/sh")
             .args(["-c", RELAUNCH_SCRIPT, "sh", &pid.to_string(), "/Apps/X.app"])
@@ -712,6 +707,28 @@ mod tests {
             .lines()
             .map(str::to_string)
             .collect()
+    }
+
+    /// Write an executable script the test then runs, as core's `tests/common` `write_script`:
+    /// through a child `sh`, so this process never holds it open for writing. A child another
+    /// test thread forks meanwhile would inherit that descriptor until it execs, and running the
+    /// script then fails with ETXTBSY ("text file busy", Linux).
+    #[cfg(unix)]
+    fn write_script(path: &std::path::Path, contents: &str) {
+        use std::io::Write;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // If sh fails early (a missing folder) this write fails too; the assert below names the file.
+        let _ = child.stdin.take().unwrap().write_all(contents.as_bytes());
+        assert!(
+            child.wait().unwrap().success(),
+            "writing {}",
+            path.display()
+        );
     }
 
     #[cfg(unix)]
