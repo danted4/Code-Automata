@@ -38,17 +38,19 @@ pub async fn create(
     Project(engine): Project,
     Body(req): Body<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
-    check_provider(&state, req.agent.provider)?;
-    let mut agent = req.agent;
-    default_mock_scenario(&state, agent.provider, &mut agent.options);
+    let mut agents = req.agents;
+    for agent in [&mut agents.planning, &mut agents.dev, &mut agents.qa] {
+        check_provider(&state, agent.provider)?;
+        default_mock_scenario(&state, agent.provider, &mut agent.options);
+    }
     let (title, description, approval) = (&req.title, &req.description, req.require_plan_approval);
     let task = if req.start {
         engine
-            .create_and_start(title, description, agent, approval)
+            .create_and_start(title, description, agents, approval)
             .await?
     } else {
         engine
-            .create_task(title, description, agent, approval)
+            .create_task(title, description, agents, approval)
             .await?
     };
     Ok((StatusCode::CREATED, Json(task)))
@@ -68,7 +70,7 @@ fn default_mock_scenario(state: &AppState, provider: Provider, options: &mut Map
     }
 }
 
-/// Edit title, description, agent or plan approval; any other key is refused.
+/// Edit title, description, agents or plan approval; any other key is refused.
 pub async fn patch(
     State(state): State<Arc<AppState>>,
     Project(engine): Project,
@@ -76,18 +78,22 @@ pub async fn patch(
     Body(patch): Body<Map<String, Value>>,
 ) -> ApiResult<Task> {
     let mut patch = patch;
-    if let Some(agent) = patch.get_mut("agent").and_then(Value::as_object_mut)
-        && let Some(provider) = agent
-            .get("provider")
-            .and_then(|p| serde_json::from_value::<Provider>(p.clone()).ok())
-    {
-        check_provider(&state, provider)?;
-        if provider == Provider::Mock {
-            let options = agent
-                .entry("options")
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(options) = options.as_object_mut() {
-                default_mock_scenario(&state, provider, options);
+    if let Some(agents) = patch.get_mut("agents").and_then(Value::as_object_mut) {
+        for agent in agents.values_mut().filter_map(Value::as_object_mut) {
+            let Some(provider) = agent
+                .get("provider")
+                .and_then(|p| serde_json::from_value::<Provider>(p.clone()).ok())
+            else {
+                continue;
+            };
+            check_provider(&state, provider)?;
+            if provider == Provider::Mock {
+                let options = agent
+                    .entry("options")
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if let Some(options) = options.as_object_mut() {
+                    default_mock_scenario(&state, provider, options);
+                }
             }
         }
     }

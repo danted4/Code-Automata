@@ -7,11 +7,14 @@
 //!   in a single store update.
 //! * Opening a project takes an exclusive lock ([`lock`]) and reconciles runs left behind by a
 //!   previous process ([`reconcile`]).
-//! * Nothing starts on its own after a restart: interrupted tasks wait for the user's Resume.
+//! * Nothing starts on its own after a restart: interrupted tasks wait for the user's Resume. The
+//!   one exception is a run waiting out its CLI's usage limit (`rate_limited`): it resumes at its
+//!   reset time, also after a restart, once its project is open again ([`limits`]).
 
 pub mod checks;
 pub mod driver;
 pub mod extract;
+pub mod limits;
 pub mod lock;
 pub mod output;
 pub mod pr;
@@ -33,11 +36,12 @@ use crate::git::{self, DeleteOptions, Worktrees};
 use crate::project::ProjectDir;
 use crate::store::TaskStore;
 use crate::task::{
-    AgentConfig, Answer, Phase, PlanningStage, RunKind, RunState, SubtaskStatus, Task,
+    Answer, Phase, PhaseAgents, PlanningStage, RunKind, RunState, SubtaskStatus, Task,
 };
 use crate::transitions::Mover;
 use crate::util::{now_ms, random_base36};
 
+use self::limits::{Limit, RateLimits, WakeTiming};
 use self::lock::ProjectLock;
 use self::settings::Settings;
 
@@ -124,6 +128,13 @@ pub(crate) struct Inner {
     pub events: broadcast::Sender<EngineEvent>,
     /// Serialises pull-request creation per task.
     pub pr_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Which CLIs are rate-limited, shared with every other open project.
+    pub limits: Arc<RateLimits>,
+    pub timing: WakeTiming,
+    /// Rate-limited tasks waiting to resume: the reset time each waits for, and its timer.
+    wakeups: StdMutex<HashMap<String, (i64, tokio::task::AbortHandle)>>,
+    /// The engine is shutting down: timers must not start anything.
+    closing: AtomicBool,
     _lock: ProjectLock,
 }
 
@@ -200,6 +211,177 @@ impl Inner {
             .await?
             .ok_or_else(|| CoreError::TaskNotFound(id.to_string()))
     }
+
+    /// Make sure a driver will look at the task's current state. If one is running (possibly on
+    /// its way out after deciding to wait), it is told to look again before it leaves; the check
+    /// and the leaving happen under the same lock, so no request is lost.
+    fn spawn_driver(self: &Arc<Self>, id: &str) {
+        if self.closing.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut drivers = self.drivers.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(existing) = drivers.get(id) {
+            existing.rerun.store(true, Ordering::SeqCst);
+            return;
+        }
+        let (halt, _) = watch::channel(None);
+        let (finished, _) = watch::channel(false);
+        let control = Arc::new(Control {
+            halt,
+            stopper: StdMutex::new(None),
+            finished,
+            rerun: AtomicBool::new(false),
+        });
+        drivers.insert(id.to_string(), control.clone());
+        drop(drivers);
+        let inner = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            loop {
+                // In its own task, so a panic is caught here instead of leaving the driver
+                // registered forever with its run marked running.
+                let run = tokio::spawn({
+                    let inner = inner.clone();
+                    let id = id.clone();
+                    let control = control.clone();
+                    async move { driver::drive(inner, &id, &control).await }
+                });
+                if let Err(e) = run.await {
+                    let message = format!("the engine stopped unexpectedly: {e}");
+                    driver::record_failure(&inner, &id, &message).await;
+                    inner.emit(EngineEvent::Error {
+                        task_id: id.clone(),
+                        message,
+                    });
+                }
+                // A run that stopped on its CLI's usage limit resumes on its own at the reset.
+                if let Ok(Some(task)) = inner.store.load(&id).await
+                    && let Some(run) = &task.run
+                    && run.state == RunState::RateLimited
+                    && let Some(at) = run.resets_at
+                {
+                    inner.schedule_wakeup(&id, at);
+                }
+                let mut drivers = inner.drivers.lock().unwrap_or_else(|p| p.into_inner());
+                if control.rerun.swap(false, Ordering::SeqCst) && control.halt_requested().is_none()
+                {
+                    continue;
+                }
+                drivers.remove(&id);
+                break;
+            }
+            control.finished.send_replace(true);
+        });
+    }
+
+    /// Resume the task at `resets_at` (plus the grace), if its run is still the rate-limited one
+    /// waiting for that time. Replaces any earlier timer for the task.
+    fn schedule_wakeup(self: &Arc<Self>, id: &str, resets_at: i64) {
+        let mut wakeups = self.wakeups.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, timer)) = wakeups.get(id) {
+            if *at == resets_at && !timer.is_finished() {
+                return;
+            }
+            timer.abort();
+        }
+        // The timer holds only a weak reference: a waiting task must never keep a closed
+        // project's engine (and its lock) alive.
+        let weak = Arc::downgrade(self);
+        let task_id = id.to_string();
+        let due_ms = resets_at * 1000 + i64::try_from(self.timing.grace.as_millis()).unwrap_or(0);
+        let tick = self.timing.tick;
+        let timer = tokio::spawn(async move {
+            loop {
+                let left = u64::try_from(due_ms - now_ms()).unwrap_or(0);
+                if left == 0 {
+                    break;
+                }
+                tokio::time::sleep(tick.min(std::time::Duration::from_millis(left))).await;
+                if weak.strong_count() == 0 {
+                    return;
+                }
+            }
+            if let Some(inner) = weak.upgrade() {
+                inner.wake(&task_id, resets_at).await;
+            }
+        });
+        wakeups.insert(id.to_string(), (resets_at, timer.abort_handle()));
+    }
+
+    /// Stop waiting to resume the task on its own.
+    fn cancel_wakeup(&self, id: &str) {
+        if let Some((_, timer)) = self
+            .wakeups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id)
+        {
+            timer.abort();
+        }
+    }
+
+    /// The reset time came: resume the task if its run is still waiting for exactly that time (a
+    /// pause, a manual resume or an edit in between leaves it alone). The check and the change
+    /// are one update, so a pause cannot be undone by a timer that fired at the same moment.
+    async fn wake(self: &Arc<Self>, id: &str, resets_at: i64) {
+        {
+            let mut wakeups = self.wakeups.lock().unwrap_or_else(|p| p.into_inner());
+            if wakeups.get(id).is_some_and(|(at, _)| *at == resets_at) {
+                wakeups.remove(id);
+            }
+        }
+        if self.closing.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut woke = false;
+        let _ = self
+            .update(id, |t| {
+                if t.run.as_ref().is_some_and(|r| {
+                    r.state == RunState::RateLimited && r.resets_at == Some(resets_at)
+                }) {
+                    resume_run(t);
+                    woke = true;
+                }
+                Ok(())
+            })
+            .await;
+        if woke {
+            self.spawn_driver(id);
+        }
+    }
+}
+
+/// A halted run continues: a dev subtask from its partial work (queued, in the same agent session
+/// when there is one); any other step starts again.
+fn resume_run(t: &mut Task) {
+    let Some(run) = t.run.as_mut() else {
+        return; // nothing halted: just continue
+    };
+    if run.state.is_active() {
+        // Left by a crash in this same process; treat it as interrupted.
+        run.state = RunState::Interrupted;
+    }
+    if !run.state.is_resumable() && run.state != RunState::Done {
+        return;
+    }
+    if run.kind == RunKind::Dev {
+        run.state = RunState::Queued;
+        run.attempt += 1;
+        run.error = None;
+        run.resets_at = None;
+        run.reset_estimated = false;
+        run.updated_at = now_ms();
+    } else {
+        t.run = None;
+    }
+}
+
+/// How an engine is opened (see [`Engine::open_with`]).
+#[derive(Debug, Clone, Default)]
+pub struct EngineOptions {
+    /// Shared with the other open projects' engines (a usage limit is per account).
+    pub limits: Arc<RateLimits>,
+    pub timing: WakeTiming,
 }
 
 /// The files a task changed in one repository (see [`Engine::changes`]).
@@ -249,6 +431,16 @@ impl Engine {
     /// interrupted (stopping their orphaned agents). A task file that cannot be reconciled is
     /// skipped and reported in [`Engine::reconcile_problems`], not fatal.
     pub async fn open(project: ProjectDir, bins: Binaries) -> Result<Engine> {
+        Engine::open_with(project, bins, EngineOptions::default()).await
+    }
+
+    /// [`Engine::open`], sharing rate limits with other engines. Runs that were waiting out a
+    /// usage limit are scheduled to resume at their reset time (at once if it has passed).
+    pub async fn open_with(
+        project: ProjectDir,
+        bins: Binaries,
+        options: EngineOptions,
+    ) -> Result<Engine> {
         let boot_id = format!("boot-{}-{}", now_ms(), random_base36(6));
         let lock = ProjectLock::acquire(&project, &boot_id).await?;
         let settings = Settings::load(&project).await?;
@@ -265,11 +457,35 @@ impl Engine {
             drivers: StdMutex::new(HashMap::new()),
             events,
             pr_locks: StdMutex::new(HashMap::new()),
+            limits: options.limits,
+            timing: options.timing,
+            wakeups: StdMutex::new(HashMap::new()),
+            closing: AtomicBool::new(false),
             project,
             _lock: lock,
         };
+        let inner = Arc::new(inner);
+        if let Ok(list) = inner.store.list().await {
+            for task in &list.tasks {
+                if let Some(run) = &task.run
+                    && run.state == RunState::RateLimited
+                    && let Some(at) = run.resets_at
+                {
+                    if let Some(provider) = run.provider {
+                        inner.limits.record(
+                            provider,
+                            Limit {
+                                until: at,
+                                estimated: run.reset_estimated,
+                            },
+                        );
+                    }
+                    inner.schedule_wakeup(&task.id, at);
+                }
+            }
+        }
         Ok(Engine {
-            inner: Arc::new(inner),
+            inner,
             reconcile_problems: Arc::new(report.problems),
         })
     }
@@ -291,18 +507,24 @@ impl Engine {
         self.inner.store.list().await
     }
 
-    /// A user edit (title, description, agent, plan approval). The agent cannot change while the
-    /// task is running or halted mid-step, since a resume continues with the agent that started.
+    /// A user edit (title, description, agents, plan approval). The agents cannot change while
+    /// the task is running or halted mid-step, since a resume continues with the agent that
+    /// started; a rate-limited run is the exception, so a task can move off a limited CLI (a
+    /// session is only resumed by the CLI that created it).
     pub async fn patch_task(
         &self,
         id: &str,
         patch: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Task> {
-        if patch.contains_key("agent") {
+        if patch.contains_key("agents") {
             let task = self.inner.load(id).await?;
-            if self.is_running(id) || task.run.is_some() {
+            let rate_limited = task
+                .run
+                .as_ref()
+                .is_some_and(|r| r.state == RunState::RateLimited);
+            if self.is_running(id) || (task.run.is_some() && !rate_limited) {
                 return Err(CoreError::Invalid(
-                    "the agent cannot change while a step is running or halted".into(),
+                    "the agents cannot change while a step is running or halted".into(),
                 ));
             }
         }
@@ -590,10 +812,10 @@ impl Engine {
         &self,
         title: &str,
         description: &str,
-        agent: AgentConfig,
+        agents: impl Into<PhaseAgents>,
         require_plan_approval: bool,
     ) -> Result<Task> {
-        let mut task = Task::new(title, description, agent);
+        let mut task = Task::new(title, description, agents);
         task.require_plan_approval = require_plan_approval;
         let task = self.inner.store.create(task).await?;
         self.inner.emit(EngineEvent::TaskChanged {
@@ -607,11 +829,11 @@ impl Engine {
         &self,
         title: &str,
         description: &str,
-        agent: AgentConfig,
+        agents: impl Into<PhaseAgents>,
         require_plan_approval: bool,
     ) -> Result<Task> {
         let task = self
-            .create_task(title, description, agent, require_plan_approval)
+            .create_task(title, description, agents, require_plan_approval)
             .await?;
         // A new task has no run to resume, so starting it cannot be refused.
         self.spawn_driver(&task.id);
@@ -624,62 +846,16 @@ impl Engine {
         let task = self.inner.load(id).await?;
         if task.run.as_ref().is_some_and(|r| r.state.is_resumable()) {
             return Err(CoreError::Invalid(
-                "this task is paused, interrupted or failed; resume it instead".into(),
+                "this task is paused, interrupted, failed or rate-limited; resume it instead"
+                    .into(),
             ));
         }
         self.spawn_driver(id);
         Ok(())
     }
 
-    /// Make sure a driver will look at the task's current state. If one is running (possibly on
-    /// its way out after deciding to wait), it is told to look again before it leaves; the check
-    /// and the leaving happen under the same lock, so no request is lost.
     fn spawn_driver(&self, id: &str) {
-        let mut drivers = self.inner.drivers.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(existing) = drivers.get(id) {
-            existing.rerun.store(true, Ordering::SeqCst);
-            return;
-        }
-        let (halt, _) = watch::channel(None);
-        let (finished, _) = watch::channel(false);
-        let control = Arc::new(Control {
-            halt,
-            stopper: StdMutex::new(None),
-            finished,
-            rerun: AtomicBool::new(false),
-        });
-        drivers.insert(id.to_string(), control.clone());
-        drop(drivers);
-        let inner = self.inner.clone();
-        let id = id.to_string();
-        tokio::spawn(async move {
-            loop {
-                // In its own task, so a panic is caught here instead of leaving the driver
-                // registered forever with its run marked running.
-                let run = tokio::spawn({
-                    let inner = inner.clone();
-                    let id = id.clone();
-                    let control = control.clone();
-                    async move { driver::drive(inner, &id, &control).await }
-                });
-                if let Err(e) = run.await {
-                    let message = format!("the engine stopped unexpectedly: {e}");
-                    driver::record_failure(&inner, &id, &message).await;
-                    inner.emit(EngineEvent::Error {
-                        task_id: id.clone(),
-                        message,
-                    });
-                }
-                let mut drivers = inner.drivers.lock().unwrap_or_else(|p| p.into_inner());
-                if control.rerun.swap(false, Ordering::SeqCst) && control.halt_requested().is_none()
-                {
-                    continue;
-                }
-                drivers.remove(&id);
-                break;
-            }
-            control.finished.send_replace(true);
-        });
+        self.inner.spawn_driver(id);
     }
 
     /// Wait until the task's driver (if any) has stopped.
@@ -819,18 +995,42 @@ impl Engine {
     ///
     /// A pause that arrives just after a step finished finds no run to mark: the task then simply
     /// stops before its next step, with no `paused` run, and `start` or `resume` continues it.
+    ///
+    /// A task waiting out its CLI's usage limit has no driver: pausing it stops it from resuming on
+    /// its own.
     pub async fn pause(&self, id: &str) -> Result<()> {
-        let control = self
-            .inner
-            .control(id)
-            .ok_or_else(|| CoreError::Invalid("the task is not running".into()))?;
+        let Some(control) = self.inner.control(id) else {
+            let mut paused = false;
+            self.inner
+                .update(id, |t| {
+                    if let Some(run) = t.run.as_mut()
+                        && run.state == RunState::RateLimited
+                    {
+                        run.state = RunState::Paused;
+                        run.resets_at = None;
+                        run.reset_estimated = false;
+                        run.updated_at = now_ms();
+                        paused = true;
+                    }
+                    Ok(())
+                })
+                .await?;
+            if !paused {
+                return Err(CoreError::Invalid("the task is not running".into()));
+            }
+            self.inner.cancel_wakeup(id);
+            return Ok(());
+        };
         control.request(Halt::Pause);
         self.wait_idle(id).await;
         Ok(())
     }
 
-    /// Continue a paused, interrupted or failed task. A dev subtask continues from its partial work
-    /// (in the same agent session when there is one); any other step starts again.
+    /// Continue a paused, interrupted, failed or rate-limited task. A dev subtask continues from its
+    /// partial work (in the same agent session when there is one); any other step starts again.
+    ///
+    /// Resuming a rate-limited task ("Resume now") forgets its CLI's limit, so the next run really
+    /// tries instead of waiting again.
     pub async fn resume(&self, id: &str) -> Result<()> {
         if self.is_running(id) {
             let task = self.inner.load(id).await?;
@@ -840,26 +1040,16 @@ impl Engine {
             // A driver on its way out (for example after a pause): let it finish, then resume.
             self.settle(id, "resuming").await?;
         }
+        self.inner.cancel_wakeup(id);
         self.inner
             .update(id, |t| {
-                let Some(run) = t.run.as_mut() else {
-                    return Ok(()); // nothing halted: just continue
-                };
-                if run.state.is_active() {
-                    // Left by a crash in this same process; treat it as interrupted.
-                    run.state = RunState::Interrupted;
+                if let Some(run) = &t.run
+                    && run.state == RunState::RateLimited
+                    && let Some(provider) = run.provider
+                {
+                    self.inner.limits.clear(provider);
                 }
-                if !run.state.is_resumable() && run.state != RunState::Done {
-                    return Ok(());
-                }
-                if run.kind == RunKind::Dev {
-                    run.state = RunState::Queued;
-                    run.attempt += 1;
-                    run.error = None;
-                    run.updated_at = now_ms();
-                } else {
-                    t.run = None;
-                }
+                resume_run(t);
                 Ok(())
             })
             .await?;
@@ -954,6 +1144,7 @@ impl Engine {
 
     /// Stop the task, remove its worktree and branch, and delete it.
     pub async fn delete_task(&self, id: &str) -> Result<()> {
+        self.inner.cancel_wakeup(id);
         if let Some(control) = self.inner.control(id) {
             control.request(Halt::Shutdown);
             self.wait_idle(id).await;
@@ -978,8 +1169,19 @@ impl Engine {
         Ok(())
     }
 
-    /// Stop every running task; their runs become `interrupted`, ready to resume next time.
+    /// Stop every running task; their runs become `interrupted`, ready to resume next time. Tasks
+    /// waiting out a usage limit stay that way and are woken by the next open.
     pub async fn shutdown(&self) {
+        self.inner.closing.store(true, Ordering::SeqCst);
+        for (_, (_, timer)) in self
+            .inner
+            .wakeups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .drain()
+        {
+            timer.abort();
+        }
         let controls: Vec<(String, Arc<Control>)> = self
             .inner
             .drivers

@@ -40,6 +40,7 @@ import {
   primaryAction,
   progress,
   PROVIDER_LABELS,
+  rateLimitText,
   reworkLabel,
   statusBadge,
   taskStatus,
@@ -67,6 +68,7 @@ const COMMANDS: Partial<Record<Exclude<PrimaryAction, null>, (id: string) => Pro
   pause: api.tasks.pause,
   resume: api.tasks.resume,
   retry: api.tasks.resume,
+  resume_now: api.tasks.resume,
   start: api.tasks.start,
 };
 
@@ -147,9 +149,9 @@ export function TaskDetailModal({ taskId, open, onOpenChange }: TaskModalProps) 
               </Badge>
             )}
             <span data-testid="task-detail-agent" style={muted}>
-              {PROVIDER_LABELS[task.agent.provider] ?? task.agent.provider}
-              {task.agent.model && ` · ${task.agent.model}`}
-              {task.agent.mode && ` · ${task.agent.mode}`}
+              {PROVIDER_LABELS[task.agents.dev.provider] ?? task.agents.dev.provider}
+              {task.agents.dev.model && ` · ${task.agents.dev.model}`}
+              {task.agents.dev.mode && ` · ${task.agents.dev.mode}`}
             </span>
             {status.kind === 'working' && (
               <span
@@ -202,6 +204,12 @@ export function TaskDetailModal({ taskId, open, onOpenChange }: TaskModalProps) 
             >
               {status.error}
             </pre>
+          )}
+          {status.kind === 'rate_limited' && (
+            <p data-testid="task-detail-rate-limited" className="text-xs" style={secondary}>
+              {status.error}. {rateLimitText(status.resumesAt, status.estimated)} on its own;
+              “Resume now” tries straight away.
+            </p>
           )}
           {status.kind === 'interrupted' && (
             <p data-testid="task-detail-interrupted" className="text-xs" style={secondary}>
@@ -362,6 +370,7 @@ const HALTED_LABELS: Record<string, string> = {
   paused: 'Paused on this subtask',
   interrupted: 'Interrupted on this subtask',
   failed: 'Failed on this subtask',
+  rate_limited: 'Waiting for the usage limit on this subtask',
 };
 
 function SubtaskItem({

@@ -3,4 +3,4 @@
 /**
  * How a provider's CLI was found.
  */
-export type BinarySource = "chosen" | "configured" | "installFolder" | "path";
+export type BinarySource = "chosen" | "configured" | "installFolder" | "path" | "nodeVersion";

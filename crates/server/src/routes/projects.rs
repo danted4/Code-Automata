@@ -59,11 +59,10 @@ pub async fn providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderI
 
 /// The agents offered, in the order the UI shows them.
 fn offered(state: &AppState) -> Vec<(Provider, &'static str)> {
-    let mut offered = vec![
-        (Provider::Claude, "Claude Code"),
-        (Provider::Cursor, "Cursor"),
-        (Provider::Amp, "Amp"),
-    ];
+    let mut offered: Vec<(Provider, &'static str)> = ca_core::agent::APP_PROVIDERS
+        .iter()
+        .map(|p| (*p, ca_core::agent::provider_label(*p)))
+        .collect();
     if state.config.allow_mock {
         offered.push((Provider::Mock, "Mock (tests)"));
     }

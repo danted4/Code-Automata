@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "model": "claude-sonnet-5-5", "cwd": "/tmp/repo", "permissionMode": "auto", "apiKeySource": "none", "tools": ["Bash", "Read"]}
+{"type": "result", "subtype": "success", "is_error": true, "result": "Claude AI usage limit reached|1764359100", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "num_turns": 1}

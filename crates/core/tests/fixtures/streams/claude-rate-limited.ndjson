@@ -1,0 +1,6 @@
+{"type": "system", "subtype": "init", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "model": "claude-sonnet-5-5", "cwd": "/tmp/repo", "permissionMode": "auto", "apiKeySource": "none", "tools": ["Bash", "Read"]}
+{"type": "assistant", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "message": {"role": "assistant", "content": [{"type": "text", "text": "Looking at the rate limiter in src/limits.rs."}]}}
+{"type": "rate_limit_event", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "rate_limit_info": {"status": "allowed_warning", "resetsAt": 1764359100, "rateLimitType": "five_hour", "utilization": 0.92}}
+{"type": "rate_limit_event", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "rate_limit_info": {"status": "rejected", "resetsAt": 1764359100, "rateLimitType": "five_hour", "utilization": 1.0}}
+{"type": "assistant", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "message": {"role": "assistant", "content": [{"type": "text", "text": "You've hit your session limit · resets 3:45pm"}]}, "error": "rate_limit"}
+{"type": "result", "subtype": "success", "is_error": true, "api_error_status": 429, "result": "You've hit your session limit · resets 3:45pm", "session_id": "39ac44ef-0000-4000-8000-00000000ra01", "num_turns": 2, "total_cost_usd": 0}

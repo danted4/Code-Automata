@@ -53,6 +53,8 @@ export function outcomeProblem(outcome: Outcome): string | null {
       return 'Stopped';
     case 'crashed':
       return outcome.exitCode == null ? 'Crashed' : `Crashed (exit code ${outcome.exitCode})`;
+    case 'rate_limited':
+      return outcome.message ? `Usage limit: ${outcome.message}` : 'Usage limit';
   }
 }
 

@@ -6,7 +6,8 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use ca_core::ProjectDir;
 use ca_core::agent::Binaries;
-use ca_core::engine::Engine;
+use ca_core::engine::limits::{RateLimits, WakeTiming};
+use ca_core::engine::{Engine, EngineOptions};
 use tokio::sync::{Mutex, OnceCell, watch};
 
 use crate::error::ApiError;
@@ -27,6 +28,8 @@ pub struct Config {
     /// Page origins allowed to call the API cross-origin, exactly as browsers send them (the
     /// desktop app's `tauri://localhost`). Empty for `ca-server`.
     pub allowed_origins: Vec<String>,
+    /// When rate-limited tasks resume (tests shorten it).
+    pub wake_timing: WakeTiming,
 }
 
 pub struct AppState {
@@ -34,6 +37,9 @@ pub struct AppState {
     /// Engines by repository root. Each slot opens once; the map lock is held only to find the
     /// slot, so opening one project never holds up requests for another.
     engines: Mutex<HashMap<PathBuf, Arc<OnceCell<Arc<Engine>>>>>,
+    /// Which CLIs are rate-limited: shared by every project's engine, since a usage limit belongs
+    /// to the account.
+    limits: Arc<RateLimits>,
     closing: watch::Sender<bool>,
 }
 
@@ -42,6 +48,7 @@ impl AppState {
         Arc::new(AppState {
             config,
             engines: Mutex::new(HashMap::new()),
+            limits: Arc::new(RateLimits::default()),
             closing: watch::channel(false).0,
         })
     }
@@ -83,8 +90,16 @@ impl AppState {
         // Two first requests for one project: one opens it, the other waits for that. A failed
         // open leaves the slot empty for the next request to try again.
         let bins = self.config.bins.clone();
+        let options = EngineOptions {
+            limits: self.limits.clone(),
+            timing: self.config.wake_timing,
+        };
         let engine = slot
-            .get_or_try_init(|| async move { Engine::open(project, bins).await.map(Arc::new) })
+            .get_or_try_init(|| async move {
+                Engine::open_with(project, bins, options)
+                    .await
+                    .map(Arc::new)
+            })
             .await?;
         if *self.closing.borrow() {
             // Opened while the server began to close, after shutdown_engines took its list.

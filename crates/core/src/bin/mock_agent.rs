@@ -31,6 +31,7 @@
 //! | `{"spawnChild": {"command", "pidFile"}}` | start `command` with `sh -c` (`cmd /C` on Windows), inheriting stdout, and write its pid |
 //! | `{"spawnChild": {"sleepMs", "pidFile"}}` | start a copy of this binary that sleeps for `sleepMs` (inheriting stdout) and write its pid; every platform |
 //! | `{"result": {"subtype", "text", "isError", "structured"}}` | the final result line |
+//! | `{"rateLimit": {"inSecs": n}}` | Claude's usage-limit ending: a rejected `rate_limit_event` resetting in `n` seconds (no `inSecs`: no reset time) and an error result |
 //! | `{"exit": n}` | exit now with code n |
 //! | `{"hang": true}` | never finish |
 //!
@@ -257,6 +258,30 @@ fn run() -> i32 {
                 "session_id": session_id,
                 "num_turns": steps.len(),
                 "total_cost_usd": 0.0,
+            }));
+        } else if let Some(limit) = step.get("rateLimit") {
+            let resets_at = limit.get("inSecs").and_then(Value::as_i64).map(|secs| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                i64::try_from(now).unwrap_or(0) + secs
+            });
+            let mut info = json!({ "status": "rejected", "rateLimitType": "five_hour" });
+            if let Some(at) = resets_at {
+                info["resetsAt"] = json!(at);
+            }
+            emit(&json!({
+                "type": "rate_limit_event",
+                "rate_limit_info": info,
+                "session_id": session_id,
+            }));
+            emit(&json!({
+                "type": "result",
+                "subtype": "success",
+                "is_error": true,
+                "result": "You've hit your session limit",
+                "session_id": session_id,
+                "num_turns": steps.len(),
             }));
         } else if let Some(code) = step.get("exit").and_then(Value::as_i64) {
             return i32::try_from(code).unwrap_or(1);

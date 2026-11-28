@@ -230,7 +230,7 @@ async fn summarize(path: &Path, name: &str) -> Result<Option<RunLogInfo>> {
         RunLogLine::Event {
             event: AgentEvent::Finished { outcome },
             ..
-        } => Some(outcome.clone()),
+        } => Some((**outcome).clone()),
         _ => None,
     });
     let abandoned = lines.iter().rev().find_map(|l| match l {

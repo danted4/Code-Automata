@@ -95,7 +95,7 @@ async fn stop_and_resume(provider: Provider, agent: AgentConfig) {
     while let Some(event) = first.next_event().await {
         match event {
             AgentEvent::Session { id } => session = Some(id),
-            AgentEvent::Finished { outcome: o } => outcome = Some(o),
+            AgentEvent::Finished { outcome: o } => outcome = Some(*o),
             _ => {}
         }
     }

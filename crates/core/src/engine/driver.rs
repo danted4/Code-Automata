@@ -5,12 +5,14 @@
 //! together). The loop stops when the task waits for the user, finishes, fails, or is halted.
 //!
 //! A run record exists only while a step is in progress or halted: `running` while it works,
-//! `paused` / `interrupted` / `failed` when it stops early, and gone once its result is written.
+//! `paused` / `interrupted` / `failed` when it stops early, `rate_limited` while its CLI's usage
+//! limit lasts, and gone once its result is written.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::limits::{Limit, now_secs};
 use super::output::{
     AgentOutput, DevOut, PlanOut, QaOut, QuestionsOut, SubtaskKindOut, SubtasksOut, TriageOut,
     TriageVerdict, read_output,
@@ -32,6 +34,12 @@ use crate::util::{ROOT_REPO, now_ms};
 
 /// Diff shown to a resumed agent.
 const DIFF_LIMIT: usize = 64 * 1024;
+
+/// The agent of the task's current run's phase (a run without a record yet counts as dev).
+fn run_agent_config(task: &Task) -> &crate::task::AgentConfig {
+    task.agents
+        .for_kind(task.run.as_ref().map_or(RunKind::Dev, |r| r.kind))
+}
 
 pub(crate) async fn drive(inner: Arc<Inner>, id: &str, control: &Control) {
     loop {
@@ -325,6 +333,8 @@ struct Ctx<'a> {
     /// Files removed from a workspace task's folder after this context's runs (outside every
     /// repository), for the dev subtask's handoff note.
     removed: std::sync::Mutex<Vec<String>>,
+    /// The CLI the step runs (the phase's agent).
+    provider: crate::task::Provider,
 }
 
 impl Ctx<'_> {
@@ -361,23 +371,38 @@ async fn run_agent(
     run.pid = None;
     run.process_started = None;
     run.error = None;
+    run.resets_at = None;
+    run.reset_estimated = false;
     run.updated_at = now_ms();
-    // A session is only resumed by the provider that created it (the task's agent may have been
+    // A session is only resumed by the provider that created it (the phase's agent may have been
     // changed while the run was halted).
+    let provider = task.agents.for_kind(kind).provider;
     let session = run
         .session_id
         .clone()
-        .filter(|_| run.provider.is_none_or(|p| p == task.agent.provider));
+        .filter(|_| run.provider.is_none_or(|p| p == provider));
     if session.is_none() {
         run.session_id = None;
     }
-    run.provider = Some(task.agent.provider);
+    run.provider = Some(provider);
     if kind == RunKind::Dev && !resuming {
         // Where this run's work starts in each repository (see `Run::heads`).
         run.heads.clear();
         for w in inner.task_worktrees(task)? {
             run.heads.insert(w.repo, git::head(&w.path).await?);
         }
+    }
+    // The CLI is known to be rate-limited: wait for its reset without starting anything (not even
+    // a triage), instead of every task on it failing in turn.
+    if let Some(limit) = inner.limits.active(provider, now_secs()) {
+        mark_rate_limited(&mut run, limit, &limit_message(provider, None));
+        inner
+            .update(id, |t| {
+                t.run = Some(run);
+                Ok(())
+            })
+            .await?;
+        return Ok(false);
     }
     let ctx = Ctx {
         inner,
@@ -389,6 +414,7 @@ async fn run_agent(
         record_session: true,
         log_label: "run",
         removed: std::sync::Mutex::new(Vec::new()),
+        provider,
     };
     let task = inner
         .update(id, |t| {
@@ -500,7 +526,7 @@ async fn run_agent(
         }
         AgentStep::Dev(sub_id) => {
             let sub = sub.ok_or_else(|| CoreError::Invalid(format!("no subtask {sub_id:?}")))?;
-            let caps = agent::capabilities(task.agent.provider);
+            let caps = agent::capabilities(provider);
             let (prompt, resume_session) = if resuming {
                 // A crash during an earlier triage may have left the work parked, and a crash
                 // between two repositories' checkpoint commits may have left one committed: the
@@ -657,6 +683,7 @@ async fn triage(
         record_session: false,
         log_label: "triage",
         removed: std::sync::Mutex::new(Vec::new()),
+        provider: ctx.provider,
     };
     let worktrees = ctx.inner.task_worktrees(task)?;
     for w in &worktrees {
@@ -685,7 +712,7 @@ async fn attempt<T: AgentOutput>(
     prompt: String,
     session: Option<String>,
 ) -> Result<Attempt<T>> {
-    let caps = agent::capabilities(task.agent.provider);
+    let caps = agent::capabilities(run_agent_config(task).provider);
     let schema = caps.structured_output.then(T::schema);
     let resumed = session.is_some();
     let outcome = execute(ctx, task, prompt, session, schema.clone(), ctx.log_label).await?;
@@ -748,9 +775,58 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
             "the agent exited without finishing (exit code {})",
             exit_code.map_or("unknown".into(), |c| c.to_string())
         ),
+        OutcomeKind::RateLimited { resets_at, message } => {
+            let now = now_secs();
+            let limit = match resets_at.filter(|at| *at > now) {
+                Some(until) => Limit {
+                    until,
+                    estimated: false,
+                },
+                None => Limit {
+                    until: now
+                        + i64::try_from(ctx.inner.timing.unknown_reset_wait.as_secs())
+                            .unwrap_or(1800),
+                    estimated: true,
+                },
+            };
+            ctx.inner.limits.record(ctx.provider, limit);
+            // Another task may have recorded a later reset meanwhile.
+            let limit = ctx.inner.limits.active(ctx.provider, now).unwrap_or(limit);
+            let message = limit_message(ctx.provider, Some(message));
+            let run_id = ctx.run_id.clone();
+            ctx.inner
+                .update(ctx.id, |t| {
+                    if let Some(run) = t.run.as_mut()
+                        && run.id == run_id
+                    {
+                        mark_rate_limited(run, limit, &message);
+                    }
+                    Ok(())
+                })
+                .await?;
+            return Ok(false);
+        }
     };
     fail_run(ctx, &message).await?;
     Ok(false)
+}
+
+/// The run waits for `limit` to reset.
+fn mark_rate_limited(run: &mut Run, limit: Limit, message: &str) {
+    run.state = RunState::RateLimited;
+    run.resets_at = Some(limit.until);
+    run.reset_estimated = limit.estimated;
+    run.error = Some(message.to_string());
+    run.pid = None;
+    run.updated_at = now_ms();
+}
+
+fn limit_message(provider: crate::task::Provider, cli_said: Option<&str>) -> String {
+    let name = crate::agent::provider_label(provider);
+    match cli_said.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(said) => format!("{name} hit its usage limit: {said}"),
+        None => format!("{name} is at its usage limit; waiting for it to reset"),
+    }
 }
 
 async fn fail_run(ctx: &Ctx<'_>, message: &str) -> Result<()> {
@@ -767,6 +843,8 @@ async fn set_run_state(ctx: &Ctx<'_>, state: RunState, error: Option<&str>) -> R
                 run.state = state;
                 run.error = error.map(String::from);
                 run.pid = None;
+                run.resets_at = None;
+                run.reset_estimated = false;
                 run.updated_at = now_ms();
             }
             Ok(())
@@ -794,7 +872,9 @@ async fn execute(
         .task_dir(ctx.id)?
         .join("runs")
         .join(format!("{}-{attempt_no}-{label}.ndjson", ctx.run_id));
-    let mut req = RunRequest::new(task.agent.clone(), &cwd, prompt, log_path.clone());
+    let agent_config = run_agent_config(task).clone();
+    let provider = agent_config.provider;
+    let mut req = RunRequest::new(agent_config, &cwd, prompt, log_path.clone());
     req.resume = session;
     req.access = ctx.access;
     req.json_schema = schema;
@@ -811,6 +891,16 @@ async fn execute(
     if ctx.control.halt_requested().is_some() {
         return Ok(stopped_outcome());
     }
+    // The CLI hit its limit while this run waited for a slot (or before a repair turn).
+    if let Some(limit) = inner.limits.active(provider, now_secs()) {
+        return Ok(Outcome {
+            kind: OutcomeKind::RateLimited {
+                resets_at: Some(limit.until),
+                message: String::new(),
+            },
+            ..stopped_outcome()
+        });
+    }
     // Where a run that may not change anything must leave each worktree.
     let mut heads_before = Vec::new();
     for w in &worktrees {
@@ -825,7 +915,7 @@ async fn execute(
             label: label.to_string(),
             kind: task.run.as_ref().map_or(RunKind::Dev, |r| r.kind),
             subtask_id: task.run.as_ref().and_then(|r| r.subtask_id.clone()),
-            provider: task.agent.provider,
+            provider,
         },
     )
     .await;
@@ -870,7 +960,7 @@ async fn execute(
                 let id = id.clone();
                 update_run(ctx, |r| r.session_id = Some(id)).await?;
             }
-            AgentEvent::Finished { outcome: o } => outcome = Some(o.clone()),
+            AgentEvent::Finished { outcome: o } => outcome = Some((**o).clone()),
             _ => {}
         }
         let seq = events_log.event(&event).await;

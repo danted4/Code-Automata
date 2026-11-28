@@ -54,6 +54,11 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 /// A throwaway repository with one commit, no automatic checks and short timeouts.
+/// The same agent for every phase, as a task's `agents`.
+fn same(agent: Value) -> Value {
+    json!({ "planning": agent, "dev": agent, "qa": agent })
+}
+
 struct Repo {
     _dir: TempDir,
     path: PathBuf,
@@ -106,6 +111,7 @@ impl Harness {
             mock_scenario: None,
             bins,
             allowed_origins: Vec::new(),
+            wake_timing: ca_core::engine::limits::WakeTiming::default(),
         });
         Harness {
             app: ca_server::router(state.clone()),
@@ -206,7 +212,7 @@ impl Harness {
                 "POST",
                 "/api/tasks",
                 project,
-                Some(json!({ "title": title, "agent": agent, "requirePlanApproval": approval })),
+                Some(json!({ "title": title, "agents": same(agent), "requirePlanApproval": approval })),
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -369,6 +375,7 @@ async fn only_the_app_origin_may_call_cross_origin_and_still_needs_the_token() {
         mock_scenario: None,
         bins: Binaries::from_env(),
         allowed_origins: vec![APP.into()],
+        wake_timing: ca_core::engine::limits::WakeTiming::default(),
     });
     let app = ca_server::router(state);
     let send = |req: Request<Body>| {
@@ -879,7 +886,7 @@ async fn bad_requests_are_400_and_refused_moves_409() {
             "POST",
             "/api/tasks",
             p,
-            Some(json!({ "title": "x", "agent": { "provider": "mock" } })),
+            Some(json!({ "title": "x", "agents": same(json!({ "provider": "mock" })) })),
         )
         .await;
     assert_eq!(
@@ -899,7 +906,7 @@ async fn bad_requests_are_400_and_refused_moves_409() {
             "POST",
             "/api/tasks",
             p,
-            Some(json!({ "title": "Idle", "agent": { "provider": "claude" }, "start": false })),
+            Some(json!({ "title": "Idle", "agents": same(json!({ "provider": "claude" })), "start": false })),
         )
         .await;
     let id = created["id"].as_str().unwrap();
@@ -918,7 +925,7 @@ async fn bad_requests_are_400_and_refused_moves_409() {
             "PATCH",
             &format!("/api/tasks/{id}"),
             p,
-            Some(json!({ "agent": { "provider": "mock" } })),
+            Some(json!({ "agents": same(json!({ "provider": "mock" })) })),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1239,6 +1246,48 @@ async fn two_projects_run_at_once_and_skip_works() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_usage_limit_in_one_project_holds_the_cli_in_another() {
+    let h = Harness::new(true);
+    let (a, b) = (Repo::new().await, Repo::new().await);
+    let limit = json!({ "whenPrompt": "(dev-1)", "onceFile": h.once_file("limit"), "steps": [
+        { "text": "working" }, { "rateLimit": { "inSecs": 3600 } }
+    ]});
+    let in_a = h
+        .create(&a.path, "In A", h.agent(1, vec![limit]), false)
+        .await;
+    let limited = h
+        .wait_for(&a.path, &in_a, "A rate-limited", |t| {
+            t["run"]["state"] == "rate_limited"
+        })
+        .await;
+    assert!(limited["run"]["resetsAt"].as_f64().is_some(), "{limited}");
+
+    // The same CLI in another project waits instead of starting.
+    let in_b = h.create(&b.path, "In B", h.agent(1, vec![]), false).await;
+    h.wait_for(&b.path, &in_b, "B rate-limited", |t| {
+        t["run"]["state"] == "rate_limited" && t["run"]["kind"] == "plan"
+    })
+    .await;
+
+    // Resume now: the limit is forgotten and B runs to the end.
+    h.ok("POST", &format!("/api/tasks/{in_b}/resume"), &b.path, None)
+        .await;
+    h.wait_for(&b.path, &in_b, "B in human review", |t| {
+        phase(t) == "human_review" && t["run"].is_null()
+    })
+    .await;
+    // Pausing A stops its wait.
+    let (status, body) = h
+        .call("POST", &format!("/api/tasks/{in_a}/pause"), &a.path, None)
+        .await;
+    assert!(status.is_success(), "{body}");
+    let a_now = h
+        .ok("GET", &format!("/api/tasks/{in_a}"), &a.path, None)
+        .await;
+    assert_eq!(a_now["run"]["state"], "paused", "{a_now}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stopping_the_server_leaves_running_tasks_interrupted() {
     let h = Harness::new(true);
     let repo = Repo::new().await;
@@ -1411,7 +1460,7 @@ async fn sigterm_stops_the_server_and_leaves_runs_interrupted() {
         "POST",
         "/api/tasks",
         &p,
-        Some(json!({ "title": "Term", "agent": agent })),
+        Some(json!({ "title": "Term", "agents": same(agent) })),
     );
     assert_eq!(status, 201, "{task}");
     let id = task["id"].as_str().unwrap().to_string();
@@ -1467,6 +1516,7 @@ async fn mock_tasks_from_the_ui_get_the_default_scenario() {
             mock_scenario: Some(scenario.clone()),
             bins: Binaries::from_env().with_override(Provider::Mock, mock_agent()),
             allowed_origins: Vec::new(),
+            wake_timing: ca_core::engine::limits::WakeTiming::default(),
         });
         Harness {
             app: ca_server::router(state.clone()),
@@ -1480,28 +1530,34 @@ async fn mock_tasks_from_the_ui_get_the_default_scenario() {
             "POST",
             "/api/tasks",
             p,
-            Some(json!({ "title": "Mock", "agent": { "provider": "mock" }, "start": false })),
+            Some(json!({ "title": "Mock", "agents": same(json!({ "provider": "mock" })), "start": false })),
         )
         .await;
-    assert_eq!(created["agent"]["options"]["scenario"], json!(scenario));
+    assert_eq!(
+        created["agents"]["dev"]["options"]["scenario"],
+        json!(scenario)
+    );
 
     let other = h
         .ok(
             "POST",
             "/api/tasks",
             p,
-            Some(json!({ "title": "Claude", "agent": { "provider": "claude" }, "start": false })),
+            Some(json!({ "title": "Claude", "agents": same(json!({ "provider": "claude" })), "start": false })),
         )
         .await;
-    assert!(other["agent"]["options"].is_null(), "{other}");
+    assert!(other["agents"]["dev"]["options"].is_null(), "{other}");
     let id = other["id"].as_str().unwrap();
     let edited = h
         .ok(
             "PATCH",
             &format!("/api/tasks/{id}"),
             p,
-            Some(json!({ "agent": { "provider": "mock" } })),
+            Some(json!({ "agents": same(json!({ "provider": "mock" })) })),
         )
         .await;
-    assert_eq!(edited["agent"]["options"]["scenario"], json!(scenario));
+    assert_eq!(
+        edited["agents"]["qa"]["options"]["scenario"],
+        json!(scenario)
+    );
 }

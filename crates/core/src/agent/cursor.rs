@@ -12,6 +12,7 @@
 
 use serde_json::Value;
 
+use super::limits;
 use super::stream_json::{str_field, summarize};
 use super::{
     Access, AgentEvent, CommandSpec, LineParser, Parsed, ResultInfo, RunRequest, option_bool,
@@ -65,6 +66,8 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
 #[derive(Debug, Default)]
 pub struct CursorParser {
     session_reported: bool,
+    /// The last `{"type":"error"}` line, which Cursor may print instead of a result.
+    last_error: Option<String>,
 }
 
 impl LineParser for CursorParser {
@@ -136,24 +139,51 @@ impl LineParser for CursorParser {
                     }
                 }
             }
-            Some("result") => out.push(Parsed::Result(ResultInfo {
-                subtype: msg.get("subtype").and_then(Value::as_str).map(String::from),
-                is_error: msg
+            Some("error") => self.last_error = Some(line.to_string()),
+            Some("result") => {
+                let is_error = msg
                     .get("is_error")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                text: msg.get("result").and_then(Value::as_str).map(String::from),
-                session_id: msg
-                    .get("session_id")
-                    .and_then(Value::as_str)
-                    .map(String::from),
-                structured: None,
-                turns: None,
-                cost_usd: None,
-            })),
+                    .unwrap_or(false);
+                let text = msg.get("result").and_then(Value::as_str).map(String::from);
+                let rate_limit = text
+                    .as_deref()
+                    .filter(|_| is_error)
+                    .and_then(limits::cursor_text);
+                out.push(Parsed::Result(ResultInfo {
+                    subtype: msg.get("subtype").and_then(Value::as_str).map(String::from),
+                    is_error,
+                    text,
+                    session_id: msg
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    structured: None,
+                    turns: None,
+                    cost_usd: None,
+                    rate_limit,
+                }));
+            }
             _ => {}
         }
         out
+    }
+
+    /// Cursor ends a run that hit its usage limit with an error on stderr (or an error line) and
+    /// no result.
+    fn finish(&mut self, stderr_tail: &[String]) -> Option<ResultInfo> {
+        let text = self
+            .last_error
+            .iter()
+            .chain(stderr_tail)
+            .find(|l| limits::cursor_text(l).is_some())?
+            .clone();
+        Some(ResultInfo {
+            is_error: true,
+            rate_limit: limits::cursor_text(&text),
+            text: Some(text),
+            ..ResultInfo::default()
+        })
     }
 }
 

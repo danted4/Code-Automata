@@ -124,7 +124,7 @@ function EditTaskForm({
         <div className="border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
           <AgentPicker
             state={providersState}
-            value={lockedReason ? draftFromAgent(task.agent) : form.agent}
+            value={lockedReason ? draftFromAgent(task.agents.dev) : form.agent}
             onChange={(agent) => set({ agent })}
             lockedReason={lockedReason}
           />

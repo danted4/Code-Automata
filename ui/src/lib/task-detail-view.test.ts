@@ -23,7 +23,11 @@ function task(over: Partial<Task> = {}): Task {
     createdAt: 0,
     updatedAt: 0,
     phase: 'in_progress',
-    agent: { provider: 'claude' },
+    agents: {
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    },
     requirePlanApproval: false,
     planning: { stage: 'approved', plan: '# Plan' },
     ...over,

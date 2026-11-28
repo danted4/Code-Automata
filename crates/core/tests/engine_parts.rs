@@ -100,6 +100,14 @@ fn structured_output_is_used_and_validated() {
     );
     let err = read_output::<SubtasksOut>(&no_qa).unwrap_err();
     assert!(err.contains("qa"), "{err}");
+
+    // No upper limit: the planner judges how many the work needs.
+    let mut many: Vec<serde_json::Value> = (1..=40)
+        .map(|i| json!({ "id": format!("dev-{i}"), "kind": "dev", "title": "t", "detail": "d" }))
+        .collect();
+    many.push(json!({ "id": "qa-1", "kind": "qa", "title": "t", "detail": "d" }));
+    let s: SubtasksOut = read_output(&outcome("", Some(json!({ "subtasks": many })))).unwrap();
+    assert_eq!(s.subtasks.len(), 41);
 }
 
 #[test]

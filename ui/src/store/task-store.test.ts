@@ -10,7 +10,11 @@ function task(id: string, updatedAt: number, title = id): Task {
     createdAt: 0,
     updatedAt,
     phase: 'planning',
-    agent: { provider: 'claude' },
+    agents: {
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    },
     requirePlanApproval: false,
     planning: { stage: 'not_started' },
   };

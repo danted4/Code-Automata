@@ -142,6 +142,7 @@ async fn run(args: Args) -> Result<(), String> {
         mock_scenario: args.mock_scenario,
         bins,
         allowed_origins: Vec::new(),
+        wake_timing: ca_core::engine::limits::WakeTiming::default(),
     });
 
     println!("listening on http://127.0.0.1:{port}");

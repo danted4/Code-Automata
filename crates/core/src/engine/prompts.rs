@@ -248,6 +248,8 @@ sitting and specific about files, functions and changes.
 - 1 to 4 `qa` subtasks that only verify the result: run the tests and the build, try the \
 behaviour, compare the code with the plan. QA subtasks never change code; if something must be \
 fixed, it belongs in a dev subtask.
+- These counts are a guide, not a limit: use as many subtasks as the work needs, and never split \
+or merge subtasks just to fit the range.
 - For a check that needs a person (UI, visual review), write a `qa` subtask whose detail says \
 \"Manual check:\" and lists what the person should look at.
 - Give each a short title (3 to 6 words), a detailed `detail`, and optionally a present-tense \

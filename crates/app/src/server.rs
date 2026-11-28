@@ -113,6 +113,7 @@ impl Server {
                 mock_scenario,
                 bins: bins.clone(),
                 allowed_origins,
+                wake_timing: ca_core::engine::limits::WakeTiming::default(),
             });
             let _ = ready_out.set(Ok(Ready {
                 state: state.clone(),

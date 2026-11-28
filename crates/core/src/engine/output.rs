@@ -132,8 +132,6 @@ pub struct SubtasksOut {
     pub subtasks: Vec<SubtaskOut>,
 }
 
-pub const MAX_SUBTASKS: usize = 25;
-
 impl AgentOutput for SubtasksOut {
     const KEY: &'static str = "subtasks";
     fn schema() -> Value {
@@ -158,12 +156,7 @@ impl AgentOutput for SubtasksOut {
         r#"{"subtasks":[{"id":"dev-1","kind":"dev","title":"Add endpoint","detail":"Create ... in src/...","progressLabel":"Adding endpoint"},{"id":"qa-1","kind":"qa","title":"Verify endpoint","detail":"Run the tests and check ..."}]}"#
     }
     fn validate(&self) -> Result<(), String> {
-        let n = self.subtasks.len();
-        if n == 0 || n > MAX_SUBTASKS {
-            return Err(format!(
-                "give between 1 and {MAX_SUBTASKS} subtasks (got {n})"
-            ));
-        }
+        // No upper limit: the planner judges how many subtasks the work needs.
         if !self.subtasks.iter().any(|s| s.kind == SubtaskKindOut::Dev) {
             return Err("include at least one dev subtask".into());
         }

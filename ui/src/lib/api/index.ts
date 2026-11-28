@@ -3,7 +3,7 @@
  */
 
 import { request } from './client';
-import type { AgentConfig } from './types/AgentConfig';
+import type { PhaseAgents } from './types/PhaseAgents';
 import type { CliPath } from './types/CliPath';
 import type { Answer } from './types/Answer';
 import type { DeleteReport } from './types/DeleteReport';
@@ -48,13 +48,13 @@ export const api = {
     create: (body: {
       title: string;
       description: string;
-      agent: AgentConfig;
+      agents: PhaseAgents;
       requirePlanApproval: boolean;
       start?: boolean;
     }) => request<Task>('POST', '/api/tasks', { body }),
     patch: (
       id: string,
-      patch: Partial<Pick<Task, 'title' | 'description' | 'agent' | 'requirePlanApproval'>>
+      patch: Partial<Pick<Task, 'title' | 'description' | 'agents' | 'requirePlanApproval'>>
     ) => request<Task>('PATCH', task(id), { body: patch }),
     remove: (id: string) => request<void>('DELETE', task(id)),
     move: (id: string, to: Phase) => request<Task>('POST', task(id, '/move'), { body: { to } }),

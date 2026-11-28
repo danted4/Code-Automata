@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use ca_core::agent::preflight::Preflight;
 use ca_core::engine::settings::Settings;
 use ca_core::task::Answer;
-use ca_core::{AgentConfig, Phase, Provider};
+use ca_core::{Phase, PhaseAgents, Provider};
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -63,7 +63,8 @@ pub struct CreateTaskRequest {
     pub title: String,
     #[serde(default)]
     pub description: String,
-    pub agent: AgentConfig,
+    /// The agent of each phase.
+    pub agents: PhaseAgents,
     #[serde(default)]
     pub require_plan_approval: bool,
     /// Start planning at once (the default).

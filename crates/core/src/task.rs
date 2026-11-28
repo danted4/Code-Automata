@@ -1,10 +1,12 @@
-//! The task file, schema 2 (schema 1 files, from 3.0, are converted on read: see `store`).
+//! The task file, schema 3 (schema 1 files from 3.0 and schema 2 files from 3.1 are converted on
+//! read: see `store`).
 //!
 //! One file per task at `.code-automata/tasks/<id>/task.json`. Every piece of state lives in exactly
 //! one place:
 //!
 //! * `phase` is the Kanban column and nothing else;
-//! * `run` says whether an agent is working, paused, interrupted or failed, and on which subtask;
+//! * `run` says whether an agent is working, paused, interrupted, failed or waiting out a CLI's rate
+//!   limit, and on which subtask;
 //! * a subtask is `pending`, `done` or `skipped` ("running" is `run.subtaskId`);
 //! * `planning.stage` says where planning stands ("generating" is a `plan` run).
 //!
@@ -26,7 +28,7 @@ use crate::error::{CoreError, Result};
 use crate::util::{ROOT_REPO, now_ms, random_base36, validate_repo_name, validate_task_id};
 
 /// Version of the task file format. Files with any other value are refused.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// The Kanban column. Fixed order; see `transitions` for which moves are allowed.
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -101,6 +103,49 @@ impl AgentConfig {
             mode: None,
             options: Map::new(),
         }
+    }
+}
+
+/// The agent of each phase: planning (questions, plan, subtasks), development (dev subtasks and
+/// triage) and QA. Each may be a different CLI.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhaseAgents {
+    pub planning: AgentConfig,
+    pub dev: AgentConfig,
+    pub qa: AgentConfig,
+}
+
+impl PhaseAgents {
+    /// The same agent for every phase.
+    pub fn same(agent: AgentConfig) -> Self {
+        PhaseAgents {
+            planning: agent.clone(),
+            dev: agent.clone(),
+            qa: agent,
+        }
+    }
+
+    /// The agent that runs a run of this kind.
+    pub fn for_kind(&self, kind: RunKind) -> &AgentConfig {
+        match kind {
+            RunKind::Plan | RunKind::SubtaskGen => &self.planning,
+            RunKind::Dev => &self.dev,
+            // Checks run no agent; QA's agent stands for the phase.
+            RunKind::Qa | RunKind::Checks => &self.qa,
+        }
+    }
+
+    /// Every phase's agent, in phase order.
+    pub fn all(&self) -> [&AgentConfig; 3] {
+        [&self.planning, &self.dev, &self.qa]
+    }
+}
+
+impl From<AgentConfig> for PhaseAgents {
+    fn from(agent: AgentConfig) -> Self {
+        PhaseAgents::same(agent)
     }
 }
 
@@ -360,6 +405,9 @@ pub enum RunState {
     Interrupted,
     /// The agent reported an error or timed out.
     Failed,
+    /// The run's CLI hit its subscription's usage limit; resumes on its own at `Run::resets_at`
+    /// (or on the user's "Resume now").
+    RateLimited,
     Done,
 }
 
@@ -393,7 +441,7 @@ impl RunState {
     pub fn is_resumable(self) -> bool {
         matches!(
             self,
-            RunState::Paused | RunState::Interrupted | RunState::Failed
+            RunState::Paused | RunState::Interrupted | RunState::Failed | RunState::RateLimited
         )
     }
 }
@@ -431,6 +479,14 @@ pub struct Run {
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// For a rate-limited run: when the limit resets (seconds since the epoch), and the run
+    /// resumes on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
+    pub resets_at: Option<i64>,
+    /// The CLI did not say when the limit resets, so `resets_at` is a guess (a retry).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset_estimated: bool,
     /// For a dev run: each repository's HEAD when the run started. Commits after it are this
     /// run's (a checkpoint commit a crash left unrecorded, or one the agent made), so a resume or a
     /// dropped run undoes those and never anything older, such as an earlier plan's checkpoints.
@@ -455,6 +511,8 @@ impl Run {
             started_at: now,
             updated_at: now,
             error: None,
+            resets_at: None,
+            reset_estimated: false,
             heads: BTreeMap::new(),
         }
     }
@@ -475,7 +533,7 @@ pub struct Task {
     pub updated_at: i64,
 
     pub phase: Phase,
-    pub agent: AgentConfig,
+    pub agents: PhaseAgents,
     /// Stop for the user's answers and plan approval; otherwise planning runs straight through.
     #[serde(default)]
     pub require_plan_approval: bool,
@@ -502,7 +560,7 @@ pub struct Task {
 
 impl Task {
     /// A new task in planning, with no run and no worktree yet. A blank title becomes the id.
-    pub fn new(title: &str, description: &str, agent: AgentConfig) -> Self {
+    pub fn new(title: &str, description: &str, agents: impl Into<PhaseAgents>) -> Self {
         let now = now_ms();
         let id = format!("task-{now}-{}", random_base36(5));
         let title = if title.trim().is_empty() {
@@ -518,7 +576,7 @@ impl Task {
             created_at: now,
             updated_at: now,
             phase: Phase::Planning,
-            agent,
+            agents: agents.into(),
             require_plan_approval: false,
             planning: Planning::default(),
             subtasks: Vec::new(),
@@ -719,6 +777,14 @@ impl Task {
     /// kind that is still pending (or finished, once the run itself is done).
     fn validate_run(&self, run: &Run) -> Result<()> {
         use CoreError::Invalid;
+        if (run.state == RunState::RateLimited) != run.resets_at.is_some() {
+            return Err(Invalid(
+                "a rate-limited run, and only that, has a reset time".into(),
+            ));
+        }
+        if run.reset_estimated && run.resets_at.is_none() {
+            return Err(Invalid("an estimated reset needs a reset time".into()));
+        }
         if run.kind.phase() != self.phase {
             return Err(Invalid(format!(
                 "a {:?} run cannot belong to a task in {}",

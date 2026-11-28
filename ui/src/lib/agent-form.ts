@@ -4,6 +4,7 @@
  */
 
 import type { AgentConfig } from '@/lib/api/types/AgentConfig';
+import type { PhaseAgents } from '@/lib/api/types/PhaseAgents';
 import type { Preflight } from '@/lib/api/types/Preflight';
 import type { Provider } from '@/lib/api/types/Provider';
 import type { ProviderInfo } from '@/lib/api/types/ProviderInfo';
@@ -44,6 +45,11 @@ export function readiness(p: Preflight): Readiness {
 export function defaultProvider(providers: ProviderInfo[]): Provider | null {
   const ready = providers.find((p) => readiness(p.preflight).ready);
   return (ready ?? providers[0])?.provider ?? null;
+}
+
+/** The same agent for every phase. */
+export function sameForAll(agent: AgentConfig): PhaseAgents {
+  return { planning: agent, dev: agent, qa: agent };
 }
 
 export function draftFromAgent(agent: AgentConfig): AgentDraft {
@@ -87,6 +93,8 @@ export function agentLockedReason(run: Run | null | undefined): string | null {
       return 'The agent cannot change while a step is interrupted. Resume it and let the step finish first.';
     case 'failed':
       return 'The agent cannot change while a failed step is waiting to be retried.';
+    case 'rate_limited':
+      return null; // a task waiting out one CLI's limit may move to another
     case 'done':
       return 'The agent cannot change while a step is still being recorded.';
   }
@@ -103,13 +111,13 @@ export function formFromTask(task: Task): TaskForm {
   return {
     title: task.title,
     description: task.description ?? '',
-    agent: draftFromAgent(task.agent),
+    agent: draftFromAgent(task.agents.dev),
     requirePlanApproval: task.requirePlanApproval,
   };
 }
 
 export type TaskPatch = Partial<
-  Pick<Task, 'title' | 'description' | 'agent' | 'requirePlanApproval'>
+  Pick<Task, 'title' | 'description' | 'agents' | 'requirePlanApproval'>
 >;
 
 /**
@@ -126,10 +134,11 @@ export function taskChanges(task: Task, form: TaskForm): TaskPatch {
   if (form.requirePlanApproval !== task.requirePlanApproval) {
     changes.requirePlanApproval = form.requirePlanApproval;
   }
-  if (!task.run) {
-    const next = agentFromDraft(form.agent, task.agent);
-    const current = agentFromDraft(draftFromAgent(task.agent), task.agent);
-    if (next && current && !sameAgent(next, current)) changes.agent = next;
+  if (agentLockedReason(task.run) === null) {
+    const base = task.agents.dev;
+    const next = agentFromDraft(form.agent, base);
+    const current = agentFromDraft(draftFromAgent(base), base);
+    if (next && current && !sameAgent(next, current)) changes.agents = sameForAll(next);
   }
   return changes;
 }

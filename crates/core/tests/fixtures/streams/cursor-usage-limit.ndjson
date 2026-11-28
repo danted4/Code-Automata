@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "session_id": "697e09e5-0000-4000-8000-0000000c0001", "model": "Auto", "cwd": "/tmp/repo", "permissionMode": "default", "apiKeySource": "login"}
+{"type": "error", "session_id": "697e09e5-0000-4000-8000-0000000c0001", "code": "usage_limit_exceeded", "message": "You've hit your usage limit"}

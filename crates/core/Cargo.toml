@@ -29,6 +29,7 @@ ts = ["dep:ts-rs"]
 
 [dependencies]
 ts-rs = { version = "12", optional = true, features = ["serde-json-impl", "no-serde-warnings"] }
+jiff = "1"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

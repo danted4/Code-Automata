@@ -35,6 +35,9 @@ use crate::error::{CoreError, Result, io_at};
 /// How long to keep reading after the agent exits, on top of the kill grace period.
 const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(2);
 
+/// How many of the last stderr lines are kept for `LineParser::finish`.
+const STDERR_TAIL: usize = 50;
+
 /// Asks a running agent to stop. Cheap to clone; stopping twice is harmless.
 #[derive(Debug, Clone)]
 pub struct Stopper {
@@ -80,7 +83,7 @@ impl RunningAgent {
     pub async fn wait(mut self) -> Outcome {
         while let Some(event) = self.events.recv().await {
             if let AgentEvent::Finished { outcome } = event {
-                return outcome;
+                return *outcome;
             }
         }
         // The supervisor always sends Finished; this is only reachable if it panicked.
@@ -109,7 +112,7 @@ pub(crate) async fn spawn(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(path) = bins.path_var() {
+    if let Some(path) = bins.path_for_binary(&spec.program) {
         cmd.env("PATH", path);
     }
     for key in &spec.env_remove {
@@ -270,6 +273,8 @@ impl Supervisor {
         // Tool calls in flight. The CLIs print nothing while a command runs, so while any call is
         // open the (longer) tool timeout applies instead of the idle timeout.
         let mut open_tools: Vec<String> = Vec::new();
+        // The last stderr lines, for a CLI that reports a failure only there.
+        let mut stderr_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
         loop {
             if self.reaped && !out.open && !err.open {
@@ -325,6 +330,10 @@ impl Supervisor {
                     last_activity = Instant::now();
                     let record = serde_json::json!({ "type": "code_automata_stderr", "line": line });
                     self.log_line(&record.to_string()).await;
+                    if stderr_tail.len() == STDERR_TAIL {
+                        stderr_tail.pop_front();
+                    }
+                    stderr_tail.push_back(line.clone());
                     let _ = self.events.send(AgentEvent::Stderr { line });
                 },
                 status = self.child.wait(), if !self.reaped => {
@@ -371,19 +380,30 @@ impl Supervisor {
             }
         }
 
+        if result.is_none() && ended_by.is_none() {
+            let tail: Vec<String> = stderr_tail.into_iter().collect();
+            result = self.parser.finish(&tail);
+        }
         let kind = match (&result, ended_by) {
             (Some(info), _) if info.succeeded() => OutcomeKind::Completed,
             // A provider that writes an error result when killed (Amp) was still stopped by us.
             (_, Some(EndedBy::Stop)) => OutcomeKind::Stopped,
             (_, Some(EndedBy::Timeout)) => OutcomeKind::TimedOut,
-            (Some(info), None) => OutcomeKind::AgentError {
-                message: info
+            (Some(info), None) => {
+                let message = info
                     .text
                     .clone()
                     .filter(|t| !t.trim().is_empty())
                     .or_else(|| info.subtype.clone())
-                    .unwrap_or_else(|| "the agent reported an error".into()),
-            },
+                    .unwrap_or_else(|| "the agent reported an error".into());
+                match info.rate_limit {
+                    Some(limit) => OutcomeKind::RateLimited {
+                        resets_at: limit.resets_at,
+                        message,
+                    },
+                    None => OutcomeKind::AgentError { message },
+                }
+            }
             (None, None) => OutcomeKind::Crashed { exit_code },
         };
         let result = result.unwrap_or_default();
@@ -401,7 +421,9 @@ impl Supervisor {
         }
         self.log_line(&record.to_string()).await;
         let _ = self.log.flush().await;
-        let _ = self.events.send(AgentEvent::Finished { outcome });
+        let _ = self.events.send(AgentEvent::Finished {
+            outcome: Box::new(outcome),
+        });
     }
 
     fn forward(&mut self, event: AgentEvent, text: &mut String) {

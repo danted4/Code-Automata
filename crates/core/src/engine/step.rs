@@ -416,7 +416,12 @@ mod tests {
         let s = settings();
         let mut t = with_phase(base(), Phase::InProgress);
         t.subtasks = vec![sub("dev-1", SubtaskKind::Dev, SubtaskStatus::Pending, None)];
-        for state in [RunState::Paused, RunState::Interrupted, RunState::Failed] {
+        for state in [
+            RunState::Paused,
+            RunState::Interrupted,
+            RunState::Failed,
+            RunState::RateLimited,
+        ] {
             t.run = Some(Run::new(RunKind::Dev, state, Some("dev-1".into())));
             assert_eq!(next_step(&t, &s), Step::Halted, "{state:?}");
         }

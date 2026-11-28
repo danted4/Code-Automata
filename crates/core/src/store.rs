@@ -212,9 +212,14 @@ async fn read_task(path: &Path, expected_id: &str) -> Result<Option<Task>> {
     let mut value: Value = serde_json::from_slice(&bytes).map_err(corrupt)?;
     match value.get("schema") {
         Some(Value::Number(n)) if n.as_u64() == Some(u64::from(SCHEMA)) => {}
-        // 3.0's format: one repository. Converted in memory; the file is rewritten as schema 2 on
-        // the task's next update (reads never write).
-        Some(Value::Number(n)) if n.as_u64() == Some(1) => upgrade_v1(&mut value),
+        // Older formats are converted in memory, oldest first; the file is rewritten in the
+        // current format on the task's next update (reads never write). 3.0's (1): one
+        // repository. 3.1's (2): one agent for every phase.
+        Some(Value::Number(n)) if n.as_u64() == Some(1) => {
+            upgrade_v1(&mut value);
+            upgrade_v2(&mut value);
+        }
+        Some(Value::Number(n)) if n.as_u64() == Some(2) => upgrade_v2(&mut value),
         other => {
             return Err(CoreError::UnsupportedSchema {
                 path: path.to_path_buf(),
@@ -241,7 +246,7 @@ fn upgrade_v1(task: &mut Value) {
         return;
     };
     let keyed = |v: Value| Value::Object(Map::from_iter([(ROOT_REPO.to_string(), v)]));
-    obj.insert("schema".into(), Value::from(SCHEMA));
+    obj.insert("schema".into(), Value::from(2));
     for (from, to) in [
         ("baseCommit", "baseCommits"),
         ("pullRequest", "pullRequests"),
@@ -270,6 +275,21 @@ fn upgrade_v1(task: &mut Value) {
                 review.insert("checks".into(), keyed(v));
             }
         }
+    }
+}
+
+/// Turn a schema-2 task (3.1: one agent) into schema 3, where each phase names its agent: the
+/// task's one agent becomes every phase's.
+fn upgrade_v2(task: &mut Value) {
+    let Some(obj) = task.as_object_mut() else {
+        return;
+    };
+    obj.insert("schema".into(), Value::from(SCHEMA));
+    if let Some(agent) = obj.remove("agent") {
+        let agents = Map::from_iter(
+            ["planning", "dev", "qa"].map(|phase| (phase.to_string(), agent.clone())),
+        );
+        obj.insert("agents".into(), Value::Object(agents));
     }
 }
 

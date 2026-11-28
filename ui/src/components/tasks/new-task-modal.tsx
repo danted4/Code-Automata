@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
-import { EMPTY_AGENT_DRAFT, agentFromDraft, defaultProvider } from '@/lib/agent-form';
+import { EMPTY_AGENT_DRAFT, agentFromDraft, defaultProvider, sameForAll } from '@/lib/agent-form';
 import { useTaskStore } from '@/store/task-store';
 import { AgentPicker, useProviders } from './agent-picker';
 
@@ -86,7 +86,7 @@ function NewTaskForm({
       const task = await api.tasks.create({
         title: title.trim(),
         description: description.trim(),
-        agent,
+        agents: sameForAll(agent),
         requirePlanApproval,
       });
       useTaskStore.getState().upsert(task);

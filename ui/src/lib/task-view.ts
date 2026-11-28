@@ -26,6 +26,11 @@ export type TaskStatus =
   /** The app quit or crashed mid-step. */
   | { kind: 'interrupted' }
   | { kind: 'failed'; error: string }
+  /**
+   * The CLI hit its usage limit; the task resumes on its own at `resumesAt` (ms). `estimated`: the
+   * CLI gave no reset time, so that is a retry.
+   */
+  | { kind: 'rate_limited'; resumesAt: number; estimated: boolean; error: string }
   | { kind: 'needs_answers' }
   | { kind: 'needs_plan_review' }
   /** Nothing running and nothing waiting on the user: Start continues it. */
@@ -38,6 +43,7 @@ export type PrimaryAction =
   | 'pause'
   | 'resume'
   | 'retry'
+  | 'resume_now'
   | 'answer'
   | 'review_plan'
   | 'start'
@@ -82,6 +88,13 @@ export function taskStatus(task: Task): TaskStatus {
         return { kind: 'interrupted' };
       case 'failed':
         return { kind: 'failed', error: run.error || 'The step failed.' };
+      case 'rate_limited':
+        return {
+          kind: 'rate_limited',
+          resumesAt: (run.resetsAt ?? 0) * 1000,
+          estimated: run.resetEstimated ?? false,
+          error: run.error || 'The agent hit its usage limit.',
+        };
       case 'done':
         break; // a finished run record is not left behind; treat as no run
     }
@@ -106,6 +119,8 @@ export function primaryAction(status: TaskStatus): PrimaryAction {
       return 'resume';
     case 'failed':
       return 'retry';
+    case 'rate_limited':
+      return 'resume_now';
     case 'needs_answers':
       return 'answer';
     case 'needs_plan_review':
@@ -123,6 +138,7 @@ export const ACTION_LABELS: Record<Exclude<PrimaryAction, null>, string> = {
   pause: 'Pause',
   resume: 'Resume',
   retry: 'Retry',
+  resume_now: 'Resume now',
   answer: 'Answer questions',
   review_plan: 'Review plan',
   start: 'Start',
@@ -163,6 +179,18 @@ export const PROVIDER_LABELS: Record<string, string> = {
   mock: 'Mock',
 };
 
+/**
+ * "Resumes at 15:42" (or "Retrying at …" when the CLI gave no reset time); the day is named when
+ * it is not today.
+ */
+export function rateLimitText(resumesAt: number, estimated: boolean, now = Date.now()): string {
+  const at = new Date(resumesAt);
+  const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const today = new Date(now).toDateString() === at.toDateString();
+  const when = today ? time : `${at.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+  return `${estimated ? 'Retrying' : 'Resumes'} at ${when}`;
+}
+
 /** The status badge's text and color, the same on the card and in the detail view. */
 export function statusBadge(status: TaskStatus): { label: string; bg: string } {
   switch (status.kind) {
@@ -174,6 +202,8 @@ export function statusBadge(status: TaskStatus): { label: string; bg: string } {
       return { label: 'Interrupted', bg: 'var(--color-warning)' };
     case 'failed':
       return { label: 'Failed', bg: 'var(--color-status-blocked)' };
+    case 'rate_limited':
+      return { label: 'Rate-limited', bg: 'var(--color-warning)' };
     case 'needs_answers':
       return { label: 'Questions', bg: 'var(--color-info)' };
     case 'needs_plan_review':

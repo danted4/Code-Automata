@@ -20,6 +20,7 @@ import {
   primaryAction,
   progress,
   PROVIDER_LABELS,
+  rateLimitText,
   repoChips,
   reworkLabel,
   statusBadge,
@@ -99,6 +100,7 @@ export function TaskCard({ task }: { task: Task }) {
       pause: api.tasks.pause,
       resume: api.tasks.resume,
       retry: api.tasks.resume,
+      resume_now: api.tasks.resume,
       start: api.tasks.start,
     }[action];
     await act(() => command(task.id));
@@ -166,7 +168,7 @@ export function TaskCard({ task }: { task: Task }) {
             style={{ color: 'var(--color-text-muted)' }}
           >
             <span data-testid="task-agent">
-              {PROVIDER_LABELS[task.agent.provider] ?? task.agent.provider}
+              {PROVIDER_LABELS[task.agents.dev.provider] ?? task.agents.dev.provider}
             </span>
             {hasWorktrees(task) && (
               <span className="flex items-center gap-1 min-w-0">
@@ -211,6 +213,16 @@ export function TaskCard({ task }: { task: Task }) {
               style={{ color: 'var(--color-error)' }}
             >
               {status.error}
+            </p>
+          )}
+          {status.kind === 'rate_limited' && (
+            <p
+              data-testid="task-rate-limited"
+              className="text-xs"
+              style={{ color: 'var(--color-warning)' }}
+              title={status.error}
+            >
+              {rateLimitText(status.resumesAt, status.estimated)}
             </p>
           )}
           {status.kind === 'interrupted' && (

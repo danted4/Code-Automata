@@ -120,7 +120,7 @@ fn replan(task: &mut Task) {
 
 /// Fields a UI edit may change. Everything else (phase, run, subtasks, planning, review, git)
 /// changes only through the engine or [`check_move`].
-pub const EDITABLE_FIELDS: &[&str] = &["title", "description", "agent", "requirePlanApproval"];
+pub const EDITABLE_FIELDS: &[&str] = &["title", "description", "agents", "requirePlanApproval"];
 
 /// Apply a camelCase JSON patch to `task`, rejecting any key outside [`EDITABLE_FIELDS`] and any value
 /// of the wrong type. On error `task` is unchanged.

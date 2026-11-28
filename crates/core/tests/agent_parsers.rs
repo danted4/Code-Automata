@@ -171,3 +171,77 @@ fn amp_runs_complete() {
         assert!(texts(&p.events).contains("DONE"), "{name}");
     }
 }
+
+#[test]
+fn claude_usage_limit_takes_the_structured_reset_time() {
+    let p = parse("claude-rate-limited", StreamJson::default());
+    let r = p.result.unwrap();
+    assert!(!r.succeeded());
+    assert_eq!(
+        r.rate_limit,
+        Some(ca_core::agent::limits::RateLimit {
+            resets_at: Some(1_764_359_100)
+        })
+    );
+    // Only the result and the rate_limit_event count, never what the agent said.
+    assert!(texts(&p.events).contains("rate limiter"));
+}
+
+#[test]
+fn claude_usage_limit_falls_back_to_the_text() {
+    let r = parse("claude-rate-limited-text", StreamJson::default())
+        .result
+        .unwrap();
+    assert_eq!(r.rate_limit.and_then(|l| l.resets_at), Some(1_764_359_100));
+}
+
+#[test]
+fn an_ordinary_claude_error_is_not_a_limit() {
+    let mut parser = StreamJson::default();
+    let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached the maximum number of turns","session_id":"s"}"#;
+    let Some(Parsed::Result(r)) = parser.parse(line).into_iter().last() else {
+        panic!("no result");
+    };
+    assert_eq!(r.rate_limit, None);
+    // An agent's success that mentions limits is a success.
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"Fixed: you've hit your usage limit message now shows the reset","session_id":"s"}"#;
+    let Some(Parsed::Result(r)) = parser.parse(line).into_iter().last() else {
+        panic!("no result");
+    };
+    assert!(r.succeeded());
+    assert_eq!(r.rate_limit, None);
+}
+
+#[test]
+fn amp_errors_carry_their_text() {
+    let r = parse("amp-error", StreamJson::amp()).result.unwrap();
+    assert_eq!(
+        r.text.as_deref(),
+        Some("Rate limit exceeded for this model; try again later")
+    );
+    assert_eq!(
+        r.rate_limit,
+        Some(ca_core::agent::limits::RateLimit { resets_at: None })
+    );
+}
+
+#[test]
+fn cursor_reports_a_usage_limit_only_when_the_stream_ends() {
+    let mut parser = CursorParser::default();
+    let p = parse("cursor-usage-limit", CursorParser::default());
+    assert!(p.result.is_none());
+    let path = format!(
+        "{}/tests/fixtures/streams/cursor-usage-limit.ndjson",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    for line in std::fs::read_to_string(path).unwrap().lines() {
+        parser.parse(line);
+    }
+    let r = parser.finish(&[]).unwrap();
+    assert!(r.rate_limit.is_some());
+    // Or on stderr alone.
+    let mut quiet = CursorParser::default();
+    let tail = ["Error: You've hit your usage limit for Auto".to_string()];
+    assert!(quiet.finish(&tail).unwrap().rate_limit.is_some());
+    assert!(CursorParser::default().finish(&["boom".into()]).is_none());
+}

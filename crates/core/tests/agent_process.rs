@@ -80,7 +80,7 @@ fn outcome(events: &[AgentEvent]) -> &ca_core::agent::Outcome {
     let finished: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
-            AgentEvent::Finished { outcome } => Some(outcome),
+            AgentEvent::Finished { outcome } => Some(&**outcome),
             _ => None,
         })
         .collect();

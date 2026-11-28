@@ -38,7 +38,11 @@ function task(over: Partial<Task> = {}): Task {
     createdAt: 0,
     updatedAt: 0,
     phase: 'planning',
-    agent: { provider: 'claude' },
+    agents: {
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    },
     requirePlanApproval: false,
     planning: { stage: 'not_started' },
     ...over,
@@ -118,7 +122,8 @@ describe('agentFromDraft', () => {
 
 describe('taskChanges', () => {
   it('is empty for an untouched form', () => {
-    const t = task({ agent: { provider: 'amp', mode: 'low', options: { a: 1 } } });
+    const amp = { provider: 'amp' as const, mode: 'low', options: { a: 1 } };
+    const t = task({ agents: { planning: amp, dev: amp, qa: amp } });
     expect(taskChanges(t, formFromTask(t))).toEqual({});
   });
 
@@ -132,7 +137,13 @@ describe('taskChanges', () => {
     });
     expect(
       taskChanges(t, { ...form, agent: { provider: 'claude', model: 'opus', mode: '' } })
-    ).toEqual({ agent: { provider: 'claude', model: 'opus' } });
+    ).toEqual({
+      agents: {
+        planning: { provider: 'claude', model: 'opus' },
+        dev: { provider: 'claude', model: 'opus' },
+        qa: { provider: 'claude', model: 'opus' },
+      },
+    });
   });
 
   it('leaves the agent out while a run holds it', () => {
@@ -149,5 +160,21 @@ describe('agentLockedReason', () => {
     expect(agentLockedReason(null)).toBeNull();
     expect(agentLockedReason(run)).toMatch(/cannot change/);
     expect(agentLockedReason({ ...run, state: 'failed' })).toMatch(/cannot change/);
+  });
+});
+
+describe('agentLockedReason', () => {
+  it('lets a rate-limited task move to another CLI', () => {
+    const limited = {
+      id: 'r',
+      kind: 'dev',
+      state: 'rate_limited',
+      attempt: 1,
+      startedAt: 0,
+      updatedAt: 0,
+      resetsAt: 1,
+    } as const;
+    expect(agentLockedReason(limited)).toBeNull();
+    expect(agentLockedReason({ ...limited, state: 'paused' })).not.toBeNull();
   });
 });

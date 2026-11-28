@@ -20,7 +20,11 @@
 //!    old npm copy earlier on `PATH`. Only names the installer itself writes there, so an
 //!    unrelated program cannot be taken for an agent;
 //! 3. on the `PATH`;
-//! 4. in folders of older installs (`legacy_locations`), after `PATH` so a current copy on `PATH`
+//! 4. in the folders of node versions other than the active one (nvm, fnm), newest first: an npm
+//!    install under another version is not on the login shell's `PATH`. Such a CLI is run with
+//!    its version's folder first on its `PATH`, so `#!/usr/bin/env node` finds the node it was
+//!    installed with ([`Binaries::path_for_binary`]);
+//! 5. in folders of older installs (`legacy_locations`), after `PATH` so a current copy on `PATH`
 //!    wins over one left behind: the older Claude Code local install was reached through a shell
 //!    alias, which no `PATH` search sees.
 
@@ -106,6 +110,8 @@ pub enum BinarySource {
     InstallFolder,
     /// The `PATH`.
     Path,
+    /// The folder of a node version that is not the active one (nvm, fnm).
+    NodeVersion,
 }
 
 /// The CLI file the user chose for each provider, shared by every clone of the `Binaries` that
@@ -214,6 +220,10 @@ pub struct Binaries {
     search_path: Option<OsString>,
     /// The home folder whose install folders are searched; none in tests unless set.
     home: Option<PathBuf>,
+    /// Where node version managers keep their versions when not in their default folder under
+    /// `home` (`NVM_DIR`, `NVM_HOME`): read from the real environment only by
+    /// [`Binaries::from_login_shell`], so tests never see the machine's own.
+    node_roots: Vec<PathBuf>,
     chosen: ChosenPaths,
     overrides: HashMap<Provider, PathBuf>,
     tools: HashMap<String, PathBuf>,
@@ -336,6 +346,7 @@ impl Binaries {
         if cfg!(windows) {
             return Binaries {
                 home: home_dir(),
+                node_roots: node_roots_from_env(),
                 ..Self::from_env()
             };
         }
@@ -362,6 +373,7 @@ impl Binaries {
         Binaries {
             search_path: path.or_else(|| std::env::var_os("PATH")),
             home: home_dir(),
+            node_roots: node_roots_from_env(),
             ..Binaries::default()
         }
     }
@@ -396,6 +408,25 @@ impl Binaries {
     /// The `PATH` to give agent processes.
     pub fn path_var(&self) -> Option<&OsStr> {
         self.search_path.as_deref()
+    }
+
+    /// The `PATH` to run `binary` with: [`Binaries::path_var`], with the binary's own folder first
+    /// when that folder holds a `node` and is not already on it (an npm CLI under a node version
+    /// that is not the active one, whose script needs that version's node).
+    pub fn path_for_binary(&self, binary: &Path) -> Option<OsString> {
+        let base = self.search_path.clone();
+        let Some(dir) = binary.parent().filter(|d| has_node(d)) else {
+            return base;
+        };
+        let mut entries: Vec<PathBuf> = base
+            .as_deref()
+            .map(|p| std::env::split_paths(p).collect())
+            .unwrap_or_default();
+        if entries.iter().any(|e| e == dir) {
+            return base;
+        }
+        entries.insert(0, dir.to_path_buf());
+        std::env::join_paths(entries).ok().or(base)
     }
 
     pub fn locate(&self, provider: Provider) -> Result<PathBuf> {
@@ -439,6 +470,16 @@ impl Binaries {
         if let Some(path) = self.search(name) {
             return Ok((path, BinarySource::Path));
         }
+        if let Some(home) = &self.home {
+            let names = executable_names(name, std::env::var_os("PATHEXT").as_deref());
+            if let Some(path) = node_version_dirs(home, &self.node_roots)
+                .iter()
+                .flat_map(|dir| names.iter().map(|n| dir.join(n)).collect::<Vec<_>>())
+                .find(|candidate| is_executable(candidate))
+            {
+                return Ok((path, BinarySource::NodeVersion));
+            }
+        }
         self.home
             .as_deref()
             .and_then(|home| {
@@ -465,6 +506,73 @@ impl Binaries {
             .flat_map(|dir| names.iter().map(|n| dir.join(n)).collect::<Vec<_>>())
             .find(|candidate| is_executable(candidate))
     }
+}
+
+/// Whether `dir` holds a node executable.
+fn has_node(dir: &Path) -> bool {
+    ["node", "node.exe"]
+        .iter()
+        .any(|n| is_executable(&dir.join(n)))
+}
+
+/// `NVM_DIR` and, on Windows, `NVM_HOME`, when set.
+fn node_roots_from_env() -> Vec<PathBuf> {
+    ["NVM_DIR", "NVM_HOME"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .collect()
+}
+
+/// The folders npm puts global CLIs in, one per installed node version, newest version first:
+/// nvm's (`~/.nvm`, or `NVM_DIR` among `roots`), fnm's, and on Windows nvm-windows'
+/// (`%APPDATA%\nvm`, or `NVM_HOME` among `roots`).
+pub fn node_version_dirs(home: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found: Vec<(Vec<u64>, PathBuf)> = Vec::new();
+    let mut scan = |root: PathBuf, bin: &dyn Fn(&Path) -> PathBuf| {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(version) = parse_version(&name) {
+                found.push((version, bin(&entry.path())));
+            }
+        }
+    };
+    let mut nvm_dirs = vec![home.join(".nvm")];
+    nvm_dirs.extend(roots.iter().cloned());
+    nvm_dirs.dedup();
+    for nvm in &nvm_dirs {
+        scan(nvm.join("versions").join("node"), &|v| v.join("bin"));
+    }
+    for fnm in [
+        home.join(".local/share/fnm/node-versions"),
+        home.join("Library/Application Support/fnm/node-versions"),
+        home.join(".fnm/node-versions"),
+    ] {
+        scan(fnm, &|v| v.join("installation").join("bin"));
+    }
+    if cfg!(windows) {
+        scan(home.join("AppData").join("Roaming").join("nvm"), &|v| {
+            v.to_path_buf()
+        });
+        for root in roots {
+            scan(root.clone(), &|v| v.to_path_buf());
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut dirs: Vec<PathBuf> = found.into_iter().map(|(_, dir)| dir).collect();
+    dirs.dedup();
+    dirs
+}
+
+/// "v22.11.0" or "22.11.0" as numbers, for ordering versions (v9 before v22).
+fn parse_version(name: &str) -> Option<Vec<u64>> {
+    let digits = name.strip_prefix('v').unwrap_or(name);
+    let parts: Option<Vec<u64>> = digits.split('.').map(|p| p.parse().ok()).collect();
+    parts.filter(|p| !p.is_empty())
 }
 
 /// The file names `name` may have on disk. On Windows, `name` as written if it already has an

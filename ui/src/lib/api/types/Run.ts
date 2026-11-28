@@ -32,6 +32,15 @@ processStarted?: string | null,
  */
 bootId?: string | null, startedAt: number, updatedAt: number, error?: string | null, 
 /**
+ * For a rate-limited run: when the limit resets (seconds since the epoch), and the run
+ * resumes on its own.
+ */
+resetsAt?: number | null, 
+/**
+ * The CLI did not say when the limit resets, so `resets_at` is a guess (a retry).
+ */
+resetEstimated?: boolean, 
+/**
  * For a dev run: each repository's HEAD when the run started. Commits after it are this
  * run's (a checkpoint commit a crash left unrecorded, or one the agent made), so a resume or a
  * dropped run undoes those and never anything older, such as an earlier plan's checkpoints.

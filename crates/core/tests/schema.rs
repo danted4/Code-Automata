@@ -14,9 +14,18 @@ async fn example_file_loads_with_every_field() {
 
     assert_eq!(task.schema, SCHEMA);
     assert_eq!(task.phase, Phase::InProgress);
-    assert_eq!(task.agent.provider, Provider::Claude);
-    assert_eq!(task.agent.model.as_deref(), Some("sonnet"));
-    assert_eq!(task.agent.options["maxTurns"], 40);
+    assert_eq!(task.agents.planning.provider, Provider::Claude);
+    assert_eq!(
+        task.agents.planning.model.as_deref(),
+        Some("claude-fable-5-2")
+    );
+    assert_eq!(task.agents.dev.model.as_deref(), Some("sonnet"));
+    assert_eq!(task.agents.dev.options["maxTurns"], 40);
+    assert_eq!(task.agents.qa.provider, Provider::Cursor);
+    assert_eq!(
+        task.agents.for_kind(RunKind::SubtaskGen).provider,
+        Provider::Claude
+    );
     assert!(task.require_plan_approval);
     assert_eq!(task.planning.stage, PlanningStage::Approved);
     assert_eq!(
@@ -74,7 +83,8 @@ async fn unknown_keys_are_refused_at_every_level() {
     let base = fixture_json("task-example.json");
     let cases = [
         ("/extra", json!(1)),
-        ("/agent/temperature", json!(0.2)),
+        ("/agents/review", json!({ "provider": "claude" })),
+        ("/agents/dev/temperature", json!(0.2)),
         ("/planning/notes", json!("x")),
         ("/subtasks/0/owner", json!("me")),
         ("/review/score", json!(3)),
@@ -99,7 +109,7 @@ async fn unknown_keys_are_refused_at_every_level() {
 #[tokio::test]
 async fn other_schema_versions_are_refused() {
     let (_repo, project, store, id) = store_with_example().await;
-    for schema in [json!(0), json!(3), json!("2"), json!(null)] {
+    for schema in [json!(0), json!(4), json!("3"), json!(null)] {
         let mut bad = fixture_json("task-example.json");
         bad["schema"] = schema.clone();
         write_task_json(&project, &id, &bad);
@@ -134,14 +144,18 @@ fn a_new_task_is_minimal_on_disk() {
             "createdAt",
             "updatedAt",
             "phase",
-            "agent",
+            "agents",
             "requirePlanApproval",
             "planning"
         ]
     );
     assert_eq!(json["title"], "Title");
     assert_eq!(json["planning"], json!({ "stage": "not_started" }));
-    assert_eq!(json["agent"], json!({ "provider": "cursor" }));
+    let cursor = json!({ "provider": "cursor" });
+    assert_eq!(
+        json["agents"],
+        json!({ "planning": cursor, "dev": cursor, "qa": cursor })
+    );
     assert!(task.id.starts_with("task-"));
 
     let blank = ca_core::Task::new(" ", "", ca_core::AgentConfig::new(Provider::Mock));
@@ -333,7 +347,7 @@ async fn a_paused_schema_1_task_without_a_pr_converts_too() {
 }
 
 #[tokio::test]
-async fn a_schema_1_file_is_rewritten_as_schema_2_only_on_update() {
+async fn a_schema_1_file_is_rewritten_in_the_current_schema_only_on_update() {
     let (_repo, project, store, id) = store_with_v1(|_| {}).await;
     let path = common::task_file(&project, &id);
     let before = std::fs::read(&path).unwrap();
@@ -343,7 +357,9 @@ async fn a_schema_1_file_is_rewritten_as_schema_2_only_on_update() {
 
     store.update(&id, |_| Ok(())).await.unwrap();
     let after = read_task_json(&project, &id);
-    assert_eq!(after["schema"], 2);
+    assert_eq!(after["schema"], SCHEMA);
+    assert!(after.get("agent").is_none());
+    assert_eq!(after["agents"]["planning"], after["agents"]["qa"]);
     assert_eq!(
         after["baseCommits"]["."],
         "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c"
@@ -355,4 +371,58 @@ async fn a_schema_1_file_is_rewritten_as_schema_2_only_on_update() {
         after["subtasks"][0]["checkpoints"]["."],
         "3f1c2a9e0b7d4c5f8a6e2d1b0c9f8e7d6a5b4c3d"
     );
+}
+
+#[tokio::test]
+async fn a_schema_2_file_gets_its_one_agent_in_every_phase() {
+    let repo = common::TempRepo::new();
+    let project = repo.project().await;
+    let json = fixture_json("task-example-v2.json");
+    let id = json["id"].as_str().unwrap().to_string();
+    write_task_json(&project, &id, &json);
+    let store = ca_core::TaskStore::new(&project);
+    let path = common::task_file(&project, &id);
+    let before = std::fs::read(&path).unwrap();
+
+    let task = store.load(&id).await.unwrap().unwrap();
+    assert_eq!(task.schema, SCHEMA);
+    for agent in task.agents.all() {
+        assert_eq!(agent.provider, Provider::Claude);
+        assert_eq!(agent.model.as_deref(), Some("sonnet"));
+        assert_eq!(agent.options["maxTurns"], 40);
+    }
+    assert_eq!(task.repos().collect::<Vec<_>>(), ["api", "web"]);
+    assert_eq!(std::fs::read(&path).unwrap(), before, "reads never write");
+
+    store.update(&id, |_| Ok(())).await.unwrap();
+    let after = read_task_json(&project, &id);
+    assert_eq!(after["schema"], SCHEMA);
+    assert!(after.get("agent").is_none());
+    assert_eq!(after["agents"]["dev"]["model"], "sonnet");
+}
+
+#[tokio::test]
+async fn only_a_rate_limited_run_has_a_reset_time() {
+    assert_refused(
+        |t| t.run.as_mut().unwrap().resets_at = Some(1_764_000_000),
+        "an interrupted run with a reset time",
+    )
+    .await;
+    assert_refused(
+        |t| t.run.as_mut().unwrap().state = RunState::RateLimited,
+        "a rate-limited run without a reset time",
+    )
+    .await;
+    let (_repo, _project, store, id) = store_with_example().await;
+    let task = store
+        .update(&id, |t| {
+            let run = t.run.as_mut().unwrap();
+            run.state = RunState::RateLimited;
+            run.resets_at = Some(1_764_000_000);
+            run.reset_estimated = true;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(task.run.unwrap().state.is_resumable());
 }

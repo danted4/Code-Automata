@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "session_id": "T-01a20cc8-0000-7000-8000-00000000e001", "cwd": "/tmp/repo", "tools": ["shell_command"]}
+{"type": "result", "subtype": "error_during_execution", "is_error": true, "error": "Rate limit exceeded for this model; try again later", "num_turns": 1, "session_id": "T-01a20cc8-0000-7000-8000-00000000e001", "duration_ms": 2100}

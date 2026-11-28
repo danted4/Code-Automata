@@ -11,6 +11,7 @@ pub mod amp;
 pub mod claude;
 pub mod cursor;
 pub mod env;
+pub mod limits;
 pub mod mock;
 pub mod preflight;
 pub mod process;
@@ -134,7 +135,8 @@ pub enum AgentEvent {
     },
     /// Always the last event of a run, sent exactly once.
     Finished {
-        outcome: Outcome,
+        // Boxed: the outcome is much larger than every other event.
+        outcome: Box<Outcome>,
     },
 }
 
@@ -156,6 +158,13 @@ pub enum OutcomeKind {
     TimedOut,
     /// Exited without a final `result` event.
     Crashed { exit_code: Option<i32> },
+    /// The CLI's subscription hit its usage limit. `resets_at` (seconds since the epoch) is when
+    /// the CLI said it resets, if it did.
+    RateLimited {
+        #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
+        resets_at: Option<i64>,
+        message: String,
+    },
 }
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -225,6 +234,16 @@ pub fn capabilities(provider: Provider) -> Capabilities {
     }
 }
 
+/// The CLI's name as the user knows it.
+pub fn provider_label(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "Claude Code",
+        Provider::Cursor => "Cursor",
+        Provider::Amp => "Amp",
+        Provider::Mock => "Mock",
+    }
+}
+
 /// The order providers are offered in the app. Mock is left out; it exists for tests and dev
 /// builds only.
 pub const APP_PROVIDERS: [Provider; 3] = [Provider::Claude, Provider::Cursor, Provider::Amp];
@@ -254,6 +273,8 @@ pub struct ResultInfo {
     pub structured: Option<Value>,
     pub turns: Option<u32>,
     pub cost_usd: Option<f64>,
+    /// The run ended because the CLI's usage limit was reached (see `limits`).
+    pub rate_limit: Option<limits::RateLimit>,
 }
 
 impl ResultInfo {
@@ -274,6 +295,13 @@ pub enum Parsed {
 /// Turns a provider's stdout lines into events.
 pub trait LineParser: Send + std::fmt::Debug {
     fn parse(&mut self, line: &str) -> Vec<Parsed>;
+
+    /// Called once the output ended without a result: a CLI that reports some failures only on
+    /// stderr or in a non-final error line (a usage limit) can still give one. `stderr_tail` is
+    /// the run's last stderr lines.
+    fn finish(&mut self, _stderr_tail: &[String]) -> Option<ResultInfo> {
+        None
+    }
 }
 
 /// Build the command for `req` and its parser.
@@ -292,7 +320,7 @@ pub fn command_for(
         )),
         Provider::Amp => Ok((
             amp::command(req, bins)?,
-            Box::new(stream_json::StreamJson::default()),
+            Box::new(stream_json::StreamJson::amp()),
         )),
         Provider::Mock => Ok((
             mock::command(req, bins)?,

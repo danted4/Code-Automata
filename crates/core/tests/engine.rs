@@ -11,8 +11,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ca_core::agent::Binaries;
-use ca_core::engine::Engine;
+use std::sync::Arc;
+
+use ca_core::engine::limits::{RateLimits, WakeTiming};
 use ca_core::engine::settings::{CheckCommand, Settings};
+use ca_core::engine::{Engine, EngineOptions};
 use ca_core::task::{Answer, Task};
 use ca_core::util::ROOT_REPO;
 use ca_core::{
@@ -66,6 +69,22 @@ impl Env {
 
     async fn engine(&self) -> Engine {
         Engine::open(self.project.clone(), self.bins())
+            .await
+            .unwrap()
+    }
+
+    /// An engine sharing `limits`, waking rate-limited runs within milliseconds of their reset
+    /// (and retrying an unknown reset after a second).
+    async fn engine_with(&self, limits: &Arc<RateLimits>) -> Engine {
+        let options = EngineOptions {
+            limits: limits.clone(),
+            timing: WakeTiming {
+                grace: Duration::from_millis(200),
+                unknown_reset_wait: Duration::from_secs(1),
+                tick: Duration::from_millis(50),
+            },
+        };
+        Engine::open_with(self.project.clone(), self.bins(), options)
             .await
             .unwrap()
     }
@@ -1258,7 +1277,11 @@ async fn a_failed_session_resume_starts_fresh_next_time_and_the_agent_cannot_cha
     engine.pause(&task.id).await.unwrap();
 
     let mut patch = serde_json::Map::new();
-    patch.insert("agent".into(), json!({ "provider": "cursor" }));
+    let cursor = json!({ "provider": "cursor" });
+    patch.insert(
+        "agents".into(),
+        json!({ "planning": cursor, "dev": cursor, "qa": cursor }),
+    );
     assert!(
         engine.patch_task(&task.id, &patch).await.is_err(),
         "switching agent under a halted step must be refused"
@@ -1784,4 +1807,240 @@ async fn skipping_a_halted_subtask_after_a_replan_drops_only_its_own_work() {
         "the dropped run's work is gone"
     );
     assert!(wt.join("dev-1.txt").exists(), "plan A's work is not");
+}
+
+// Rate limits ---------------------------------------------------------------------------------
+
+/// The first time `prompt` plays, the agent says a little, then hits its usage limit, resetting in
+/// `secs` seconds (no reset time when `None`).
+fn limit_once(env: &Env, prompt: &str, secs: Option<i64>) -> Value {
+    let limit = match secs {
+        Some(s) => json!({ "inSecs": s }),
+        None => json!({}),
+    };
+    json!({ "whenPrompt": prompt, "onceFile": env.once(&format!("limit{prompt}")), "steps": [
+        { "text": "working" },
+        { "rateLimit": limit }
+    ]})
+}
+
+fn now_secs() -> i64 {
+    ca_core::util::now_ms() / 1000
+}
+
+async fn wait_state(engine: &Engine, id: &str, state: RunState) -> Task {
+    let store = TaskStore::new(engine.project());
+    wait_for(&store, id, &format!("run {state:?}"), |t| {
+        t.run.as_ref().is_some_and(|r| r.state == state)
+    })
+    .await
+}
+
+async fn wait_phase(engine: &Engine, id: &str, phase: Phase) -> Task {
+    let store = TaskStore::new(engine.project());
+    wait_for(&store, id, &format!("phase {phase:?}"), |t| {
+        t.phase == phase
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_usage_limit_holds_every_task_on_that_cli_until_the_reset_then_resumes_them() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let agent = env.agent(1, vec![limit_once(&env, "(dev-1)", Some(3))]);
+    let a = engine
+        .create_task("Alpha", "", agent.clone(), false)
+        .await
+        .unwrap();
+    engine.start(&a.id).await.unwrap();
+
+    let limited = wait_state(&engine, &a.id, RunState::RateLimited).await;
+    let run = limited.run.as_ref().unwrap();
+    let resets_at = run.resets_at.unwrap();
+    assert!(
+        (now_secs()..=now_secs() + 3).contains(&resets_at),
+        "{run:?}"
+    );
+    assert!(!run.reset_estimated);
+    assert_eq!(run.kind, RunKind::Dev);
+    assert!(
+        run.error
+            .as_deref()
+            .unwrap()
+            .contains("Mock hit its usage limit"),
+        "{run:?}"
+    );
+    assert!(
+        limited.run.as_ref().unwrap().session_id.is_some(),
+        "the session is kept"
+    );
+
+    // A second task on the same CLI waits instead of starting an agent.
+    let b = engine.create_task("Bravo", "", agent, false).await.unwrap();
+    engine.start(&b.id).await.unwrap();
+    let waiting = wait_state(&engine, &b.id, RunState::RateLimited).await;
+    assert_eq!(waiting.run.as_ref().unwrap().resets_at, Some(resets_at));
+    assert!(
+        env.prompts_with("Bravo").is_empty(),
+        "an agent started for Bravo"
+    );
+
+    // At the reset both resume on their own and finish.
+    for id in [&a.id, &b.id] {
+        let done = wait_phase(&engine, id, Phase::HumanReview).await;
+        assert!(done.run.is_none(), "{:?}", done.run);
+    }
+    // Alpha's subtask continued in the same session.
+    assert!(
+        env.records().iter().any(|r| r["resume"] == json!(true)
+            && r["prompt"].as_str().unwrap().contains("Alpha")
+            || r["args"].to_string().contains("--resume")),
+        "no resumed invocation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pausing_a_rate_limited_task_stops_it_resuming_on_its_own() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let agent = env.agent(1, vec![limit_once(&env, "(dev-1)", Some(1))]);
+    let task = engine.create_task("Pause", "", agent, false).await.unwrap();
+    engine.start(&task.id).await.unwrap();
+    wait_state(&engine, &task.id, RunState::RateLimited).await;
+
+    engine.pause(&task.id).await.unwrap();
+    let paused = engine.get_task(&task.id).await.unwrap().unwrap();
+    let run = paused.run.unwrap();
+    assert_eq!(run.state, RunState::Paused);
+    assert_eq!(run.resets_at, None);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let still = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(still.run.unwrap().state, RunState::Paused);
+    assert_eq!(env.prompts_with("(dev-1)").len(), 1, "it ran again");
+
+    // A paused task resumes as usual.
+    engine.resume(&task.id).await.unwrap();
+    wait_phase(&engine, &task.id, Phase::HumanReview).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_now_tries_at_once_and_a_limited_task_can_move_to_another_cli() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let agent = env.agent(1, vec![limit_once(&env, "(dev-1)", Some(3600))]);
+    let a = engine
+        .create_task("Alpha", "", agent.clone(), false)
+        .await
+        .unwrap();
+    engine.start(&a.id).await.unwrap();
+    wait_state(&engine, &a.id, RunState::RateLimited).await;
+    let b = engine
+        .create_task("Bravo", "", agent.clone(), false)
+        .await
+        .unwrap();
+    engine.start(&b.id).await.unwrap();
+    wait_state(&engine, &b.id, RunState::RateLimited).await;
+
+    // A limited task's agents may change (it has no session with the new CLI to lose).
+    let mut patch = serde_json::Map::new();
+    let mock = serde_json::to_value(&agent).unwrap();
+    patch.insert(
+        "agents".into(),
+        json!({ "planning": mock, "dev": mock, "qa": mock }),
+    );
+    engine.patch_task(&b.id, &patch).await.unwrap();
+
+    // "Resume now" forgets the limit and runs.
+    engine.resume(&a.id).await.unwrap();
+    wait_phase(&engine, &a.id, Phase::HumanReview).await;
+    // Bravo still waits for its own reset an hour away.
+    let b_now = engine.get_task(&b.id).await.unwrap().unwrap();
+    assert_eq!(b_now.run.unwrap().state, RunState::RateLimited);
+    assert!(limits.active(Provider::Mock, now_secs()).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_reset_is_retried_after_a_wait() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let agent = env.agent(1, vec![limit_once(&env, "(dev-1)", None)]);
+    let task = engine
+        .create_task("Unknown", "", agent, false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    let limited = wait_state(&engine, &task.id, RunState::RateLimited).await;
+    assert!(limited.run.unwrap().reset_estimated);
+    wait_phase(&engine, &task.id, Phase::HumanReview).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_task_survives_a_restart_and_resumes_when_its_reset_has_passed() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let agent = env.agent(1, vec![limit_once(&env, "(dev-1)", Some(2))]);
+    let task = engine
+        .create_task("Restart", "", agent, false)
+        .await
+        .unwrap();
+    engine.start(&task.id).await.unwrap();
+    wait_state(&engine, &task.id, RunState::RateLimited).await;
+
+    // Closing the app leaves it waiting (no timer outlives the engine).
+    engine.shutdown().await;
+    drop(engine);
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    let store = TaskStore::new(&env.project);
+    let closed = store.load(&task.id).await.unwrap().unwrap();
+    assert_eq!(closed.run.unwrap().state, RunState::RateLimited);
+
+    // Its reset passed while the app was closed: opening the project resumes it.
+    let fresh = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&fresh).await;
+    wait_phase(&engine, &task.id, Phase::HumanReview).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_before_the_reset_keeps_waiting_and_relearns_the_limit() {
+    let env = Env::new().await;
+    let store = TaskStore::new(&env.project);
+    let agent = env.agent(1, vec![]);
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Later", "", agent.clone(), false)
+        .await
+        .unwrap();
+    drop(engine);
+    // A planning run left waiting for a reset an hour away.
+    let resets_at = now_secs() + 3600;
+    store
+        .update(&task.id, |t| {
+            let mut run = ca_core::Run::new(RunKind::Plan, RunState::RateLimited, None);
+            run.provider = Some(Provider::Mock);
+            run.resets_at = Some(resets_at);
+            t.run = Some(run);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    assert_eq!(
+        limits.active(Provider::Mock, now_secs()).map(|l| l.until),
+        Some(resets_at)
+    );
+    // Another task on that CLI waits too.
+    let other = engine.create_task("Other", "", agent, false).await.unwrap();
+    engine.start(&other.id).await.unwrap();
+    wait_state(&engine, &other.id, RunState::RateLimited).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let waiting = engine.get_task(&task.id).await.unwrap().unwrap();
+    assert_eq!(waiting.run.unwrap().state, RunState::RateLimited);
 }

@@ -9,4 +9,4 @@ finalText: string,
 /**
  * The schema-validated answer, for providers with structured output.
  */
-structured: JsonValue | null, turns: number | null, costUsd: number | null, } & ({ "kind": "completed" } | { "kind": "agent_error", message: string, } | { "kind": "stopped" } | { "kind": "timed_out" } | { "kind": "crashed", exitCode: number | null, });
+structured: JsonValue | null, turns: number | null, costUsd: number | null, } & ({ "kind": "completed" } | { "kind": "agent_error", message: string, } | { "kind": "stopped" } | { "kind": "timed_out" } | { "kind": "crashed", exitCode: number | null, } | { "kind": "rate_limited", resetsAt: number | null, message: string, });

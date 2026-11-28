@@ -41,6 +41,8 @@ export function sourceText(source: BinarySource | null): string | null {
       return 'install folder';
     case 'path':
       return 'from PATH';
+    case 'nodeVersion':
+      return 'from another node version';
     case 'configured':
     case null:
       return null;

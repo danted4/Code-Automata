@@ -1,16 +1,26 @@
 {
-  "schema": 2,
+  "schema": 3,
   "id": "task-1764000000000-ab12c",
   "title": "Add pagination to the task list",
   "description": "Page the list endpoint at 50 items.",
   "createdAt": 1764000000000,
   "updatedAt": 1764000900000,
   "phase": "in_progress",
-  "agent": {
-    "provider": "claude",
-    "model": "sonnet",
-    "options": {
-      "maxTurns": 40
+  "agents": {
+    "planning": {
+      "provider": "claude",
+      "model": "claude-fable-5-2"
+    },
+    "dev": {
+      "provider": "claude",
+      "model": "sonnet",
+      "options": {
+        "maxTurns": 40
+      }
+    },
+    "qa": {
+      "provider": "cursor",
+      "model": "gpt-5"
     }
   },
   "requirePlanApproval": true,

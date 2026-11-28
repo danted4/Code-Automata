@@ -248,3 +248,42 @@ esac"#,
     assert!(problem.contains("0.2.9"), "{problem}");
     assert!(problem.contains("choose another file"), "{problem}");
 }
+
+#[test]
+fn a_cli_under_another_nvm_version_is_found_and_runs_with_that_node() {
+    // `npm i -g` under v22 while v24 (without the CLI) is the active version on PATH.
+    let home = tempfile::tempdir().unwrap();
+    let versions = home.path().join(".nvm/versions/node");
+    let active = versions.join("v24.13.0/bin");
+    script(&active.join("node"), "echo v24");
+    for v in ["v9.11.2", "v22.22.0"] {
+        script(&versions.join(v).join("bin/node"), "echo node");
+        script(&versions.join(v).join("bin/gemini"), &format!("echo {v}"));
+    }
+    let bins = Binaries::from_search_path(active.clone().into()).with_home(home.path());
+    let newest = versions.join("v22.22.0/bin/gemini");
+    // The newest version holding it (v22 over v9: by number, not by name), after the PATH.
+    script(&versions.join("v9.11.2/bin/amp"), "echo amp9");
+    script(&versions.join("v22.22.0/bin/amp"), "echo amp22");
+    assert_eq!(
+        bins.find(Provider::Amp).unwrap(),
+        (versions.join("v22.22.0/bin/amp"), BinarySource::NodeVersion)
+    );
+    // Its own folder goes first on its PATH; a binary on the PATH changes nothing.
+    let path = bins.path_for_binary(&newest).unwrap();
+    let first = std::env::split_paths(&path).next().unwrap();
+    assert_eq!(first, versions.join("v22.22.0/bin"));
+    assert_eq!(
+        bins.path_for_binary(&active.join("node")).unwrap(),
+        std::ffi::OsString::from(&active)
+    );
+    // A copy on the PATH wins.
+    script(&active.join("amp"), "echo amp24");
+    assert_eq!(
+        bins.find(Provider::Amp).unwrap(),
+        (active.join("amp"), BinarySource::Path)
+    );
+    // Without a home (tests, `from_env`), version folders are not searched.
+    let path_only = Binaries::from_search_path(tempfile::tempdir().unwrap().path().into());
+    assert!(path_only.find(Provider::Amp).is_err());
+}

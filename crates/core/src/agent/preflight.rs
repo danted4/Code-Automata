@@ -163,7 +163,7 @@ async fn run(
         .stdin(std::process::Stdio::null())
         .env("NO_COLOR", "1")
         .kill_on_drop(true);
-    if let Some(path) = bins.path_var() {
+    if let Some(path) = bins.path_for_binary(binary) {
         cmd.env("PATH", path);
     }
     for key in env_remove {

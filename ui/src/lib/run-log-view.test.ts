@@ -26,7 +26,11 @@ function task(run: Partial<Run> | null): Task {
     createdAt: 0,
     updatedAt: 0,
     phase: 'in_progress',
-    agent: { provider: 'claude' },
+    agents: {
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    },
     requirePlanApproval: false,
     planning: { stage: 'approved' },
     subtasks: [{ id: 'dev-1', kind: 'dev', title: 'S', detail: '', status: 'pending' }],

@@ -195,15 +195,19 @@ async fn patch_accepts_only_editable_fields() {
             &patch(json!({
                 "title": "New title",
                 "description": "New description",
-                "agent": { "provider": "amp", "mode": "low" },
+                "agents": {
+                    "planning": { "provider": "claude" },
+                    "dev": { "provider": "amp", "mode": "low" },
+                    "qa": { "provider": "cursor" },
+                },
                 "requirePlanApproval": false,
             })),
         )
         .await
         .unwrap();
     assert_eq!(updated.title, "New title");
-    assert_eq!(updated.agent.provider, Provider::Amp);
-    assert_eq!(updated.agent.mode.as_deref(), Some("low"));
+    assert_eq!(updated.agents.dev.provider, Provider::Amp);
+    assert_eq!(updated.agents.dev.mode.as_deref(), Some("low"));
     assert!(!updated.require_plan_approval);
 
     let before = read_task_json(&project, &id);
@@ -220,8 +224,10 @@ async fn patch_accepts_only_editable_fields() {
         json!({ "title": "x", "phase": "done" }),
         // Wrong types and unknown nested keys.
         json!({ "requirePlanApproval": "yes" }),
-        json!({ "agent": { "provider": "gpt" } }),
-        json!({ "agent": { "provider": "amp", "temperature": 1 } }),
+        json!({ "agent": { "provider": "amp" } }),
+        json!({ "agents": { "dev": { "provider": "amp" } } }),
+        json!({ "agents": { "planning": { "provider": "gpt" }, "dev": { "provider": "amp" }, "qa": { "provider": "amp" } } }),
+        json!({ "agents": { "planning": { "provider": "amp", "temperature": 1 }, "dev": { "provider": "amp" }, "qa": { "provider": "amp" } } }),
         json!({ "title": null }),
     ] {
         let err = store.apply_patch(&id, &patch(forbidden.clone())).await;

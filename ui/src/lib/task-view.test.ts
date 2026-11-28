@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { Run } from '@/lib/api/types/Run';
 import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
-import { primaryAction, progress, repoChips, reworkLabel, taskStatus } from './task-view';
+import {
+  ACTION_LABELS,
+  primaryAction,
+  progress,
+  rateLimitText,
+  repoChips,
+  reworkLabel,
+  statusBadge,
+  taskStatus,
+} from './task-view';
 
 function task(over: Partial<Task> = {}): Task {
   return {
@@ -12,7 +21,11 @@ function task(over: Partial<Task> = {}): Task {
     createdAt: 0,
     updatedAt: 0,
     phase: 'planning',
-    agent: { provider: 'claude' },
+    agents: {
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    },
     requirePlanApproval: false,
     planning: { stage: 'not_started' },
     ...over,
@@ -46,6 +59,38 @@ describe('taskStatus and primaryAction', () => {
     const failed = taskStatus({ ...t, run: run({ state: 'failed', error: 'boom' }) });
     expect(failed).toEqual({ kind: 'failed', error: 'boom' });
     expect(primaryAction(failed)).toBe('retry');
+  });
+
+  it('shows a rate-limited run with its reset and a Resume now', () => {
+    const t = task({ phase: 'in_progress', subtasks: [sub({})] });
+    const limited = taskStatus({
+      ...t,
+      run: run({
+        state: 'rate_limited',
+        resetsAt: 1_764_359_100,
+        error: 'Claude Code hit its usage limit',
+      }),
+    });
+    expect(limited).toEqual({
+      kind: 'rate_limited',
+      resumesAt: 1_764_359_100_000,
+      estimated: false,
+      error: 'Claude Code hit its usage limit',
+    });
+    expect(primaryAction(limited)).toBe('resume_now');
+    expect(ACTION_LABELS.resume_now).toBe('Resume now');
+    expect(statusBadge(limited).label).toBe('Rate-limited');
+  });
+
+  it('says when a rate-limited task resumes, naming the day when it is not today', () => {
+    const now = new Date(2026, 10, 28, 14, 0).getTime();
+    const later = new Date(2026, 10, 28, 15, 45).getTime();
+    expect(rateLimitText(later, false, now)).toMatch(/^Resumes at .*45/);
+    expect(rateLimitText(later, true, now)).toMatch(/^Retrying at /);
+    const monday = new Date(2026, 10, 30, 0, 0).getTime();
+    const text = rateLimitText(monday, false, now);
+    expect(text).not.toBe(rateLimitText(new Date(2026, 10, 28, 0, 0).getTime(), false, now));
+    expect(text).toMatch(/Mon/);
   });
 
   it('names the planning step that is running', () => {
@@ -125,7 +170,7 @@ describe('repoChips', () => {
     createdAt: 0,
     updatedAt: 0,
     phase: 'in_progress',
-    agent: { provider: 'mock' },
+    agents: { planning: { provider: 'mock' }, dev: { provider: 'mock' }, qa: { provider: 'mock' } },
     requirePlanApproval: false,
     planning: { stage: 'approved' },
     baseCommits: { api: 'a0', web: 'w0', docs: 'd0' },
