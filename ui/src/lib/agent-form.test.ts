@@ -178,3 +178,25 @@ describe('agentLockedReason', () => {
     expect(agentLockedReason({ ...limited, state: 'paused' })).not.toBeNull();
   });
 });
+
+describe('taskChanges with different agents per phase', () => {
+  it('keeps a phase that has its own agent', () => {
+    const t = task({
+      agents: {
+        planning: { provider: 'claude', model: 'claude-fable-5-2' },
+        dev: { provider: 'claude' },
+        qa: { provider: 'claude' },
+      },
+    });
+    const form = formFromTask(t);
+    expect(taskChanges(t, { ...form, agent: { provider: 'cursor', model: '', mode: '' } })).toEqual(
+      {
+        agents: {
+          planning: { provider: 'claude', model: 'claude-fable-5-2' },
+          dev: { provider: 'cursor' },
+          qa: { provider: 'cursor' },
+        },
+      }
+    );
+  });
+});

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::limits::{Limit, now_secs};
+use super::limits::{self, Limit, LimitScope, now_secs};
 use super::output::{
     AgentOutput, DevOut, PlanOut, QaOut, QuestionsOut, SubtaskKindOut, SubtasksOut, TriageOut,
     TriageVerdict, read_output,
@@ -126,42 +126,52 @@ fn halted_state(halt: Halt) -> RunState {
 /// When no run can hold it, an `EngineEvent::Error` carries it instead.
 pub(crate) async fn record_failure(inner: &Inner, id: &str, error: &str) {
     let mut recorded = false;
-    let _ = inner
+    let written = inner
         .update(id, |t| {
-            if let Some(run) = t.run.as_mut() {
-                run.state = RunState::Failed;
-                run.error = Some(error.to_string());
-                run.updated_at = now_ms();
-                recorded = true;
-                return Ok(());
-            }
-            let (kind, subtask) = match t.phase {
-                Phase::Planning => (RunKind::Plan, None),
-                Phase::InProgress => (
-                    RunKind::Dev,
-                    t.subtasks_of(SubtaskKind::Dev)
-                        .find(|s| s.status == SubtaskStatus::Pending)
-                        .map(|s| s.id.clone()),
-                ),
-                Phase::AiReview => (RunKind::Checks, None),
-                Phase::HumanReview | Phase::Done => return Ok(()),
-            };
-            if kind == RunKind::Dev && subtask.is_none() {
-                return Ok(()); // no valid place to record it; the task stays where it is
-            }
-            let mut run = Run::new(kind, RunState::Failed, subtask);
-            run.error = Some(error.to_string());
-            t.run = Some(run);
-            recorded = true;
+            recorded = mark_failed(t, error);
             Ok(())
         })
         .await;
-    if !recorded {
+    // Shown some other way when the task file could not take it (an update it refuses).
+    if written.is_err() || !recorded {
         inner.emit(EngineEvent::Error {
             task_id: id.to_string(),
             message: error.to_string(),
         });
     }
+}
+
+/// The task's run (or a new one fitting its phase) becomes `failed` with `error`. Whether there
+/// was a place to record it.
+fn mark_failed(t: &mut Task, error: &str) -> bool {
+    if let Some(run) = t.run.as_mut() {
+        run.state = RunState::Failed;
+        run.error = Some(error.to_string());
+        // A failed run waits for nothing (a rate-limited one's reset would make the file invalid).
+        run.resets_at = None;
+        run.reset_estimated = false;
+        run.limit_scope = None;
+        run.updated_at = now_ms();
+        return true;
+    }
+    let (kind, subtask) = match t.phase {
+        Phase::Planning => (RunKind::Plan, None),
+        Phase::InProgress => (
+            RunKind::Dev,
+            t.subtasks_of(SubtaskKind::Dev)
+                .find(|s| s.status == SubtaskStatus::Pending)
+                .map(|s| s.id.clone()),
+        ),
+        Phase::AiReview => (RunKind::Checks, None),
+        Phase::HumanReview | Phase::Done => return false,
+    };
+    if kind == RunKind::Dev && subtask.is_none() {
+        return false; // no valid place to record it; the task stays where it is
+    }
+    let mut run = Run::new(kind, RunState::Failed, subtask);
+    run.error = Some(error.to_string());
+    t.run = Some(run);
+    true
 }
 
 /// Create a worktree in every repository of the project and record each base commit, in one
@@ -333,8 +343,8 @@ struct Ctx<'a> {
     /// Files removed from a workspace task's folder after this context's runs (outside every
     /// repository), for the dev subtask's handoff note.
     removed: std::sync::Mutex<Vec<String>>,
-    /// The CLI the step runs (the phase's agent).
-    provider: crate::task::Provider,
+    /// The agent the step runs (the phase's).
+    agent: crate::task::AgentConfig,
 }
 
 impl Ctx<'_> {
@@ -373,10 +383,12 @@ async fn run_agent(
     run.error = None;
     run.resets_at = None;
     run.reset_estimated = false;
+    run.limit_scope = None;
     run.updated_at = now_ms();
     // A session is only resumed by the provider that created it (the phase's agent may have been
     // changed while the run was halted).
-    let provider = task.agents.for_kind(kind).provider;
+    let agent = task.agents.for_kind(kind).clone();
+    let provider = agent.provider;
     let session = run
         .session_id
         .clone()
@@ -394,8 +406,8 @@ async fn run_agent(
     }
     // The CLI is known to be rate-limited: wait for its reset without starting anything (not even
     // a triage), instead of every task on it failing in turn.
-    if let Some(limit) = inner.limits.active(provider, now_secs()) {
-        mark_rate_limited(&mut run, limit, &limit_message(provider, None));
+    if let Some((limit, scope)) = inner.limits.holding(&agent, now_secs()) {
+        mark_rate_limited(&mut run, limit, scope, &limit_message(provider, None));
         inner
             .update(id, |t| {
                 t.run = Some(run);
@@ -414,7 +426,7 @@ async fn run_agent(
         record_session: true,
         log_label: "run",
         removed: std::sync::Mutex::new(Vec::new()),
-        provider,
+        agent,
     };
     let task = inner
         .update(id, |t| {
@@ -683,7 +695,7 @@ async fn triage(
         record_session: false,
         log_label: "triage",
         removed: std::sync::Mutex::new(Vec::new()),
-        provider: ctx.provider,
+        agent: ctx.agent.clone(),
     };
     let worktrees = ctx.inner.task_worktrees(task)?;
     for w in &worktrees {
@@ -775,11 +787,17 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
             "the agent exited without finishing (exit code {})",
             exit_code.map_or("unknown".into(), |c| c.to_string())
         ),
-        OutcomeKind::RateLimited { resets_at, message } => {
+        OutcomeKind::RateLimited {
+            resets_at,
+            message,
+            scope,
+        } => {
             let now = now_secs();
-            let limit = match resets_at.filter(|at| *at > now) {
+            // A reset that just passed (the CLI's clock, a late message) is this one: resume
+            // after the grace. Anything older is not a time to trust.
+            let limit = match resets_at.filter(|at| *at > now - JUST_PASSED_SECS) {
                 Some(until) => Limit {
-                    until,
+                    until: until.max(now),
                     estimated: false,
                 },
                 None => Limit {
@@ -789,17 +807,21 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
                     estimated: true,
                 },
             };
-            ctx.inner.limits.record(ctx.provider, limit);
+            let scope = limits::resolve(scope.clone(), &ctx.agent);
+            ctx.inner.limits.record(ctx.agent.provider, &scope, limit);
             // Another task may have recorded a later reset meanwhile.
-            let limit = ctx.inner.limits.active(ctx.provider, now).unwrap_or(limit);
-            let message = limit_message(ctx.provider, Some(message));
+            let limit = match ctx.inner.limits.holding(&ctx.agent, now) {
+                Some((held, _)) if scope != LimitScope::Run && held.until > limit.until => held,
+                _ => limit,
+            };
+            let message = limit_message(ctx.agent.provider, Some(message));
             let run_id = ctx.run_id.clone();
             ctx.inner
                 .update(ctx.id, |t| {
                     if let Some(run) = t.run.as_mut()
                         && run.id == run_id
                     {
-                        mark_rate_limited(run, limit, &message);
+                        mark_rate_limited(run, limit, scope, &message);
                     }
                     Ok(())
                 })
@@ -811,11 +833,15 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
     Ok(false)
 }
 
+/// A reset this recent counts as just passed rather than unknown.
+const JUST_PASSED_SECS: i64 = 10 * 60;
+
 /// The run waits for `limit` to reset.
-fn mark_rate_limited(run: &mut Run, limit: Limit, message: &str) {
+fn mark_rate_limited(run: &mut Run, limit: Limit, scope: LimitScope, message: &str) {
     run.state = RunState::RateLimited;
     run.resets_at = Some(limit.until);
     run.reset_estimated = limit.estimated;
+    run.limit_scope = (scope != LimitScope::Account).then_some(scope);
     run.error = Some(message.to_string());
     run.pid = None;
     run.updated_at = now_ms();
@@ -845,6 +871,7 @@ async fn set_run_state(ctx: &Ctx<'_>, state: RunState, error: Option<&str>) -> R
                 run.pid = None;
                 run.resets_at = None;
                 run.reset_estimated = false;
+                run.limit_scope = None;
                 run.updated_at = now_ms();
             }
             Ok(())
@@ -892,11 +919,12 @@ async fn execute(
         return Ok(stopped_outcome());
     }
     // The CLI hit its limit while this run waited for a slot (or before a repair turn).
-    if let Some(limit) = inner.limits.active(provider, now_secs()) {
+    if let Some((limit, scope)) = inner.limits.holding(&ctx.agent, now_secs()) {
         return Ok(Outcome {
             kind: OutcomeKind::RateLimited {
                 resets_at: Some(limit.until),
                 message: String::new(),
+                scope,
             },
             ..stopped_outcome()
         });
@@ -1120,4 +1148,31 @@ async fn layout_for(inner: &Inner, worktrees: &[RepoWorktree]) -> Option<prompts
         repos,
         root_instructions,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::task::{AgentConfig, Provider};
+
+    #[test]
+    fn a_failure_on_a_rate_limited_run_leaves_a_valid_failed_run() {
+        let mut t = Task::new("t", "", AgentConfig::new(Provider::Mock));
+        let mut run = Run::new(RunKind::Plan, RunState::RateLimited, None);
+        run.resets_at = Some(1_764_359_100);
+        run.reset_estimated = true;
+        run.limit_scope = Some(LimitScope::Run);
+        t.run = Some(run);
+        t.validate().unwrap();
+        assert!(mark_failed(&mut t, "boom"));
+        let run = t.run.as_ref().unwrap();
+        assert_eq!(run.state, RunState::Failed);
+        assert_eq!(run.error.as_deref(), Some("boom"));
+        assert_eq!(
+            (run.resets_at, run.reset_estimated, &run.limit_scope),
+            (None, false, &None)
+        );
+        t.validate().unwrap();
+    }
 }

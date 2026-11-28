@@ -1960,7 +1960,7 @@ async fn resume_now_tries_at_once_and_a_limited_task_can_move_to_another_cli() {
     // Bravo still waits for its own reset an hour away.
     let b_now = engine.get_task(&b.id).await.unwrap().unwrap();
     assert_eq!(b_now.run.unwrap().state, RunState::RateLimited);
-    assert!(limits.active(Provider::Mock, now_secs()).is_none());
+    assert!(limits.active(&agent, now_secs()).is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2033,7 +2033,7 @@ async fn a_restart_before_the_reset_keeps_waiting_and_relearns_the_limit() {
     let limits = Arc::new(RateLimits::default());
     let engine = env.engine_with(&limits).await;
     assert_eq!(
-        limits.active(Provider::Mock, now_secs()).map(|l| l.until),
+        limits.active(&agent, now_secs()).map(|l| l.until),
         Some(resets_at)
     );
     // Another task on that CLI waits too.
@@ -2043,4 +2043,61 @@ async fn a_restart_before_the_reset_keeps_waiting_and_relearns_the_limit() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let waiting = engine.get_task(&task.id).await.unwrap().unwrap();
     assert_eq!(waiting.run.unwrap().state, RunState::RateLimited);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_limit_holds_only_that_model_and_moving_off_it_resumes() {
+    let env = Env::new().await;
+    let limits = Arc::new(RateLimits::default());
+    let engine = env.engine_with(&limits).await;
+    let opus_limit = json!({ "whenPrompt": "(dev-1)", "onceFile": env.once("opus"), "steps": [
+        { "text": "working" },
+        { "rateLimit": { "inSecs": 3600, "type": "seven_day_opus", "text": "You've hit your Opus limit" } }
+    ]});
+    let base = env.agent(1, vec![opus_limit]);
+    let with_model = |m: &str| {
+        let mut a = base.clone();
+        a.model = Some(m.into());
+        a
+    };
+    let a = engine
+        .create_task("Alpha", "", with_model("opus"), false)
+        .await
+        .unwrap();
+    engine.start(&a.id).await.unwrap();
+    let limited = wait_state(&engine, &a.id, RunState::RateLimited).await;
+    assert_eq!(
+        limited.run.unwrap().limit_scope,
+        Some(ca_core::engine::limits::LimitScope::Model(Some(
+            "opus".into()
+        )))
+    );
+
+    // Another model on the same CLI is not held back; the same model is.
+    let b = engine
+        .create_task("Bravo", "", with_model("sonnet"), false)
+        .await
+        .unwrap();
+    engine.start(&b.id).await.unwrap();
+    wait_phase(&engine, &b.id, Phase::HumanReview).await;
+    let c = engine
+        .create_task("Charlie", "", with_model("claude-opus-5-5"), false)
+        .await
+        .unwrap();
+    engine.start(&c.id).await.unwrap();
+    wait_state(&engine, &c.id, RunState::RateLimited).await;
+
+    // Moving Alpha's development to a free model resumes it at once.
+    let mut patch = serde_json::Map::new();
+    let sonnet = serde_json::to_value(with_model("sonnet")).unwrap();
+    let opus = serde_json::to_value(with_model("opus")).unwrap();
+    patch.insert(
+        "agents".into(),
+        json!({ "planning": opus, "dev": sonnet, "qa": sonnet }),
+    );
+    engine.patch_task(&a.id, &patch).await.unwrap();
+    wait_phase(&engine, &a.id, Phase::HumanReview).await;
+    // The Opus limit still holds Charlie.
+    let charlie = engine.get_task(&c.id).await.unwrap().unwrap();
+    assert_eq!(charlie.run.unwrap().state, RunState::RateLimited);
 }

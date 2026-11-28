@@ -22,8 +22,9 @@ const SUMMARY_CHARS: usize = 300;
 #[derive(Debug, Default)]
 pub struct StreamJson {
     session_reported: bool,
-    /// A `rate_limit_event` said the usage limit was reached, resetting at this time if given.
-    rejected: Option<Option<i64>>,
+    /// The latest `rate_limit_event` refused the run: the limit, with its reset time if given. A
+    /// later event that allows the run again (another window, a fallback model) clears it.
+    rejected: Option<RateLimit>,
     /// Amp's wording for its limits (the others are Claude's or the mock's).
     amp: bool,
 }
@@ -106,10 +107,16 @@ impl LineParser for StreamJson {
             }
             Some("rate_limit_event") => {
                 let info = msg.get("rate_limit_info");
-                if info.and_then(|i| i.get("status")).and_then(Value::as_str) == Some("rejected") {
-                    self.rejected =
-                        Some(info.and_then(|i| i.get("resetsAt")).and_then(Value::as_i64));
-                }
+                let field = |k: &str| info.and_then(|i| i.get(k));
+                self.rejected =
+                    (field("status").and_then(Value::as_str) == Some("rejected")).then(|| {
+                        RateLimit {
+                            resets_at: field("resetsAt").and_then(Value::as_i64),
+                            scope: limits::claude_scope(
+                                field("rateLimitType").and_then(Value::as_str),
+                            ),
+                        }
+                    });
             }
             Some("result") => out.push(Parsed::Result(self.result(&msg))),
             _ => {}
@@ -126,29 +133,37 @@ impl StreamJson {
             .unwrap_or(false);
         let text = ["result", "error"]
             .iter()
-            .find_map(|k| msg.get(*k).and_then(Value::as_str))
-            .filter(|t| !t.trim().is_empty())
+            .find_map(|k| {
+                msg.get(*k)
+                    .and_then(Value::as_str)
+                    .filter(|t| !t.trim().is_empty())
+            })
             .map(String::from);
-        // Claude reports an API 429 that outlasted its own retries this way too.
+        // An API 429 that outlasted the CLI's own retries.
         let http_429 = msg.get("api_error_status").and_then(Value::as_u64) == Some(429);
-        let rate_limit = if !is_error {
-            None
-        } else if let Some(resets_at) = self.rejected.or(http_429.then_some(None)) {
-            // The structured time wins; the text is the fallback for when it is missing.
-            let from_text = text
-                .as_deref()
-                .and_then(|t| limits::claude_text(t, &limits::local_now()));
-            Some(RateLimit {
-                resets_at: resets_at.or(from_text.and_then(|l| l.resets_at)),
-            })
-        } else {
-            text.as_deref().and_then(|t| {
-                if self.amp {
-                    limits::amp_text(t)
-                } else {
-                    limits::claude_text(t, &limits::local_now())
-                }
-            })
+        let from_text = text.as_deref().and_then(|t| {
+            if self.amp {
+                limits::amp_text(t)
+            } else {
+                limits::claude_text(t, &limits::local_now())
+            }
+        });
+        // The result itself must say it is a limit (its text, or a 429); a refusal earlier in the
+        // run only supplies the reset time and scope, which win over the text's.
+        let rate_limit = match (is_error, from_text, http_429, &self.rejected) {
+            (false, ..) => None,
+            (true, Some(text_limit), _, Some(event)) => Some(RateLimit {
+                resets_at: event.resets_at.or(text_limit.resets_at),
+                scope: event.scope.clone(),
+            }),
+            (true, Some(text_limit), _, None) => Some(text_limit),
+            (true, None, true, Some(event)) => Some(event.clone()),
+            // A plain "too many requests": this run waits, nobody else.
+            (true, None, true, None) => Some(RateLimit {
+                resets_at: None,
+                scope: limits::LimitScope::Run,
+            }),
+            (true, None, false, _) => None,
         };
         ResultInfo {
             subtype: msg.get("subtype").and_then(Value::as_str).map(String::from),

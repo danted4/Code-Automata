@@ -138,7 +138,16 @@ export function taskChanges(task: Task, form: TaskForm): TaskPatch {
     const base = task.agents.dev;
     const next = agentFromDraft(form.agent, base);
     const current = agentFromDraft(draftFromAgent(base), base);
-    if (next && current && !sameAgent(next, current)) changes.agents = sameForAll(next);
+    if (next && current && !sameAgent(next, current)) {
+      // The form edits the development agent; a phase that used the same one follows it, and a
+      // phase with its own agent keeps it.
+      const follow = (phase: AgentConfig) => (sameAgent(phase, base) ? next : phase);
+      changes.agents = {
+        planning: follow(task.agents.planning),
+        dev: next,
+        qa: follow(task.agents.qa),
+      };
+    }
   }
   return changes;
 }

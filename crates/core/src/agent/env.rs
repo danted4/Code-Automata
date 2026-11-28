@@ -21,9 +21,10 @@
 //!    unrelated program cannot be taken for an agent;
 //! 3. on the `PATH`;
 //! 4. in the folders of node versions other than the active one (nvm, fnm), newest first: an npm
-//!    install under another version is not on the login shell's `PATH`. Such a CLI is run with
-//!    its version's folder first on its `PATH`, so `#!/usr/bin/env node` finds the node it was
-//!    installed with ([`Binaries::path_for_binary`]);
+//!    install under another version is not on the login shell's `PATH`. Such a CLI, when it is a
+//!    node script, is run by its own version's node (`<version>/bin/node <script>`), so it gets
+//!    the node it was installed with while everything the agent runs keeps the user's active node
+//!    ([`Binaries::launch`]);
 //! 5. in folders of older installs (`legacy_locations`), after `PATH` so a current copy on `PATH`
 //!    wins over one left behind: the older Claude Code local install was reached through a shell
 //!    alias, which no `PATH` search sees.
@@ -410,23 +411,28 @@ impl Binaries {
         self.search_path.as_deref()
     }
 
-    /// The `PATH` to run `binary` with: [`Binaries::path_var`], with the binary's own folder first
-    /// when that folder holds a `node` and is not already on it (an npm CLI under a node version
-    /// that is not the active one, whose script needs that version's node).
-    pub fn path_for_binary(&self, binary: &Path) -> Option<OsString> {
-        let base = self.search_path.clone();
-        let Some(dir) = binary.parent().filter(|d| has_node(d)) else {
-            return base;
-        };
-        let mut entries: Vec<PathBuf> = base
-            .as_deref()
-            .map(|p| std::env::split_paths(p).collect())
-            .unwrap_or_default();
-        if entries.iter().any(|e| e == dir) {
-            return base;
+    /// How to start `binary`: itself, or, for a node script in a node version's folder that is not
+    /// on the `PATH` (an npm install under another nvm or fnm version), that version's `node` with
+    /// the script as its first argument. Its `#!/usr/bin/env node` would otherwise run the active
+    /// node, which may be too old or too new for it; only the CLI gets the other node, never the
+    /// tools the agent runs. Not on Windows, where npm installs `.cmd` shims.
+    pub fn launch(&self, binary: &Path) -> (PathBuf, Vec<String>) {
+        let plain = (binary.to_path_buf(), Vec::new());
+        if cfg!(windows) {
+            return plain;
         }
-        entries.insert(0, dir.to_path_buf());
-        std::env::join_paths(entries).ok().or(base)
+        let Some(dir) = binary.parent() else {
+            return plain;
+        };
+        let node = dir.join("node");
+        let on_path = self
+            .search_path
+            .as_deref()
+            .is_some_and(|p| std::env::split_paths(p).any(|e| e == dir));
+        if on_path || !is_executable(&node) || !is_node_script(binary) {
+            return plain;
+        }
+        (node, vec![binary.to_string_lossy().into_owned()])
     }
 
     pub fn locate(&self, provider: Provider) -> Result<PathBuf> {
@@ -508,11 +514,15 @@ impl Binaries {
     }
 }
 
-/// Whether `dir` holds a node executable.
-fn has_node(dir: &Path) -> bool {
-    ["node", "node.exe"]
-        .iter()
-        .any(|n| is_executable(&dir.join(n)))
+/// Whether `file` starts with a `#!` line naming node.
+fn is_node_script(file: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 128];
+    let n = std::fs::File::open(file)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = String::from_utf8_lossy(&head[..n]);
+    head.starts_with("#!") && head.lines().next().is_some_and(|l| l.contains("node"))
 }
 
 /// `NVM_DIR` and, on Windows, `NVM_HOME`, when set.

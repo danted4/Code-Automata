@@ -153,17 +153,19 @@ struct CheckOutput {
 
 /// Run a quick command, or `None` if it could not run in time.
 async fn run(
-    binary: &PathBuf,
+    binary: &std::path::Path,
     args: &[&str],
     bins: &Binaries,
     env_remove: &[String],
 ) -> Option<CheckOutput> {
-    let mut cmd = crate::proc::command(binary);
-    cmd.args(args)
+    let (program, launch_args) = bins.launch(binary);
+    let mut cmd = crate::proc::command(&program);
+    cmd.args(&launch_args)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .env("NO_COLOR", "1")
         .kill_on_drop(true);
-    if let Some(path) = bins.path_for_binary(binary) {
+    if let Some(path) = bins.path_var() {
         cmd.env("PATH", path);
     }
     for key in env_remove {

@@ -487,6 +487,10 @@ pub struct Run {
     /// The CLI did not say when the limit resets, so `resets_at` is a guess (a retry).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reset_estimated: bool,
+    /// Whom else the limit holds back (the CLI's account, one model, or only this run), so it is
+    /// learnt again after a restart. Absent on a rate-limited run: the account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_scope: Option<crate::agent::limits::LimitScope>,
     /// For a dev run: each repository's HEAD when the run started. Commits after it are this
     /// run's (a checkpoint commit a crash left unrecorded, or one the agent made), so a resume or a
     /// dropped run undoes those and never anything older, such as an earlier plan's checkpoints.
@@ -513,6 +517,7 @@ impl Run {
             error: None,
             resets_at: None,
             reset_estimated: false,
+            limit_scope: None,
             heads: BTreeMap::new(),
         }
     }
@@ -782,8 +787,10 @@ impl Task {
                 "a rate-limited run, and only that, has a reset time".into(),
             ));
         }
-        if run.reset_estimated && run.resets_at.is_none() {
-            return Err(Invalid("an estimated reset needs a reset time".into()));
+        if (run.reset_estimated || run.limit_scope.is_some()) && run.resets_at.is_none() {
+            return Err(Invalid(
+                "a reset estimate or limit scope needs a reset time".into(),
+            ));
         }
         if run.kind.phase() != self.phase {
             return Err(Invalid(format!(

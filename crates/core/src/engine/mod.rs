@@ -41,7 +41,7 @@ use crate::task::{
 use crate::transitions::Mover;
 use crate::util::{now_ms, random_base36};
 
-use self::limits::{Limit, RateLimits, WakeTiming};
+use self::limits::{Limit, LimitScope, RateLimits, WakeTiming, model_family, now_secs};
 use self::lock::ProjectLock;
 use self::settings::Settings;
 
@@ -370,6 +370,7 @@ fn resume_run(t: &mut Task) {
         run.error = None;
         run.resets_at = None;
         run.reset_estimated = false;
+        run.limit_scope = None;
         run.updated_at = now_ms();
     } else {
         t.run = None;
@@ -472,8 +473,10 @@ impl Engine {
                     && let Some(at) = run.resets_at
                 {
                     if let Some(provider) = run.provider {
+                        let scope = run.limit_scope.clone().unwrap_or(LimitScope::Account);
                         inner.limits.record(
                             provider,
+                            &scope,
                             Limit {
                                 until: at,
                                 estimated: run.reset_estimated,
@@ -532,6 +535,36 @@ impl Engine {
         self.inner.emit(EngineEvent::TaskChanged {
             task_id: id.to_string(),
         });
+        // Moved off the limited CLI (or model) onto one that is free: go on now.
+        if let Some(run) = task
+            .run
+            .as_ref()
+            .filter(|r| r.state == RunState::RateLimited)
+        {
+            let agent = task.agents.for_kind(run.kind);
+            let same_model = match &run.limit_scope {
+                Some(LimitScope::Model(Some(family))) => model_family(agent) == *family,
+                _ => true,
+            };
+            let moved = run.provider != Some(agent.provider) || !same_model;
+            if moved && self.inner.limits.active(agent, now_secs()).is_none() {
+                self.inner.cancel_wakeup(id);
+                let task = self
+                    .inner
+                    .update(id, |t| {
+                        if t.run
+                            .as_ref()
+                            .is_some_and(|r| r.state == RunState::RateLimited)
+                        {
+                            resume_run(t);
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                self.spawn_driver(id);
+                return Ok(task);
+            }
+        }
         Ok(task)
     }
 
@@ -1000,37 +1033,48 @@ impl Engine {
     /// its own.
     pub async fn pause(&self, id: &str) -> Result<()> {
         let Some(control) = self.inner.control(id) else {
-            let mut paused = false;
-            self.inner
-                .update(id, |t| {
-                    if let Some(run) = t.run.as_mut()
-                        && run.state == RunState::RateLimited
-                    {
-                        run.state = RunState::Paused;
-                        run.resets_at = None;
-                        run.reset_estimated = false;
-                        run.updated_at = now_ms();
-                        paused = true;
-                    }
-                    Ok(())
-                })
-                .await?;
-            if !paused {
+            if !self.pause_waiting(id).await? {
                 return Err(CoreError::Invalid("the task is not running".into()));
             }
-            self.inner.cancel_wakeup(id);
             return Ok(());
         };
         control.request(Halt::Pause);
         self.wait_idle(id).await;
+        // The driver may have been on its way out after writing `rate_limited`.
+        self.pause_waiting(id).await?;
         Ok(())
+    }
+
+    /// A run waiting out a usage limit becomes `paused` and stops waiting. Whether there was one.
+    async fn pause_waiting(&self, id: &str) -> Result<bool> {
+        let mut paused = false;
+        self.inner
+            .update(id, |t| {
+                if let Some(run) = t.run.as_mut()
+                    && run.state == RunState::RateLimited
+                {
+                    run.state = RunState::Paused;
+                    run.resets_at = None;
+                    run.reset_estimated = false;
+                    run.limit_scope = None;
+                    run.updated_at = now_ms();
+                    paused = true;
+                }
+                Ok(())
+            })
+            .await?;
+        if paused {
+            self.inner.cancel_wakeup(id);
+        }
+        Ok(paused)
     }
 
     /// Continue a paused, interrupted, failed or rate-limited task. A dev subtask continues from its
     /// partial work (in the same agent session when there is one); any other step starts again.
     ///
     /// Resuming a rate-limited task ("Resume now") forgets its CLI's limit, so the next run really
-    /// tries instead of waiting again.
+    /// tries instead of waiting again; only when the task still uses that CLI (one moved to another
+    /// CLI must not free the limited one for everyone else).
     pub async fn resume(&self, id: &str) -> Result<()> {
         if self.is_running(id) {
             let task = self.inner.load(id).await?;
@@ -1045,9 +1089,11 @@ impl Engine {
             .update(id, |t| {
                 if let Some(run) = &t.run
                     && run.state == RunState::RateLimited
-                    && let Some(provider) = run.provider
                 {
-                    self.inner.limits.clear(provider);
+                    let agent = t.agents.for_kind(run.kind);
+                    if run.provider == Some(agent.provider) {
+                        self.inner.limits.clear(agent);
+                    }
                 }
                 resume_run(t);
                 Ok(())

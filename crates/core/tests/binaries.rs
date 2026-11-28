@@ -269,13 +269,17 @@ fn a_cli_under_another_nvm_version_is_found_and_runs_with_that_node() {
         bins.find(Provider::Amp).unwrap(),
         (versions.join("v22.22.0/bin/amp"), BinarySource::NodeVersion)
     );
-    // Its own folder goes first on its PATH; a binary on the PATH changes nothing.
-    let path = bins.path_for_binary(&newest).unwrap();
-    let first = std::env::split_paths(&path).next().unwrap();
-    assert_eq!(first, versions.join("v22.22.0/bin"));
+    // A node script there runs on its own version's node; the PATH is not changed.
+    let script_cli = versions.join("v22.22.0/bin/codex");
+    common::write_script(&script_cli, "#!/usr/bin/env node\nconsole.log(1)\n");
+    let (program, args) = bins.launch(&script_cli);
+    assert_eq!(program, versions.join("v22.22.0/bin/node"));
+    assert_eq!(args, [script_cli.to_string_lossy()]);
+    // A native binary in that folder, or anything on the PATH, runs as itself.
+    assert_eq!(bins.launch(&newest), (newest.clone(), vec![]));
     assert_eq!(
-        bins.path_for_binary(&active.join("node")).unwrap(),
-        std::ffi::OsString::from(&active)
+        bins.launch(&active.join("node")),
+        (active.join("node"), vec![])
     );
     // A copy on the PATH wins.
     script(&active.join("amp"), "echo amp24");

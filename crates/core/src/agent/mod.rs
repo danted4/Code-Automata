@@ -164,6 +164,8 @@ pub enum OutcomeKind {
         #[cfg_attr(feature = "ts", ts(as = "Option<f64>"))]
         resets_at: Option<i64>,
         message: String,
+        /// Whom else the limit holds back.
+        scope: limits::LimitScope,
     },
 }
 

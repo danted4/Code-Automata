@@ -106,13 +106,15 @@ pub(crate) async fn spawn(
 ) -> Result<RunningAgent> {
     let log = open_log(&req.log_path).await?;
 
-    let mut cmd = crate::proc::command(&spec.program);
-    cmd.args(&spec.args)
+    let (program, launch_args) = bins.launch(&spec.program);
+    let mut cmd = crate::proc::command(&program);
+    cmd.args(&launch_args)
+        .args(&spec.args)
         .current_dir(&req.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(path) = bins.path_for_binary(&spec.program) {
+    if let Some(path) = bins.path_var() {
         cmd.env("PATH", path);
     }
     for key in &spec.env_remove {
@@ -396,10 +398,11 @@ impl Supervisor {
                     .filter(|t| !t.trim().is_empty())
                     .or_else(|| info.subtype.clone())
                     .unwrap_or_else(|| "the agent reported an error".into());
-                match info.rate_limit {
+                match &info.rate_limit {
                     Some(limit) => OutcomeKind::RateLimited {
                         resets_at: limit.resets_at,
                         message,
+                        scope: limit.scope.clone(),
                     },
                     None => OutcomeKind::AgentError { message },
                 }

@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use ca_core::agent::cursor::CursorParser;
+use ca_core::agent::limits::LimitScope;
 use ca_core::agent::stream_json::StreamJson;
 use ca_core::agent::{AgentEvent, LineParser, Parsed, ResultInfo};
 
@@ -180,7 +181,8 @@ fn claude_usage_limit_takes_the_structured_reset_time() {
     assert_eq!(
         r.rate_limit,
         Some(ca_core::agent::limits::RateLimit {
-            resets_at: Some(1_764_359_100)
+            resets_at: Some(1_764_359_100),
+            scope: LimitScope::Account,
         })
     );
     // Only the result and the rate_limit_event count, never what the agent said.
@@ -221,7 +223,10 @@ fn amp_errors_carry_their_text() {
     );
     assert_eq!(
         r.rate_limit,
-        Some(ca_core::agent::limits::RateLimit { resets_at: None })
+        Some(ca_core::agent::limits::RateLimit {
+            resets_at: None,
+            scope: LimitScope::Run,
+        })
     );
 }
 
@@ -244,4 +249,49 @@ fn cursor_reports_a_usage_limit_only_when_the_stream_ends() {
     let tail = ["Error: You've hit your usage limit for Auto".to_string()];
     assert!(quiet.finish(&tail).unwrap().rate_limit.is_some());
     assert!(CursorParser::default().finish(&["boom".into()]).is_none());
+}
+
+fn result_of(parser: &mut StreamJson, lines: &[&str]) -> ResultInfo {
+    let mut result = None;
+    for line in lines {
+        for p in parser.parse(line) {
+            if let Parsed::Result(r) = p {
+                result = Some(r);
+            }
+        }
+    }
+    result.unwrap()
+}
+
+#[test]
+fn an_earlier_refusal_does_not_make_a_later_error_a_limit() {
+    let rejected = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1764359100,"rateLimitType":"five_hour"}}"#;
+    let allowed = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1764359100}}"#;
+    let max_turns = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Reached the maximum number of turns"}"#;
+    let api_500 = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":500,"result":"API Error: 500"}"#;
+    // Refused, then allowed again (a fallback model, overage), then another error.
+    let r = result_of(&mut StreamJson::default(), &[rejected, allowed, max_turns]);
+    assert_eq!(r.rate_limit, None);
+    // Still refused, but the result is not a limit.
+    let r = result_of(&mut StreamJson::default(), &[rejected, api_500]);
+    assert_eq!(r.rate_limit, None);
+    // A weekly Opus limit holds back Opus only.
+    let opus = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1764359100,"rateLimitType":"seven_day_opus"}}"#;
+    let limit = r#"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your Opus limit · resets Mon 12am"}"#;
+    let r = result_of(&mut StreamJson::default(), &[opus, limit]);
+    assert_eq!(
+        r.rate_limit.unwrap().scope,
+        LimitScope::Model(Some("opus".into()))
+    );
+    // A plain 429 holds back only this run.
+    let busy = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: 429 Too Many Requests"}"#;
+    let r = result_of(&mut StreamJson::default(), &[busy]);
+    assert_eq!(r.rate_limit.unwrap().scope, LimitScope::Run);
+}
+
+#[test]
+fn a_blank_amp_result_does_not_hide_its_error() {
+    let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"","error":"Rate limit exceeded"}"#;
+    let r = result_of(&mut StreamJson::amp(), &[line]);
+    assert_eq!(r.text.as_deref(), Some("Rate limit exceeded"));
 }
