@@ -4,6 +4,24 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 3.1.2
+
+Faster, smoother updates and a new logo. If you have an earlier 3.x installed, it offers this update when it starts.
+
+### New
+
+- **A new logo**: the same idea, an "A" drawn as a state machine, redrawn as vector art, with the start and the finished step in amber.
+- **Settings shows "Checking for updates…"** while the app looks for a new version, including the check a few seconds after launch.
+
+### Fixed
+
+- **An update check or download no longer stalls for over a minute on a network where one of GitHub's download servers does not answer.** Each address now gets a few seconds before the next is tried (it used to wait for the system's TCP timeout, about 75 s on macOS), a transfer that stops receiving gives up after 30 s, and a failed download is tried again up to twice.
+- **On macOS the updated app keeps its Dock icon.** The restart after an update used to start the new version while the old one was still running, so the Dock showed it as a second icon. The new version now starts once the old one has quit, as if you clicked its icon. The fix is in 3.1.2, so the restart *into* 3.1.2 may still show the second icon once.
+- **The update panel's bar** bounces from side to side while the download is starting (0%), then shows the progress once it moves.
+- Releases are titled with the plain version ("3.1.2").
+
+---
+
 ## 3.1.1
 
 Update progress. If you have 3.1.0 or 3.0.1 installed, it offers this update when it starts.
