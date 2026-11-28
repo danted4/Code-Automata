@@ -98,7 +98,8 @@ fn offered(state: &AppState) -> Vec<(Provider, &'static str)> {
         .iter()
         .map(|p| (*p, ca_core::agent::provider_label(*p)))
         .collect();
-    if state.config.allow_mock {
+    // A recorded demo shows the production list; the mock plays one of them.
+    if state.config.allow_mock && state.config.bins.stand_in().is_none() {
         offered.push((Provider::Mock, "Mock (tests)"));
     }
     offered

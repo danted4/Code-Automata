@@ -1697,3 +1697,30 @@ async fn the_project_memory_can_be_read_and_edited() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_demo_shows_the_production_agents_and_the_mock_plays_one() {
+    let bins = Binaries::from_env()
+        .with_override(Provider::Mock, mock_agent())
+        .with_stand_in(Provider::Claude);
+    let h = Harness::with_bins(true, bins);
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    let list = h.ok("GET", "/api/providers", p, None).await;
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["provider"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["claude", "codex", "gemini", "cursor", "amp"]);
+    assert_eq!(list[0]["preflight"]["loggedIn"], true);
+    // A Claude Code task runs on the mock's scenario.
+    let mut claude = h.agent(1, vec![]);
+    claude["provider"] = json!("claude");
+    let id = h.create(p, "Played", claude, false).await;
+    h.wait_for(p, &id, "in human review", |t| {
+        phase(t) == "human_review" && t["run"].is_null()
+    })
+    .await;
+}

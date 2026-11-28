@@ -237,6 +237,9 @@ pub struct Binaries {
     /// `home` (`NVM_DIR`, `NVM_HOME`): read from the real environment only by
     /// [`Binaries::from_login_shell`], so tests never see the machine's own.
     node_roots: Vec<PathBuf>,
+    /// For a recorded demo only (`ca-server --demo-as`): a CLI whose tasks the scripted mock
+    /// agent plays, so the app shows its production choices. Never set by the desktop app.
+    stand_in: Option<Provider>,
     chosen: ChosenPaths,
     overrides: HashMap<Provider, PathBuf>,
     tools: HashMap<String, PathBuf>,
@@ -389,6 +392,17 @@ impl Binaries {
             node_roots: node_roots_from_env(),
             ..Binaries::default()
         }
+    }
+
+    /// Have the mock agent play `provider`'s tasks (a recorded demo; see `stand_in`).
+    pub fn with_stand_in(mut self, provider: Provider) -> Self {
+        self.stand_in = Some(provider);
+        self
+    }
+
+    /// The CLI the mock agent plays, if any.
+    pub fn stand_in(&self) -> Option<Provider> {
+        self.stand_in
     }
 
     /// Use exactly this file for `provider` (from user settings, or a test's mock binary).

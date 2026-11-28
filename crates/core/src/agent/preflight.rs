@@ -57,6 +57,12 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
         logged_in: None,
         problem: None,
     };
+    // A recorded demo: the CLI the mock agent plays is ready, as it would be on a set-up machine.
+    if bins.stand_in() == Some(provider) {
+        report.binary = Some(PathBuf::from(super::env::binary_name(provider)));
+        report.logged_in = Some(true);
+        return report;
+    }
     if provider != Provider::Mock {
         report.chosen = bins.chosen_paths().remove(&provider);
     }

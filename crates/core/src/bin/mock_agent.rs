@@ -13,7 +13,8 @@
 //!   "steps": [...], "resumeSteps": [...] }
 //! ```
 //!
-//! The first rule whose `whenPrompt` text appears in the prompt is played; with no match, the
+//! The first rule whose `whenPrompt` text appears in the prompt (or, for a list, every one of its
+//! texts) is played; with no match, the
 //! top-level `steps` are. A rule with `onceFile` plays only while that file does not exist and
 //! creates it, so a step can fail or hang the first time and behave on a retry. `resumeSteps`, when
 //! present, replaces `steps` for a `--resume` invocation. Each step is one of:
@@ -139,10 +140,18 @@ fn run() -> i32 {
         .and_then(Value::as_array)
         .and_then(|rules| {
             rules.iter().find(|r| {
-                let matches = r
-                    .get("whenPrompt")
-                    .and_then(Value::as_str)
-                    .is_some_and(|w| prompt.contains(w));
+                // `whenPrompt` is one text, or a list of texts that must all appear (one task's
+                // step: its title and the step's marker).
+                let matches = match r.get("whenPrompt") {
+                    Some(Value::String(w)) => prompt.contains(w.as_str()),
+                    Some(Value::Array(all)) => {
+                        !all.is_empty()
+                            && all
+                                .iter()
+                                .all(|w| w.as_str().is_some_and(|w| prompt.contains(w)))
+                    }
+                    _ => false,
+                };
                 let once = r.get("onceFile").and_then(Value::as_str);
                 matches && once.is_none_or(|f| !std::path::Path::new(f).exists())
             })

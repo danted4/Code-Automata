@@ -346,6 +346,13 @@ pub fn command_for(
     req: &RunRequest,
     bins: &Binaries,
 ) -> Result<(CommandSpec, Box<dyn LineParser>)> {
+    // A recorded demo: the mock agent plays this CLI's tasks.
+    if bins.stand_in() == Some(req.agent.provider) {
+        return Ok((
+            mock::command(req, bins)?,
+            Box::new(stream_json::StreamJson::default()),
+        ));
+    }
     match req.agent.provider {
         Provider::Claude => Ok((
             claude::command(req, bins)?,

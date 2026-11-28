@@ -14,6 +14,10 @@
 //! `--cli-paths` is the file that keeps the agent CLI files chosen in the UI (the app keeps it in
 //! its data folder). Without it, a choice lasts until the server stops.
 //!
+//! `--demo-as <cli>` (with `--allow-mock`) records a demo: the agent list is the production one,
+//! without the mock agent, and tasks on that CLI (`claude`, say) are played by the mock agent and
+//! the scenario. Never offered by the desktop app.
+//!
 //! `--wake-grace-ms N` shortens the wait after a usage limit's reset before a rate-limited task
 //! resumes (60 s by default), and the wall-clock tick with it; for the end-to-end tests.
 
@@ -31,6 +35,7 @@ struct Args {
     mock_scenario: Option<std::path::PathBuf>,
     cli_paths: Option<std::path::PathBuf>,
     wake_grace_ms: Option<u64>,
+    demo_as: Option<Provider>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -41,6 +46,7 @@ fn parse_args() -> Result<Args, String> {
         mock_scenario: None,
         cli_paths: None,
         wake_grace_ms: None,
+        demo_as: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -70,6 +76,13 @@ fn parse_args() -> Result<Args, String> {
                 let path = std::path::absolute(&value)
                     .map_err(|e| format!("--cli-paths {value:?}: {e}"))?;
                 args.cli_paths = Some(path);
+            }
+            "--demo-as" => {
+                let value = it.next().ok_or("--demo-as needs an agent name")?;
+                args.demo_as = Some(
+                    serde_json::from_value(serde_json::Value::String(value.clone()))
+                        .map_err(|_| format!("--demo-as: {value:?} is not an agent"))?,
+                );
             }
             "--wake-grace-ms" => {
                 let value = it.next().ok_or("--wake-grace-ms needs a number")?;
@@ -138,6 +151,12 @@ async fn run(args: Args) -> Result<(), String> {
             })
             .ok_or("--allow-mock: no mock-agent found; run `cargo build` or set CODE_AUTOMATA_MOCK_AGENT")?;
         bins = bins.with_override(Provider::Mock, mock);
+    }
+    if let Some(provider) = args.demo_as {
+        if !args.allow_mock {
+            return Err("--demo-as needs --allow-mock".into());
+        }
+        bins = bins.with_stand_in(provider);
     }
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", args.port))

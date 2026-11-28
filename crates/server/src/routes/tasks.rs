@@ -59,7 +59,9 @@ pub async fn create(
 /// A mock agent with no scenario plays the server's `--mock-scenario`, if it has one (the UI has
 /// no field for a scenario). Used on create and on edit.
 fn default_mock_scenario(state: &AppState, provider: Provider, options: &mut Map<String, Value>) {
-    if provider == Provider::Mock
+    let played_by_mock =
+        provider == Provider::Mock || state.config.bins.stand_in() == Some(provider);
+    if played_by_mock
         && !options.contains_key("scenario")
         && let Some(scenario) = &state.config.mock_scenario
     {
@@ -87,7 +89,7 @@ pub async fn patch(
                 continue;
             };
             check_provider(&state, provider)?;
-            if provider == Provider::Mock {
+            if provider == Provider::Mock || state.config.bins.stand_in() == Some(provider) {
                 let options = agent
                     .entry("options")
                     .or_insert_with(|| Value::Object(Map::new()));

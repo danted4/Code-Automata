@@ -540,3 +540,19 @@ async fn preflight_reads_codex_and_gemini_logins() {
     .unwrap();
     assert_eq!(check(Provider::Gemini, &bins).await.logged_in, None);
 }
+
+#[test]
+fn a_demo_stand_in_runs_the_mock_for_that_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let bins = fake_bins(dir.path()).with_stand_in(Provider::Claude);
+    let mut agent = AgentConfig::new(Provider::Claude);
+    agent.options.insert("scenario".into(), json!("/s.json"));
+    let spec = command_for(&request(agent), &bins).unwrap().0;
+    assert!(spec.program.ends_with("mock-agent"));
+    assert_eq!(value_after(&spec, "--scenario"), Some("/s.json"));
+    // Other CLIs are untouched.
+    let codex = command_for(&request(AgentConfig::new(Provider::Codex)), &bins)
+        .unwrap()
+        .0;
+    assert!(codex.program.ends_with("codex"));
+}

@@ -101,8 +101,8 @@ export async function startPreview() {
   return { stop: () => stopChild(child) };
 }
 
-/** A `ca-server` with the mock agent playing `rules` for every mock task. */
-export async function startServer(rules) {
+/** A `ca-server` with the mock agent playing `rules` for every mock task; `extraArgs` go last. */
+export async function startServer(rules, extraArgs = []) {
   const dir = mkdtempSync(path.join(tmpdir(), 'ca-e2e-scenario-'));
   const scenario = path.join(dir, 'scenario.json');
   writeFileSync(
@@ -127,6 +127,7 @@ export async function startServer(rules) {
       // A rate-limited task resumes moments after its reset.
       '--wake-grace-ms',
       '200',
+      ...extraArgs,
     ],
     { env: { ...process.env, CODE_AUTOMATA_MOCK_AGENT: path.join(BIN, `mock-agent${EXE}`) } }
   );

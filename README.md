@@ -58,16 +58,20 @@ Code-Automata runs AI coding agents (Claude Code, Codex, Cursor, Amp, and Gemini
 
 ## Screenshots
 
+The demo project is Code-Automata itself, building this release's features.
+
 | | |
 |---|---|
 | ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![Reviewing the plan](docs/images/screenshots/plan-review.png) |
 | A new task: an agent and model per phase | Reviewing the plan before development |
+| ![Two tasks waiting on a usage limit](docs/images/screenshots/rate-limited.png) | ![The board](docs/images/screenshots/board.png) |
+| Claude Code hit its usage limit: every task on it waits for the reset, then resumes | Four tasks across the phases |
 | ![A task's details](docs/images/screenshots/task-details.png) | ![Human review](docs/images/screenshots/human-review.png) |
-| A task's subtasks, changes and runs | Human review: what was built, checks, QA, pull request |
-| ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) | ![The board](docs/images/screenshots/board.png) |
-| Settings: MCP servers for agents and project memory | The board |
+| A task's agents per phase and subtasks | Human review: what was built, checks, QA, pull request |
+| ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) | |
+| Settings: MCP servers for agents and project memory | |
 
-The screenshots and the video come from a scripted run of the app with its test agent (`yarn demo`).
+The screenshots and the video are a scripted run of the app (`yarn demo`): the agent's answers are replayed, not generated, so no model is called.
 
 ## Things to know
 
@@ -76,7 +80,7 @@ The screenshots and the video come from a scripted run of the app with its test 
 - A project is a git repository's root, or a **workspace**: a folder whose every (non-hidden) folder is a git repository. In a workspace one task can change several repositories, each in its own worktree, and gets one pull request per repository it changed. A folder inside a repository is not opened as that repository; open its root.
 - Usage limits: a task whose CLI hit its subscription's limit waits ("Rate-limited, resumes at …") and starts again on its own; other tasks on that CLI wait with it.
 - Agents get no MCP servers unless you list them under Settings → MCP servers for agents (development and QA runs only). What agents learn about a project is kept in `.code-automata/memory.md` and given to later tasks; edit or turn it off in Settings.
-- Gemini (experimental): Google ended Gemini CLI's free sign-in for individuals; from the app it works with Vertex AI or a company Code Assist plan. Codex needs a ChatGPT plan. Runs leave out every CLI's API-key variable, so your subscriptions are used.
+- Gemini (experimental): Google ended Gemini CLI's free sign-in for individuals; from the app it works with Vertex AI or a company Code Assist plan. Codex needs a ChatGPT plan and has not yet been run live here; its support is built from its documentation and source. Runs leave out every CLI's API-key variable, so your subscriptions are used.
 - The installers are not code-signed (see Install).
 
 ## Repository layout
