@@ -6,7 +6,7 @@
   </h2>
 </div>
 
-<a href="https://youtu.be/jNYMC-HXDNA" target="_blank" rel="noopener noreferrer">
+<a href="https://youtu.be/ZijFk_1N7qY" target="_blank" rel="noopener noreferrer">
   <img src="./docs/images/ca.png" alt="The Code-Automata board: tasks in Planning, In Progress and Human Review" />
 </a>
 
