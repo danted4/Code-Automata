@@ -238,6 +238,32 @@ impl Harness {
 const PLAN: &str =
     "# Plan\n\n## Overview\nDo it.\n\n## Implementation Steps\n1. one\n2. two\n\nPLAN-MARKER";
 
+/// Write an executable script that the test then runs. Not `std::fs::write`: a child forked by
+/// another test thread while this process holds the file open for writing keeps that descriptor
+/// until it execs, and running the script meanwhile fails with ETXTBSY (Linux). A child `sh`
+/// writes it instead (as `write_script` in core's `tests/common`).
+#[cfg(unix)]
+fn write_script(path: &Path, contents: &str) {
+    use std::io::Write;
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(contents.as_bytes())
+        .unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "writing {}",
+        path.display()
+    );
+}
+
 fn structured(v: Value) -> Value {
     json!({ "result": { "text": "done", "structured": v } })
 }
@@ -1105,7 +1131,6 @@ async fn settings_round_trip_with_the_default_prompts() {
 #[tokio::test(flavor = "multi_thread")]
 #[cfg(unix)] // the fake CLI is a shell script
 async fn an_agent_cli_file_can_be_chosen_and_cleared() {
-    use std::os::unix::fs::PermissionsExt;
     let h = Harness::new(true);
     let send = |method: &str, uri: &str, body: Option<Value>| {
         let req = h.request(method, uri, None, body);
@@ -1124,12 +1149,10 @@ async fn an_agent_cli_file_can_be_chosen_and_cleared() {
     assert!(list[0]["path"].is_null());
 
     let cli = h.files.path().join("my-amp");
-    std::fs::write(
+    write_script(
         &cli,
         "#!/bin/sh\ncase \"$1\" in --version) echo 9.9.9 ;; *) echo 'Signed in as x' ;; esac\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let (status, info) = send(
         "PUT",
         "/api/cli-paths/amp",

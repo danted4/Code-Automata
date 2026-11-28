@@ -3,7 +3,8 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used)]
 
-use std::os::unix::fs::PermissionsExt;
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use ca_core::Provider;
@@ -13,8 +14,7 @@ use ca_core::agent::preflight::check;
 
 fn script(path: &Path, body: &str) -> PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_script(path, &format!("#!/bin/sh\n{body}\n"));
     path.to_path_buf()
 }
 

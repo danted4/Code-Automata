@@ -4,7 +4,8 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used)]
 
-use std::os::unix::fs::PermissionsExt;
+mod common;
+
 use std::process::Stdio;
 
 #[tokio::test]
@@ -12,8 +13,7 @@ async fn git_hooks_run_with_the_child_path() {
     // A tool only on the child PATH, like yarn under nvm.
     let tools = tempfile::tempdir().unwrap();
     let tool = tools.path().join("only-in-login-shell");
-    std::fs::write(&tool, "#!/bin/sh\necho hook-found-tool\n").unwrap();
-    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_script(&tool, "#!/bin/sh\necho hook-found-tool\n");
     let system = std::env::var_os("PATH").unwrap();
     let mut path = std::ffi::OsString::from(tools.path());
     path.push(":");
@@ -37,8 +37,7 @@ async fn git_hooks_run_with_the_child_path() {
             .success()
     );
     let hook = repo.path().join(".git/hooks/pre-commit");
-    std::fs::write(&hook, "#!/bin/sh\nonly-in-login-shell >&2\n").unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_script(&hook, "#!/bin/sh\nonly-in-login-shell >&2\n");
     std::fs::write(repo.path().join("a.txt"), "a").unwrap();
     assert!(git(&["add", "-A"]).await.unwrap().status.success());
     let out = git(&[

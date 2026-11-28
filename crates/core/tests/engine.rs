@@ -375,9 +375,9 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     let gh = env.path("gh");
     // Like the real gh: `pr view` finds nothing until `pr create` has made the PR.
     let made = env.path("pr-made");
-    std::fs::write(
+    common::write_script(
         &gh,
-        format!(
+        &format!(
             "#!/bin/sh\n\
              case \"$1 $2\" in\n\
              \"pr view\") if [ -f {made} ]; then echo https://github.com/example/repo/pull/7; else echo 'no pull requests found' >&2; exit 1; fi ;;\n\
@@ -389,12 +389,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
             args = env.path("gh-args").display(),
             edited = env.path("gh-edited").display()
         ),
-    )
-    .unwrap();
-    std::process::Command::new("chmod")
-        .args(["+x", gh.to_str().unwrap()])
-        .status()
-        .unwrap();
+    );
     let engine = Engine::open(env.project.clone(), env.bins().with_tool("gh", &gh))
         .await
         .unwrap();
@@ -429,11 +424,7 @@ async fn later_subtasks_get_the_plan_and_handoffs_and_checkpoints_squash_into_th
     // The repository's pre-push hook runs for the PR push.
     let hook_ran = env.path("pre-push-ran");
     let hook = env.repo.path.join(".git/hooks/pre-push");
-    std::fs::write(&hook, format!("#!/bin/sh\ntouch {}\n", hook_ran.display())).unwrap();
-    std::process::Command::new("chmod")
-        .args(["+x", hook.to_str().unwrap()])
-        .status()
-        .unwrap();
+    common::write_script(&hook, &format!("#!/bin/sh\ntouch {}\n", hook_ran.display()));
 
     let url = pr_url(&engine, &task.id).await;
     assert_eq!(url, "https://github.com/example/repo/pull/7");
@@ -539,21 +530,16 @@ async fn use_github(engine: &Engine) {
 fn fake_gh(env: &Env, create: &str) -> PathBuf {
     let gh = env.path("gh");
     let made = env.path("pr-made");
-    std::fs::write(
+    common::write_script(
         &gh,
-        format!(
+        &format!(
             "#!/bin/sh\ncase \"$1 $2\" in\n\
              \"pr view\") if [ -f {made} ]; then echo https://github.com/example/repo/pull/9; else exit 1; fi ;;\n\
              \"pr create\") touch {made}; {create} ;;\n\
              esac\n",
             made = made.display()
         ),
-    )
-    .unwrap();
-    std::process::Command::new("chmod")
-        .args(["+x", gh.to_str().unwrap()])
-        .status()
-        .unwrap();
+    );
     gh
 }
 
@@ -636,9 +622,9 @@ fn remote_says(env: &Env, lines: &str, push_options: bool) {
         git(&remote, &["config", "receive.advertisePushOptions", "true"]);
     }
     let hook = remote.join("hooks/pre-receive");
-    std::fs::write(
+    common::write_script(
         &hook,
-        format!(
+        &format!(
             "#!/bin/sh
              cat > /dev/null
              n=$(ls {dir} | grep -c '^options-')
@@ -650,12 +636,7 @@ fn remote_says(env: &Env, lines: &str, push_options: bool) {
 ",
             dir = env.files.path().display(),
         ),
-    )
-    .unwrap();
-    std::process::Command::new("chmod")
-        .args(["+x", hook.to_str().unwrap()])
-        .status()
-        .unwrap();
+    );
 }
 
 /// The push options of push `n`; empty when that push never reached the hook (a re-squash in

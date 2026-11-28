@@ -1,6 +1,8 @@
 //! Command lines each provider builds, checked as argument lists. No CLI is run.
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use ca_core::agent::{Binaries, CommandSpec, RunRequest, command_for};
@@ -232,13 +234,10 @@ fn amp_model_wins_over_mode() {
 #[cfg(unix)]
 fn fake_cli(dir: &Path, name: &str, version: &str, login: &str) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(
+    common::write_script(
         &path,
-        format!("#!/bin/sh\ncase \"$1\" in\n  --version) {version} ;;\n  *) {login} ;;\nesac\n"),
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        &format!("#!/bin/sh\ncase \"$1\" in\n  --version) {version} ;;\n  *) {login} ;;\nesac\n"),
+    );
     path
 }
 

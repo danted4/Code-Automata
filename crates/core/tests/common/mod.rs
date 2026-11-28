@@ -136,3 +136,31 @@ pub fn alive(pid: u32) -> bool {
         out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
     }
 }
+
+/// Write an executable script (a fake CLI, a git hook) that the test then runs.
+///
+/// Not `std::fs::write`: while this process holds the file open for writing, a child that another
+/// test thread forks inherits that descriptor until it execs, and running the script in that window
+/// fails with ETXTBSY ("text file busy", Linux). A child `sh` writes the file instead, so this
+/// process never holds it open, and nothing does once the call returns.
+#[cfg(unix)]
+pub fn write_script(path: &Path, contents: &str) {
+    use std::io::Write;
+    let mut child = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(contents.as_bytes())
+        .unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "writing {}",
+        path.display()
+    );
+}

@@ -275,12 +275,10 @@ async fn a_failing_repository_does_not_stop_the_others() {
     let web_remote = env.remote("web");
     // web's remote refuses every push.
     let hook = web_remote.join("hooks/pre-receive");
-    std::fs::write(&hook, "#!/bin/sh\necho refused >&2\nexit 1\n").unwrap();
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::write_script(&hook, "#!/bin/sh\necho refused >&2\nexit 1\n");
+    #[cfg(not(unix))]
+    std::fs::write(&hook, "#!/bin/sh\necho refused >&2\nexit 1\n").unwrap();
     let agent = env.agent(&[&["api/a.txt", "web/w.txt"]], &[]);
     let engine = env.engine().await;
     let task = engine
@@ -462,9 +460,9 @@ async fn github_pull_requests_list_each_other() {
     // A fake gh: each repository's PR is named after its folder; edits are logged.
     let gh = env.path("gh");
     let log = env.path("gh-edits");
-    std::fs::write(
+    common::write_script(
         &gh,
-        format!(
+        &format!(
             "#!/bin/sh\nrepo=$(basename \"$PWD\")\ncase \"$1 $2\" in\n\
              \"pr view\") exit 1 ;;\n\
              \"pr create\") echo https://github.com/o/$repo/pull/1 ;;\n\
@@ -472,10 +470,7 @@ async fn github_pull_requests_list_each_other() {
              esac\n",
             log = log.display()
         ),
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let agent = env.agent(&[&["api/a.txt", "web/w.txt"]], &[]);
     let bins = Binaries::from_env()
         .with_override(Provider::Mock, env!("CARGO_BIN_EXE_mock-agent"))
