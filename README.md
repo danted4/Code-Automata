@@ -12,6 +12,17 @@
 
 _"Ever since the first MVP was shipped, Code-Automata™ has started modifying its **own code**..."_ — It felt weird at first, but it is fun to watch it ship its own features one by one to production. That's the power of a clean workflow design!
 
+| | |
+|---|---|
+| ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![The planning agent's questions](docs/images/screenshots/questions.png) |
+| A new task: an agent and model per phase, plan review on | Planning asks before it plans |
+| ![Reviewing the plan](docs/images/screenshots/plan-review.png) | ![The task's subtasks](docs/images/screenshots/task-details.png) |
+| The plan to approve, edit or send back | Seven subtasks, development under way |
+| ![An agent's run, live](docs/images/screenshots/agent-run.png) | ![The board](docs/images/screenshots/board.png) |
+| A development run as it happens: searches, edits, tests | Four tasks across the phases |
+| ![Human review](docs/images/screenshots/human-review.png) | ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) |
+| Human review: what was built, checks, QA, pull request | Settings: MCP servers for agents, and what agents learned |
+
 ---
 
 > [!IMPORTANT]
@@ -55,21 +66,6 @@ Code-Automata runs AI coding agents (Claude Code, Codex, Cursor, Amp, and Gemini
 - **Human Review:** open the worktree in your editor, then create a pull request; the checkpoints are squashed into one commit.
 
 3.0 keeps every run's position on disk. Closing the app, a crash or Pause leaves the task where it was. Resume continues the same subtask, using the agent's own session and the partial work.
-
-## Screenshots
-
-These are from a scripted demo (`yarn demo`): a test agent stands in for Claude Code and replays prepared answers, so no model is called. The project is Code-Automata's own 3.1.2 source, and the files the agent writes are 3.2's real ones.
-
-| | |
-|---|---|
-| ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![The planning agent's questions](docs/images/screenshots/questions.png) |
-| A new task: an agent and model per phase, plan review on | Planning asks before it plans |
-| ![Reviewing the plan](docs/images/screenshots/plan-review.png) | ![The task's subtasks](docs/images/screenshots/task-details.png) |
-| The plan to approve, edit or send back | Seven subtasks, development under way |
-| ![An agent's run, live](docs/images/screenshots/agent-run.png) | ![The board](docs/images/screenshots/board.png) |
-| A development run as it happens: searches, edits, tests | Four tasks across the phases |
-| ![Human review](docs/images/screenshots/human-review.png) | ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) |
-| Human review: what was built, checks, QA, pull request | Settings: MCP servers for agents, and what agents learned |
 
 ## Things to know
 
