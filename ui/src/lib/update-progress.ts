@@ -23,9 +23,12 @@ export function updateProgressView(event: UpdateEvent | null): UpdateProgressVie
   if (!event) return null;
   switch (event.phase) {
     case 'downloading': {
-      const { version, downloaded, total } = event;
+      const { version, downloaded, total, attempt } = event;
       const title = `Downloading Code-Automata ${version}`;
-      if (downloaded <= 0) return { title, detail: 'Connecting…', percent: null };
+      if (downloaded <= 0) {
+        const detail = attempt > 1 ? 'The download stopped; trying again…' : 'Connecting…';
+        return { title, detail, percent: null };
+      }
       if (total === null || total <= 0) {
         return { title, detail: `${formatBytes(downloaded)} downloaded`, percent: null };
       }

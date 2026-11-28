@@ -123,8 +123,11 @@
   width: 20%;
   animation: update-bar-bounce 0.8s cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
 }
+/* No motion: a still, faded bar across the whole track. */
 @media (prefers-reduced-motion: reduce) {
   .update-bar-indeterminate {
-    animation-duration: 3s;
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
   }
 }

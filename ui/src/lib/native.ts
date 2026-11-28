@@ -30,7 +30,14 @@ export type UpdateCheck = 'up_to_date' | 'offered' | 'busy' | 'unavailable';
 export type UpdateEvent =
   | { phase: 'checking' }
   | { phase: 'idle' }
-  | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
+  | {
+      phase: 'downloading';
+      version: string;
+      downloaded: number;
+      total: number | null;
+      /** From 1; a failed attempt starts again from zero. */
+      attempt: number;
+    }
   | { phase: 'installing'; version: string }
   | { phase: 'failed'; version: string }
   | { phase: 'cancelled'; version: string };

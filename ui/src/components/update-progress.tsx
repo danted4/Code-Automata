@@ -16,8 +16,9 @@ export function UpdateProgress() {
   const event = useUpdateStore((s) => s.event);
 
   useEffect(() => {
-    native?.watchUpdates(useUpdateStore.getState().set).catch(() => {
-      // An older app without the command: no progress, as before.
+    native?.watchUpdates(useUpdateStore.getState().set).catch((e: unknown) => {
+      // Without it the panel and Settings never hear about updates; the update itself still works.
+      console.warn('Update progress is unavailable:', e);
     });
   }, []);
 

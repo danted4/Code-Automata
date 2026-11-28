@@ -9,6 +9,7 @@ describe('updateProgressView', () => {
         version: '3.1.1',
         downloaded: 6.5 * 1024 * 1024,
         total: 15 * 1024 * 1024,
+        attempt: 1,
       })
     ).toEqual({
       title: 'Downloading Code-Automata 3.1.1',
@@ -20,7 +21,13 @@ describe('updateProgressView', () => {
   it('pulses until the download reaches 1%, and never passes 100', () => {
     for (const total of [null, 15 * 1024 * 1024]) {
       expect(
-        updateProgressView({ phase: 'downloading', version: '3.1.1', downloaded: 0, total })
+        updateProgressView({
+          phase: 'downloading',
+          version: '3.1.1',
+          downloaded: 0,
+          total,
+          attempt: 1,
+        })
       ).toEqual({ title: 'Downloading Code-Automata 3.1.1', detail: 'Connecting…', percent: null });
     }
     expect(
@@ -29,6 +36,7 @@ describe('updateProgressView', () => {
         version: '3.1.1',
         downloaded: 100 * 1024,
         total: 15 * 1024 * 1024,
+        attempt: 1,
       })
     ).toEqual({
       title: 'Downloading Code-Automata 3.1.1',
@@ -41,12 +49,30 @@ describe('updateProgressView', () => {
         version: '3.1.1',
         downloaded: 160 * 1024,
         total: 15 * 1024 * 1024,
+        attempt: 1,
       })?.percent
     ).toBe(1);
     expect(
-      updateProgressView({ phase: 'downloading', version: '3.1.1', downloaded: 120, total: 100 })
-        ?.percent
+      updateProgressView({
+        phase: 'downloading',
+        version: '3.1.1',
+        downloaded: 120,
+        total: 100,
+        attempt: 1,
+      })?.percent
     ).toBe(100);
+  });
+
+  it('says when a failed download is tried again', () => {
+    expect(
+      updateProgressView({
+        phase: 'downloading',
+        version: '3.1.2',
+        downloaded: 0,
+        total: null,
+        attempt: 2,
+      })?.detail
+    ).toBe('The download stopped; trying again…');
   });
 
   it('pulses when the size is unknown', () => {
@@ -55,6 +81,7 @@ describe('updateProgressView', () => {
       version: '3.1.1',
       downloaded: 2048,
       total: null,
+      attempt: 1,
     });
     expect(view?.detail).toBe('2 KB downloaded');
     expect(view?.percent).toBeNull();

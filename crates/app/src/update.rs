@@ -37,11 +37,17 @@ const FIRST_CHECK: Duration = Duration::from_secs(5);
 /// Connecting gives up after this, shared among the host's addresses. GitHub's download host has
 /// four; one that never answers would otherwise cost the system's TCP timeout (about 75 s on
 /// macOS) before the next is tried.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// reqwest counts DNS, proxy and TLS in it too, and splits it among the addresses (5 s each of
+/// four), so it is generous enough for a slow proxy or several dead addresses.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// A transfer that receives nothing for this long gives up (a download is then retried).
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
-/// The whole check, or one download attempt (about 15 MB).
+/// One request: the check, or one download attempt.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(900);
+/// The whole download, every attempt included (about 15 MB); the panel cannot be closed meanwhile.
+const DOWNLOAD_DEADLINE: Duration = Duration::from_secs(900);
+/// A failed download is not tried again with less than this left before the deadline.
+const MIN_RETRY_TIME: Duration = Duration::from_secs(60);
 const CHECK_ATTEMPTS: u32 = 2;
 const DOWNLOAD_ATTEMPTS: u32 = 3;
 
@@ -63,11 +69,13 @@ pub enum UpdateEvent {
     Checking,
     /// Not checking, downloading or installing: the check ended or the update was declined.
     Idle,
-    /// `total` is None when the server does not say how big the file is.
+    /// `total` is None when the server does not say how big the file is; `attempt` counts from 1
+    /// (a failed attempt starts again from zero).
     Downloading {
         version: String,
         downloaded: u64,
         total: Option<u64>,
+        attempt: u32,
     },
     /// Downloaded and verified; the app stops and restarts (on Windows the installer takes over).
     Installing { version: String },
@@ -229,16 +237,14 @@ async fn check(app: &AppHandle, manual: bool) -> Result<CheckResult, String> {
     let _done = Done;
     notify(app, UpdateEvent::Checking);
     let found = find(app).await;
-    if !matches!(found, Ok(Some(_))) {
-        notify(app, UpdateEvent::Idle);
-    }
+    // The check is over, whatever it found; a question that follows is the app's own dialog.
+    notify(app, UpdateEvent::Idle);
     match found.map_err(|e| e.to_string())? {
         Some(update) if !manual && failed_before(app).as_deref() == Some(&update.version) => {
             log::info!(
                 "update {} failed to install before; not offered",
                 update.version
             );
-            notify(app, UpdateEvent::Idle);
             Ok(CheckResult::UpToDate)
         }
         Some(update) => {
@@ -264,21 +270,38 @@ fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater
         .build()
 }
 
-/// A network failure is worth another try; a bad signature or manifest is not.
+/// Worth another try: a connection that failed or stalled, a transfer that broke off, or a server
+/// error (5xx) or rate limit (429). Not a missing file (404), a refused request, a bad signature
+/// or manifest: those fail the same way again.
 fn retryable(e: &tauri_plugin_updater::Error) -> bool {
-    matches!(
-        e,
-        tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_)
-    )
+    use tauri_plugin_updater::Error;
+    match e {
+        Error::Reqwest(e) => e.is_connect() || e.is_timeout() || e.is_body() || e.is_request(),
+        // The plugin's error for a download answered with a non-success status.
+        Error::Network(message) => status_in(message).is_some_and(|s| s >= 500 || s == 429),
+        _ => false,
+    }
 }
 
-/// The newest version, if it is newer; a network failure is tried once more.
+/// The HTTP status in the plugin's "… failed with status: 503 Service Unavailable".
+fn status_in(message: &str) -> Option<u16> {
+    let (_, rest) = message.rsplit_once("status: ")?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
+/// The newest version, if it is newer; a failure worth it is tried once more. That includes "no
+/// release found", which is also what the plugin says when `latest.json` was answered with an
+/// error status (a 502 from GitHub's CDN, say): one more look costs two seconds.
 async fn find(app: &AppHandle) -> tauri_plugin_updater::Result<Option<Update>> {
     let updater = updater(app)?;
     let mut attempt = 1;
     loop {
         match updater.check().await {
-            Err(e) if attempt < CHECK_ATTEMPTS && retryable(&e) => {
+            Err(e)
+                if attempt < CHECK_ATTEMPTS
+                    && (retryable(&e)
+                        || matches!(e, tauri_plugin_updater::Error::ReleaseNotFound)) =>
+            {
                 log::warn!("update check failed ({e}); trying again");
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 attempt += 1;
@@ -305,7 +328,6 @@ async fn offer(app: &AppHandle, update: Update) {
         update.version, update.current_version
     );
     if !ask(app, message).await {
-        notify(app, UpdateEvent::Idle);
         return;
     }
     // Quitting stays possible during the download; it simply cancels the update.
@@ -354,21 +376,21 @@ async fn offer(app: &AppHandle, update: Update) {
     }
 }
 
-/// Download the update, showing its progress; a network failure is tried again (from the start).
-/// None when it failed, after saying so.
+/// Download the update, showing its progress. A failure worth it is tried again from the start,
+/// within one deadline for the whole download. None when it failed, after saying so.
 async fn download(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
     let version = update.version.clone();
+    let deadline = Instant::now() + DOWNLOAD_DEADLINE;
+    let starting = |attempt: u32| UpdateEvent::Downloading {
+        version: version.clone(),
+        downloaded: 0,
+        total: None,
+        attempt,
+    };
     let mut attempt = 1;
+    notify(app, starting(attempt));
     loop {
         log::info!("downloading update {version} (attempt {attempt})");
-        notify(
-            app,
-            UpdateEvent::Downloading {
-                version: version.clone(),
-                downloaded: 0,
-                total: None,
-            },
-        );
         let started = Instant::now();
         let mut progress = Progress::default();
         let on_chunk = |len: usize, total: Option<u64>| {
@@ -379,11 +401,24 @@ async fn download(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
                         version: version.clone(),
                         downloaded: progress.downloaded,
                         total: progress.total,
+                        attempt,
                     },
                 );
             }
         };
-        match update.download(on_chunk, || {}).await {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let result = match tokio::time::timeout(left, update.download(on_chunk, || {})).await {
+            Ok(Ok(bytes)) => Ok(bytes),
+            Ok(Err(e)) => Err((retryable(&e), e.to_string())),
+            Err(_) => Err((
+                false,
+                format!(
+                    "it took longer than {} minutes",
+                    DOWNLOAD_DEADLINE.as_secs() / 60
+                ),
+            )),
+        };
+        match result {
             Ok(bytes) => {
                 log::info!(
                     "downloaded update {version}: {} bytes in {:.1} s",
@@ -392,12 +427,17 @@ async fn download(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
                 );
                 return Some(bytes);
             }
-            Err(e) if attempt < DOWNLOAD_ATTEMPTS && retryable(&e) => {
+            Err((true, e))
+                if attempt < DOWNLOAD_ATTEMPTS
+                    && deadline.saturating_duration_since(Instant::now()) > MIN_RETRY_TIME =>
+            {
                 log::warn!("downloading update {version} failed ({e}); trying again");
-                tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt))).await;
                 attempt += 1;
+                // Back to "connecting", saying it is another try, while it waits.
+                notify(app, starting(attempt));
+                tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt - 1))).await;
             }
-            Err(e) => {
+            Err((_, e)) => {
                 notify(app, UpdateEvent::Failed { version });
                 error(
                     app,
@@ -414,8 +454,9 @@ async fn download(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
 ///
 /// On macOS Tauri's restart runs `open -n` while this process still runs, and the Dock gives that
 /// second instance an icon of its own, which stays beside the kept one after this one exits. So a
-/// detached `sh` waits for this process to exit and then opens the bundle normally, as a click on
-/// its Dock icon would. Elsewhere, and if that cannot start, Tauri's restart.
+/// detached `sh` ([`RELAUNCH_SCRIPT`]) waits for this process to exit and then opens the bundle
+/// normally, as a click on its Dock icon would, checking that it started. Elsewhere, and if the
+/// script cannot start, Tauri's restart.
 fn relaunch(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     if let Some(bundle) = std::env::current_exe()
@@ -423,18 +464,21 @@ fn relaunch(app: &AppHandle) {
         .and_then(|exe| app_bundle(&exe))
     {
         use std::os::unix::process::CommandExt;
+        let log = app
+            .path()
+            .app_log_dir()
+            .map(|d| d.join("relaunch.log"))
+            .unwrap_or_else(|_| PathBuf::from("/dev/null"));
         let mut cmd = ca_core::proc::command("/bin/sh").into_std();
-        cmd.args([
-            "-c",
-            "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"",
-            "sh",
-        ])
-        .arg(std::process::id().to_string())
-        .arg(&bundle)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0);
+        cmd.args(["-c", RELAUNCH_SCRIPT, "sh"])
+            .arg(std::process::id().to_string())
+            .arg(&bundle)
+            .args(["/usr/bin/open", "150", RUNNING_CHECK, "1"])
+            .arg(&log)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
         match cmd.spawn() {
             Ok(_) => {
                 log::info!("restarting {} once this process exits", bundle.display());
@@ -446,6 +490,42 @@ fn relaunch(app: &AppHandle) {
     }
     app.restart();
 }
+
+/// Restart the app once process `$1` has exited. `$2` the bundle, `$3` the `open` command, `$4`
+/// how long to wait for the exit (in 0.2 s ticks), `$5` a shell test that the bundle's app runs,
+/// `$6` seconds to give each open, `$7` a log file for the outcome.
+///
+/// If the exit takes too long, or the opened app does not show up after five tries (`open` may just
+/// activate an instance LaunchServices still lists), it falls back to `open -n`: a second Dock
+/// icon beats no app.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const RELAUNCH_SCRIPT: &str = r#"pid=$1 bundle=$2 open=$3 ticks=$4 running=$5 settle=$6 log=$7
+say() { printf '%s %s\n' "$(/bin/date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$log"; }
+i=0
+while kill -0 "$pid" 2>/dev/null; do
+  if [ "$i" -ge "$ticks" ]; then
+    say "process $pid still running; opening a new instance"
+    exec "$open" -n "$bundle"
+  fi
+  sleep 0.2
+  i=$((i + 1))
+done
+for try in 1 2 3 4 5; do
+  "$open" "$bundle"
+  sleep "$settle"
+  if eval "$running"; then
+    say "started (open $try)"
+    exit 0
+  fi
+done
+say "not running after 5 opens; opening a new instance"
+exec "$open" -n "$bundle"
+"#;
+
+/// [`RELAUNCH_SCRIPT`]'s test that the app runs: a process whose executable is in the bundle
+/// (`comm`, so the `grep` itself never matches).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const RUNNING_CHECK: &str = r#"/bin/ps -axo comm= | /usr/bin/grep -qF "$bundle/Contents/MacOS/""#;
 
 /// The `.app` bundle an executable is in (`X.app/Contents/MacOS/x`).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -553,6 +633,7 @@ mod tests {
             version: "3.1.1".into(),
             downloaded: 5,
             total: Some(10),
+            attempt: 1,
         };
         assert_eq!(watch.record(&downloading), None, "no page yet");
         assert_eq!(watch.watch("page"), Some(downloading));
@@ -572,6 +653,105 @@ mod tests {
         assert!(!p.chunk(10, None, start + Duration::from_millis(10)));
         assert!(p.chunk(10, None, start + Duration::from_millis(200)));
         assert_eq!((p.downloaded, p.total), (30, None));
+    }
+
+    #[test]
+    fn only_failures_worth_it_are_tried_again() {
+        use tauri_plugin_updater::Error;
+        let status = |s: &str| Error::Network(format!("Download request failed with status: {s}"));
+        assert!(retryable(&status("503 Service Unavailable")));
+        assert!(retryable(&status("429 Too Many Requests")));
+        assert!(!retryable(&status("404 Not Found")));
+        assert!(!retryable(&status("403 Forbidden")));
+        assert!(!retryable(&Error::Network("something else".into())));
+        assert!(!retryable(&Error::ReleaseNotFound));
+        assert_eq!(status_in("failed with status: 502 Bad Gateway"), Some(502));
+        assert_eq!(status_in("no status here"), None);
+    }
+
+    /// Runs [`RELAUNCH_SCRIPT`] with a fake `open` that logs its arguments and makes the app
+    /// "run" (a marker file) from its `starts_on`-th plain open; returns the opens it saw.
+    #[cfg(unix)]
+    fn relaunch_with(pid: u32, starts_on: Option<u32>, ticks: u32) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        let marker = dir.path().join("running");
+        let open = dir.path().join("open");
+        let starts = starts_on.map_or(String::new(), |n| {
+            format!(
+                "[ \"$1\" != -n ] && [ $(grep -vc '^-n' {calls}) -ge {n} ] && touch {marker}\n",
+                calls = calls.display(),
+                marker = marker.display()
+            )
+        });
+        std::fs::write(
+            &open,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> {calls}\n{starts}exit 0\n",
+                calls = calls.display()
+            ),
+        )
+        .unwrap();
+        let chmod = std::process::Command::new("chmod")
+            .arg("755")
+            .arg(&open)
+            .status()
+            .unwrap();
+        assert!(chmod.success());
+        let check = format!("test -f {}", marker.display());
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", RELAUNCH_SCRIPT, "sh", &pid.to_string(), "/Apps/X.app"])
+            .arg(&open)
+            .args([&ticks.to_string(), &check, "0.05"])
+            .arg(dir.path().join("relaunch.log"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(&calls)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn exited_pid() -> u32 {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn relaunch_opens_the_bundle_once_the_app_has_exited() {
+        assert_eq!(relaunch_with(exited_pid(), Some(1), 150), ["/Apps/X.app"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn relaunch_opens_again_when_the_first_open_started_nothing() {
+        assert_eq!(
+            relaunch_with(exited_pid(), Some(2), 150),
+            ["/Apps/X.app", "/Apps/X.app"]
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn relaunch_falls_back_to_a_new_instance() {
+        let mut opens = vec!["/Apps/X.app"; 5];
+        opens.push("-n /Apps/X.app");
+        assert_eq!(relaunch_with(exited_pid(), None, 150), opens);
+        // An app that does not exit in time: a new instance at once.
+        let mut alive = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let calls = relaunch_with(alive.id(), Some(1), 2);
+        alive.kill().unwrap();
+        let _ = alive.wait();
+        assert_eq!(calls, ["-n /Apps/X.app"]);
     }
 
     #[test]
@@ -598,9 +778,10 @@ mod tests {
             json(UpdateEvent::Downloading {
                 version: "3.1.1".into(),
                 downloaded: 5,
-                total: None
+                total: None,
+                attempt: 2
             }),
-            serde_json::json!({"phase": "downloading", "version": "3.1.1", "downloaded": 5, "total": null})
+            serde_json::json!({"phase": "downloading", "version": "3.1.1", "downloaded": 5, "total": null, "attempt": 2})
         );
         assert_eq!(
             json(UpdateEvent::Installing {
