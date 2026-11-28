@@ -10,6 +10,7 @@ fn main() {
         "get_app_settings",
         "set_app_settings",
         "check_for_updates",
+        "watch_updates",
         "smoke_report",
     ];
     tauri_build::try_build(

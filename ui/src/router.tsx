@@ -5,6 +5,7 @@ import { OpenProjectGate } from '@/components/project/open-project-gate';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 import { useProjectSync } from '@/store/project-sync';
 import { Toaster } from '@/components/ui/sonner';
+import { UpdateProgress } from '@/components/update-progress';
 import BoardPage from '@/routes/board';
 import SettingsPage from '@/routes/settings';
 import WorktreesPage from '@/routes/worktrees';
@@ -21,6 +22,7 @@ function Layout() {
           </main>
           <Toaster />
         </OpenProjectGate>
+        <UpdateProgress />
       </ThemeProvider>
     </ErrorBoundary>
   );

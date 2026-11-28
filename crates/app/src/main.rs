@@ -68,6 +68,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Quit::default())
+        .manage(update::UpdateWatch::default())
         .invoke_handler(tauri::generate_handler![
             native::pick_folder,
             native::pick_file,
@@ -78,6 +79,7 @@ fn main() {
             app_settings::get_app_settings,
             app_settings::set_app_settings,
             update::check_for_updates,
+            update::watch_updates,
             smoke::smoke_report,
         ])
         .setup(|app| {

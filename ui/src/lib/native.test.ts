@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { native, tauriNative, updateCheckMessage } from './native';
+import { native, tauriNative, updateCheckMessage, type UpdateEvent } from './native';
 
 function fakeInvoke(answers: Record<string, unknown>) {
   const calls: Array<[string, Record<string, unknown> | undefined]> = [];
@@ -52,6 +52,20 @@ describe('native', () => {
       ['set_app_settings', { settings: { schema: 1, checkUpdatesAtLaunch: false } }],
       ['check_for_updates', undefined],
     ]);
+  });
+
+  it('gives the app a channel for update progress', async () => {
+    const { call, calls } = fakeInvoke({ watch_updates: null });
+    let deliver: ((m: unknown) => void) | null = null;
+    const channel = <T>(onMessage: (m: T) => void) => {
+      deliver = onMessage as (m: unknown) => void;
+      return 'the-channel';
+    };
+    const seen: UpdateEvent[] = [];
+    await tauriNative(call, channel).watchUpdates((e) => seen.push(e));
+    expect(calls).toEqual([['watch_updates', { onEvent: 'the-channel' }]]);
+    deliver!({ phase: 'installing', version: '3.1.1' });
+    expect(seen).toEqual([{ phase: 'installing', version: '3.1.1' }]);
   });
 
   it('turns a refused open into a failed result instead of a rejection', async () => {

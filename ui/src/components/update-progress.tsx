@@ -1,0 +1,64 @@
+/**
+ * Desktop app only: after "Install and restart", a panel over the app with the download's
+ * progress, then that it is installing. It cannot be closed; the app restarts when it is done,
+ * and a failure is explained in the app's own dialog (the panel then goes away).
+ */
+
+import { useEffect, useState } from 'react';
+import { Download } from 'lucide-react';
+import { native, type UpdateEvent } from '@/lib/native';
+import { updateProgressView } from '@/lib/update-progress';
+
+export function UpdateProgress() {
+  const [event, setEvent] = useState<UpdateEvent | null>(null);
+
+  useEffect(() => {
+    native?.watchUpdates(setEvent).catch(() => {
+      // An older app without the command: no progress, as before.
+    });
+  }, []);
+
+  const view = updateProgressView(event);
+  if (!view) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
+      data-testid="update-progress"
+    >
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full max-w-md space-y-3 rounded-lg border p-6 shadow-lg"
+        style={{
+          background: 'var(--color-surface)',
+          borderColor: 'var(--color-border)',
+          color: 'var(--color-text-primary)',
+        }}
+      >
+        <div className="flex items-center gap-2 font-semibold">
+          <Download className="w-5 h-5" style={{ color: 'var(--color-primary)' }} />
+          {view.title}
+        </div>
+        <div
+          className="h-2 w-full overflow-hidden rounded-full"
+          style={{ background: 'var(--color-border)' }}
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={view.percent ?? undefined}
+        >
+          <div
+            className={`h-full rounded-full transition-[width] duration-150 ${view.percent === null ? 'w-full animate-pulse' : ''}`}
+            style={{
+              background: 'var(--color-primary)',
+              ...(view.percent === null ? {} : { width: `${view.percent}%` }),
+            }}
+          />
+        </div>
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          {view.detail}
+        </p>
+      </div>
+    </div>
+  );
+}

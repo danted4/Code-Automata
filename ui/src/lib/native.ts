@@ -7,7 +7,7 @@
  * `native` is null and the UI hides these actions.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 
 export type EditorId = 'cursor' | 'vscode';
 
@@ -26,6 +26,12 @@ export type AppSettings = { schema: number; checkUpdatesAtLaunch: boolean };
 /** What "Check for updates" found (a newer version is offered in the app's own dialog). */
 export type UpdateCheck = 'up_to_date' | 'offered' | 'busy' | 'unavailable';
 
+/** An accepted update's progress (`UpdateEvent` in `crates/app/src/update.rs`). */
+export type UpdateEvent =
+  | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
+  | { phase: 'installing'; version: string }
+  | { phase: 'failed'; version: string };
+
 export interface NativeApi {
   openFolderDialog: () => Promise<string | null>;
   /** A file picker (an agent's CLI); null when cancelled. */
@@ -41,12 +47,26 @@ export interface NativeApi {
   getAppSettings: () => Promise<AppSettings>;
   setAppSettings: (settings: AppSettings) => Promise<void>;
   checkForUpdates: () => Promise<UpdateCheck>;
+  /** Hear about an accepted update's download and install; a later call replaces the listener. */
+  watchUpdates: (onEvent: (event: UpdateEvent) => void) => Promise<void>;
 }
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-/** The API over the app's commands. `call` is Tauri's `invoke`, or a fake in tests. */
-export function tauriNative(call: Invoke): NativeApi {
+/** A Tauri channel delivering each message to `onMessage`. */
+type MakeChannel = <T>(onMessage: (message: T) => void) => unknown;
+
+const tauriChannel: MakeChannel = <T>(onMessage: (message: T) => void) => {
+  const channel = new Channel<T>();
+  channel.onmessage = onMessage;
+  return channel;
+};
+
+/**
+ * The API over the app's commands. `call` is Tauri's `invoke` and `channel` makes a Tauri
+ * channel, or fakes in tests.
+ */
+export function tauriNative(call: Invoke, channel: MakeChannel = tauriChannel): NativeApi {
   const open = async (command: string, args: Record<string, unknown>) => {
     try {
       return await call<OpenEditorResult>(command, args);
@@ -66,6 +86,7 @@ export function tauriNative(call: Invoke): NativeApi {
     getAppSettings: () => call<AppSettings>('get_app_settings'),
     setAppSettings: (settings) => call<void>('set_app_settings', { settings }),
     checkForUpdates: () => call<UpdateCheck>('check_for_updates'),
+    watchUpdates: (onEvent) => call<void>('watch_updates', { onEvent: channel(onEvent) }),
   };
 }
 
