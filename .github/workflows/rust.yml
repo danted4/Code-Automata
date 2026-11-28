@@ -3,7 +3,7 @@ name: Rust
 
 on:
   push:
-    branches: [main, v3-tauri]
+    branches: [main]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'

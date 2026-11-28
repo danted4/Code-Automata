@@ -3,7 +3,7 @@ name: UI
 
 on:
   push:
-    branches: [main, v3-tauri]
+    branches: [main]
     paths:
       - 'ui/**'
       - '.github/workflows/ui.yml'

@@ -3,7 +3,7 @@ name: E2E
 
 on:
   push:
-    branches: [main, v3-tauri]
+    branches: [main]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
