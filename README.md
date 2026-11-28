@@ -58,20 +58,18 @@ Code-Automata runs AI coding agents (Claude Code, Codex, Cursor, Amp, and Gemini
 
 ## Screenshots
 
-The demo project is Code-Automata itself, building this release's features.
+These are from a scripted demo (`yarn demo`): a test agent stands in for Claude Code and replays prepared answers, so no model is called. The project is Code-Automata's own 3.1.2 source, and the files the agent writes are 3.2's real ones.
 
 | | |
 |---|---|
-| ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![Reviewing the plan](docs/images/screenshots/plan-review.png) |
-| A new task: an agent and model per phase | Reviewing the plan before development |
-| ![Two tasks waiting on a usage limit](docs/images/screenshots/rate-limited.png) | ![The board](docs/images/screenshots/board.png) |
-| Claude Code hit its usage limit: every task on it waits for the reset, then resumes | Four tasks across the phases |
-| ![A task's details](docs/images/screenshots/task-details.png) | ![Human review](docs/images/screenshots/human-review.png) |
-| A task's agents per phase and subtasks | Human review: what was built, checks, QA, pull request |
-| ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) | |
-| Settings: MCP servers for agents and project memory | |
-
-The screenshots and the video are a scripted run of the app (`yarn demo`): the agent's answers are replayed, not generated, so no model is called.
+| ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![The planning agent's questions](docs/images/screenshots/questions.png) |
+| A new task: an agent and model per phase, plan review on | Planning asks before it plans |
+| ![Reviewing the plan](docs/images/screenshots/plan-review.png) | ![The task's subtasks](docs/images/screenshots/task-details.png) |
+| The plan to approve, edit or send back | Seven subtasks, development under way |
+| ![An agent's run, live](docs/images/screenshots/agent-run.png) | ![The board](docs/images/screenshots/board.png) |
+| A development run as it happens: searches, edits, tests | Four tasks across the phases |
+| ![Human review](docs/images/screenshots/human-review.png) | ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) |
+| Human review: what was built, checks, QA, pull request | Settings: MCP servers for agents, and what agents learned |
 
 ## Things to know
 
