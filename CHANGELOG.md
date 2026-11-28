@@ -20,6 +20,11 @@ Faster, smoother updates and a new logo. If you have an earlier 3.x installed, i
 - **The update panel's bar** bounces from side to side while the download is starting (0%), then shows the progress once it moves.
 - Releases are titled with the plain version ("3.1.2").
 
+### Known limits
+
+- **The new restart was tested with a separate test build** (its own name, a local update server, pinned in the Dock), not yet on a real install: the first real one is the update after 3.1.2. If the app does not come back after an update, start it again; `relaunch.log` in its log folder says what the restart did.
+- **The retries were not tried against a real failing network.** The connect timeout was measured against GitHub's real download servers (one address dead: 75 s before, under 3 s with it); a dropped download and a server error were not reproduced.
+
 ---
 
 ## 3.1.1
