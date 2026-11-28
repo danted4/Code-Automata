@@ -569,7 +569,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--mcp-config" ]; then file="$2"; fi
   shift
 done
-mode=$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")
+mode=$(stat -c %a "$file" 2>/dev/null || stat -f %Lp "$file")
 printf '{"type":"result","subtype":"success","is_error":false,"result":"%s %s","session_id":"s"}\n' "$mode" "$(grep -c s3cret "$file")"
 "#,
     );
