@@ -34,8 +34,16 @@ use crate::Quit;
 use crate::server::Server;
 
 const FIRST_CHECK: Duration = Duration::from_secs(5);
-/// For the check and for the download (about 15 MB); a stalled download gives up.
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
+/// Connecting gives up after this, shared among the host's addresses. GitHub's download host has
+/// four; one that never answers would otherwise cost the system's TCP timeout (about 75 s on
+/// macOS) before the next is tried.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A transfer that receives nothing for this long gives up (a download is then retried).
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole check, or one download attempt (about 15 MB).
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(900);
+const CHECK_ATTEMPTS: u32 = 2;
+const DOWNLOAD_ATTEMPTS: u32 = 3;
 
 /// Set while a check (and the question it may ask) is under way.
 static CHECKING: AtomicBool = AtomicBool::new(false);
@@ -51,6 +59,10 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(100);
     rename_all_fields = "camelCase"
 )]
 pub enum UpdateEvent {
+    /// Looking for a newer version (Settings shows it).
+    Checking,
+    /// Not checking, downloading or installing: the check ended or the update was declined.
+    Idle,
     /// `total` is None when the server does not say how big the file is.
     Downloading {
         version: String,
@@ -215,16 +227,18 @@ async fn check(app: &AppHandle, manual: bool) -> Result<CheckResult, String> {
         }
     }
     let _done = Done;
-    let found = match app.updater_builder().timeout(NETWORK_TIMEOUT).build() {
-        Ok(updater) => updater.check().await,
-        Err(e) => Err(e),
-    };
+    notify(app, UpdateEvent::Checking);
+    let found = find(app).await;
+    if !matches!(found, Ok(Some(_))) {
+        notify(app, UpdateEvent::Idle);
+    }
     match found.map_err(|e| e.to_string())? {
         Some(update) if !manual && failed_before(app).as_deref() == Some(&update.version) => {
             log::info!(
                 "update {} failed to install before; not offered",
                 update.version
             );
+            notify(app, UpdateEvent::Idle);
             Ok(CheckResult::UpToDate)
         }
         Some(update) => {
@@ -234,6 +248,42 @@ async fn check(app: &AppHandle, manual: bool) -> Result<CheckResult, String> {
         None => {
             log::info!("no update available");
             Ok(CheckResult::UpToDate)
+        }
+    }
+}
+
+/// The updater, with the timeouts above.
+fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
+    app.updater_builder()
+        .timeout(NETWORK_TIMEOUT)
+        .configure_client(|client| {
+            client
+                .connect_timeout(CONNECT_TIMEOUT)
+                .read_timeout(READ_TIMEOUT)
+        })
+        .build()
+}
+
+/// A network failure is worth another try; a bad signature or manifest is not.
+fn retryable(e: &tauri_plugin_updater::Error) -> bool {
+    matches!(
+        e,
+        tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_)
+    )
+}
+
+/// The newest version, if it is newer; a network failure is tried once more.
+async fn find(app: &AppHandle) -> tauri_plugin_updater::Result<Option<Update>> {
+    let updater = updater(app)?;
+    let mut attempt = 1;
+    loop {
+        match updater.check().await {
+            Err(e) if attempt < CHECK_ATTEMPTS && retryable(&e) => {
+                log::warn!("update check failed ({e}); trying again");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                attempt += 1;
+            }
+            found => return found,
         }
     }
 }
@@ -255,50 +305,12 @@ async fn offer(app: &AppHandle, update: Update) {
         update.version, update.current_version
     );
     if !ask(app, message).await {
+        notify(app, UpdateEvent::Idle);
         return;
     }
     // Quitting stays possible during the download; it simply cancels the update.
-    let version = update.version.clone();
-    log::info!("downloading update {version}");
-    notify(
-        app,
-        UpdateEvent::Downloading {
-            version: version.clone(),
-            downloaded: 0,
-            total: None,
-        },
-    );
-    let started = Instant::now();
-    let mut progress = Progress::default();
-    let on_chunk = |len: usize, total: Option<u64>| {
-        if progress.chunk(len, total, Instant::now()) {
-            notify(
-                app,
-                UpdateEvent::Downloading {
-                    version: version.clone(),
-                    downloaded: progress.downloaded,
-                    total: progress.total,
-                },
-            );
-        }
-    };
-    let bytes = match update.download(on_chunk, || {}).await {
-        Ok(bytes) => {
-            log::info!(
-                "downloaded update {version}: {} bytes in {:.1} s",
-                bytes.len(),
-                started.elapsed().as_secs_f64()
-            );
-            bytes
-        }
-        Err(e) => {
-            notify(app, UpdateEvent::Failed { version });
-            return error(
-                app,
-                format!("The update could not be downloaded: {e}"),
-                false,
-            );
-        }
+    let Some(bytes) = download(app, &update).await else {
+        return;
     };
     // From here on this is a quit: a close request meanwhile must not start a second one, and a
     // quit already under way wins.
@@ -318,7 +330,7 @@ async fn offer(app: &AppHandle, update: Update) {
     app.state::<Quit>().done.store(true, Ordering::SeqCst);
     // On Windows this starts the installer and exits the app.
     match update.install(bytes) {
-        Ok(()) => app.restart(),
+        Ok(()) => relaunch(app),
         Err(e) => {
             remember_failed(app, &update.version);
             notify(
@@ -340,6 +352,110 @@ async fn offer(app: &AppHandle, update: Update) {
             );
         }
     }
+}
+
+/// Download the update, showing its progress; a network failure is tried again (from the start).
+/// None when it failed, after saying so.
+async fn download(app: &AppHandle, update: &Update) -> Option<Vec<u8>> {
+    let version = update.version.clone();
+    let mut attempt = 1;
+    loop {
+        log::info!("downloading update {version} (attempt {attempt})");
+        notify(
+            app,
+            UpdateEvent::Downloading {
+                version: version.clone(),
+                downloaded: 0,
+                total: None,
+            },
+        );
+        let started = Instant::now();
+        let mut progress = Progress::default();
+        let on_chunk = |len: usize, total: Option<u64>| {
+            if progress.chunk(len, total, Instant::now()) {
+                notify(
+                    app,
+                    UpdateEvent::Downloading {
+                        version: version.clone(),
+                        downloaded: progress.downloaded,
+                        total: progress.total,
+                    },
+                );
+            }
+        };
+        match update.download(on_chunk, || {}).await {
+            Ok(bytes) => {
+                log::info!(
+                    "downloaded update {version}: {} bytes in {:.1} s",
+                    bytes.len(),
+                    started.elapsed().as_secs_f64()
+                );
+                return Some(bytes);
+            }
+            Err(e) if attempt < DOWNLOAD_ATTEMPTS && retryable(&e) => {
+                log::warn!("downloading update {version} failed ({e}); trying again");
+                tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt))).await;
+                attempt += 1;
+            }
+            Err(e) => {
+                notify(app, UpdateEvent::Failed { version });
+                error(
+                    app,
+                    format!("The update could not be downloaded: {e}"),
+                    false,
+                );
+                return None;
+            }
+        }
+    }
+}
+
+/// Start the app again (the installed version), then exit.
+///
+/// On macOS Tauri's restart runs `open -n` while this process still runs, and the Dock gives that
+/// second instance an icon of its own, which stays beside the kept one after this one exits. So a
+/// detached `sh` waits for this process to exit and then opens the bundle normally, as a click on
+/// its Dock icon would. Elsewhere, and if that cannot start, Tauri's restart.
+fn relaunch(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| app_bundle(&exe))
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = ca_core::proc::command("/bin/sh").into_std();
+        cmd.args([
+            "-c",
+            "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \"$2\"",
+            "sh",
+        ])
+        .arg(std::process::id().to_string())
+        .arg(&bundle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+        match cmd.spawn() {
+            Ok(_) => {
+                log::info!("restarting {} once this process exits", bundle.display());
+                app.exit(0);
+                return;
+            }
+            Err(e) => log::warn!("could not schedule the restart ({e}); restarting directly"),
+        }
+    }
+    app.restart();
+}
+
+/// The `.app` bundle an executable is in (`X.app/Contents/MacOS/x`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_bundle(exe: &std::path::Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let is_app = bundle.extension().is_some_and(|e| e == "app");
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app)
+        .then(|| bundle.to_path_buf())
 }
 
 async fn ask(app: &AppHandle, message: String) -> bool {
@@ -368,7 +484,7 @@ fn error(app: &AppHandle, message: String, restart: bool) {
         .kind(MessageDialogKind::Error)
         .show(move |_| {
             if restart {
-                after.restart();
+                relaunch(&after);
             }
         });
 }
@@ -459,6 +575,23 @@ mod tests {
     }
 
     #[test]
+    fn the_bundle_is_found_from_its_executable() {
+        use std::path::Path;
+        assert_eq!(
+            app_bundle(Path::new(
+                "/Applications/Code-Automata.app/Contents/MacOS/code-automata"
+            )),
+            Some(PathBuf::from("/Applications/Code-Automata.app"))
+        );
+        assert_eq!(app_bundle(Path::new("/usr/local/bin/code-automata")), None);
+        assert_eq!(
+            app_bundle(Path::new("/tmp/x/Contents/MacOS/code-automata")),
+            None,
+            "not an .app"
+        );
+    }
+
+    #[test]
     fn events_are_shaped_for_the_page() {
         let json = |e: UpdateEvent| serde_json::to_value(e).unwrap();
         assert_eq!(
@@ -480,6 +613,14 @@ mod tests {
                 version: "3.1.1".into()
             }),
             serde_json::json!({"phase": "failed", "version": "3.1.1"})
+        );
+        assert_eq!(
+            json(UpdateEvent::Checking),
+            serde_json::json!({"phase": "checking"})
+        );
+        assert_eq!(
+            json(UpdateEvent::Idle),
+            serde_json::json!({"phase": "idle"})
         );
         assert_eq!(
             json(UpdateEvent::Cancelled {

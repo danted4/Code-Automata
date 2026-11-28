@@ -106,3 +106,25 @@
   overflow: auto;
   scrollbar-gutter: stable;
 }
+
+/* The update panel's bar before it can show a percentage: a segment 20% of the track bouncing
+   between its ends with cosine easing, like torrenter's. torrenter's cycle (2.5 s) is set for its
+   wide job rows; this track is narrower, so 0.8 s a sweep gives about the same speed on screen.
+   400% of the segment is the rest of the track (80 / 20). */
+@keyframes update-bar-bounce {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+.update-bar-indeterminate {
+  width: 20%;
+  animation: update-bar-bounce 0.8s cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-bar-indeterminate {
+    animation-duration: 3s;
+  }
+}

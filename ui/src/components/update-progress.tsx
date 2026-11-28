@@ -5,17 +5,18 @@
  * the app under it is inert, so neither the mouse nor the keyboard reaches it.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Download } from 'lucide-react';
-import { native, type UpdateEvent } from '@/lib/native';
+import { native } from '@/lib/native';
 import { updateProgressView } from '@/lib/update-progress';
+import { useUpdateStore } from '@/store/update-store';
 
 export function UpdateProgress() {
-  const [event, setEvent] = useState<UpdateEvent | null>(null);
+  const event = useUpdateStore((s) => s.event);
 
   useEffect(() => {
-    native?.watchUpdates(setEvent).catch(() => {
+    native?.watchUpdates(useUpdateStore.getState().set).catch(() => {
       // An older app without the command: no progress, as before.
     });
   }, []);
@@ -54,20 +55,24 @@ export function UpdateProgress() {
           {view.title}
         </div>
         <div
-          className="h-2 w-full overflow-hidden rounded-full"
+          className="relative h-2 w-full overflow-hidden rounded-full"
           style={{ background: 'var(--color-border)' }}
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={view.percent ?? undefined}
         >
-          <div
-            className={`h-full rounded-full transition-[width] duration-150 ${view.percent === null ? 'w-full animate-pulse' : ''}`}
-            style={{
-              background: 'var(--color-primary)',
-              ...(view.percent === null ? {} : { width: `${view.percent}%` }),
-            }}
-          />
+          {view.percent === null ? (
+            <div
+              className="update-bar-indeterminate absolute inset-y-0 left-0 rounded-full"
+              style={{ background: 'var(--color-primary)' }}
+            />
+          ) : (
+            <div
+              className="h-full rounded-full transition-[width] duration-300 ease-out"
+              style={{ background: 'var(--color-primary)', width: `${view.percent}%` }}
+            />
+          )}
         </div>
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
           {view.detail}

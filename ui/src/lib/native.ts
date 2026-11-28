@@ -28,6 +28,8 @@ export type UpdateCheck = 'up_to_date' | 'offered' | 'busy' | 'unavailable';
 
 /** An accepted update's progress (`UpdateEvent` in `crates/app/src/update.rs`). */
 export type UpdateEvent =
+  | { phase: 'checking' }
+  | { phase: 'idle' }
   | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
   | { phase: 'installing'; version: string }
   | { phase: 'failed'; version: string }

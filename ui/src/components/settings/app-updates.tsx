@@ -10,12 +10,17 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { updateCheckMessage, type AppSettings, type NativeApi } from '@/lib/native';
+import { isCheckingForUpdates } from '@/lib/update-progress';
+import { useUpdateStore } from '@/store/update-store';
 
 const muted = { color: 'var(--color-text-muted)' };
 
 export function AppUpdates({ nativeApi }: { nativeApi: NativeApi }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [clicked, setClicked] = useState(false);
+  // The check at launch shows here too.
+  const appChecking = useUpdateStore((s) => isCheckingForUpdates(s.event));
+  const checking = clicked || appChecking;
 
   useEffect(() => {
     let live = true;
@@ -41,14 +46,14 @@ export function AppUpdates({ nativeApi }: { nativeApi: NativeApi }) {
   };
 
   const checkNow = async () => {
-    setChecking(true);
+    setClicked(true);
     try {
       const message = updateCheckMessage(await nativeApi.checkForUpdates());
       if (message) toast.info(message);
     } catch (e) {
       toast.error(`The update check failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setChecking(false);
+      setClicked(false);
     }
   };
 
@@ -78,7 +83,7 @@ export function AppUpdates({ nativeApi }: { nativeApi: NativeApi }) {
         data-testid="settings-check-updates"
       >
         {checking && <Loader2 className="w-4 h-4 animate-spin" />}
-        {checking ? 'Checking…' : 'Check for updates'}
+        {checking ? 'Checking for updates…' : 'Check for updates'}
       </Button>
     </div>
   );
