@@ -16,6 +16,10 @@ Update progress. If you have 3.1.0 or 3.0.1 installed, it offers this update whe
 
 - Two tests that failed now and then on Linux (a fake CLI run while another test thread was starting a process, and the server's output pipe closed too early). No change to the app.
 
+### Known limits
+
+- **The progress panel has not been through a real update yet**: its parts are tested, but the first real download that shows it is the update after 3.1.1. If it ever stays up without the app restarting, quit the app (Cmd-Q / Alt-F4) and start it again; the update is offered again.
+
 ---
 
 ## 3.1.0

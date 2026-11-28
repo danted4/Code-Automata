@@ -61,40 +61,95 @@ pub enum UpdateEvent {
     Installing { version: String },
     /// The download or install failed; the app's error dialog says why.
     Failed { version: String },
+    /// Downloaded, but a quit was already under way, so the update is dropped (the next check
+    /// offers it again).
+    Cancelled { version: String },
 }
 
-/// The page's channel for `UpdateEvent`s: the latest `watch_updates` call (a reload sends a new
-/// one).
+/// The page's channel for `UpdateEvent`s (the latest `watch_updates` call: a reload sends a new
+/// one) and the last event, which a new channel is sent first.
 #[derive(Default)]
-pub struct UpdateWatch(Mutex<Option<Channel<UpdateEvent>>>);
+pub struct UpdateWatch(Mutex<Watch<Channel<UpdateEvent>>>);
+
+#[derive(Debug)]
+struct Watch<C> {
+    channel: Option<C>,
+    last: Option<UpdateEvent>,
+}
+
+impl<C> Default for Watch<C> {
+    fn default() -> Self {
+        Self {
+            channel: None,
+            last: None,
+        }
+    }
+}
+
+impl<C: Clone> Watch<C> {
+    /// A new channel replaces the old one; returns the event to send it first, if any.
+    fn watch(&mut self, channel: C) -> Option<UpdateEvent> {
+        self.channel = Some(channel);
+        self.last.clone()
+    }
+
+    /// Remember the event; returns the channel to send it to, if the page gave one.
+    fn record(&mut self, event: &UpdateEvent) -> Option<C> {
+        self.last = Some(event.clone());
+        self.channel.clone()
+    }
+}
 
 /// The page asks to be told about update progress.
 #[tauri::command]
 pub fn watch_updates(app: AppHandle, on_event: Channel<UpdateEvent>) {
-    if let Ok(mut watch) = app.state::<UpdateWatch>().0.lock() {
-        *watch = Some(on_event);
+    let replay = match app.state::<UpdateWatch>().0.lock() {
+        Ok(mut watch) => watch.watch(on_event.clone()),
+        Err(_) => None,
+    };
+    if let Some(event) = replay {
+        send(&on_event, event);
     }
 }
 
 fn notify(app: &AppHandle, event: UpdateEvent) {
     let channel = match app.state::<UpdateWatch>().0.lock() {
-        Ok(watch) => watch.clone(),
+        Ok(mut watch) => watch.record(&event),
         Err(_) => None,
     };
-    if let Some(channel) = channel
-        && let Err(e) = channel.send(event)
-    {
+    if let Some(channel) = channel {
+        send(&channel, event);
+    }
+}
+
+fn send(channel: &Channel<UpdateEvent>, event: UpdateEvent) {
+    if let Err(e) = channel.send(event) {
         log::warn!("could not show the update's progress: {e}");
     }
 }
 
+/// Take over the quit to install. A quit already under way wins: then the update is dropped and
+/// the event to hide the page's panel is returned (that quit may yet be cancelled, and the app
+/// keep running).
+fn claim_quit(running: &AtomicBool, version: &str) -> Result<(), UpdateEvent> {
+    if running.swap(true, Ordering::SeqCst) {
+        Err(UpdateEvent::Cancelled {
+            version: version.to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 /// Bytes downloaded so far, and whether the page is due to hear about them: at most every
-/// `PROGRESS_EVERY`, plus the first chunk and the last.
+/// `PROGRESS_EVERY`, plus the first chunk and the one that reaches the size (once, even if the
+/// body runs past it).
 #[derive(Debug, Default)]
 struct Progress {
     downloaded: u64,
     total: Option<u64>,
     last_sent: Option<Instant>,
+    done_sent: bool,
 }
 
 impl Progress {
@@ -104,7 +159,8 @@ impl Progress {
         if total.is_some() {
             self.total = total;
         }
-        let done = self.total.is_some_and(|t| self.downloaded >= t);
+        let done = !self.done_sent && self.total.is_some_and(|t| self.downloaded >= t);
+        self.done_sent |= done;
         let due = self
             .last_sent
             .is_none_or(|sent| now.duration_since(sent) >= PROGRESS_EVERY);
@@ -246,7 +302,9 @@ async fn offer(app: &AppHandle, update: Update) {
     };
     // From here on this is a quit: a close request meanwhile must not start a second one, and a
     // quit already under way wins.
-    if app.state::<Quit>().running.swap(true, Ordering::SeqCst) {
+    if let Err(cancelled) = claim_quit(&app.state::<Quit>().running, &update.version) {
+        log::info!("a quit is under way; update {} dropped", update.version);
+        notify(app, cancelled);
         return;
     }
     log::info!("installing update {}", update.version);
@@ -354,6 +412,40 @@ mod tests {
         assert_eq!((p.downloaded, p.total), (4000, Some(10_000)));
         assert!(p.chunk(6000, Some(10_000), at(160)), "the last chunk");
         assert_eq!(p.downloaded, 10_000);
+        // A body longer than its stated size: the throttle still holds.
+        assert!(!p.chunk(10, Some(10_000), at(170)));
+        assert!(p.chunk(10, Some(10_000), at(260)));
+    }
+
+    #[test]
+    fn a_quit_under_way_drops_the_update_and_hides_the_panel() {
+        let running = AtomicBool::new(false);
+        assert_eq!(claim_quit(&running, "3.1.1"), Ok(()));
+        assert!(running.load(Ordering::SeqCst), "the install owns the quit");
+        assert_eq!(
+            claim_quit(&running, "3.1.1"),
+            Err(UpdateEvent::Cancelled {
+                version: "3.1.1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_new_channel_gets_the_last_event_first() {
+        let mut watch = Watch::<&str>::default();
+        let downloading = UpdateEvent::Downloading {
+            version: "3.1.1".into(),
+            downloaded: 5,
+            total: Some(10),
+        };
+        assert_eq!(watch.record(&downloading), None, "no page yet");
+        assert_eq!(watch.watch("page"), Some(downloading));
+        let installing = UpdateEvent::Installing {
+            version: "3.1.1".into(),
+        };
+        assert_eq!(watch.record(&installing), Some("page"));
+        assert_eq!(watch.watch("reloaded page"), Some(installing));
+        assert_eq!(Watch::<&str>::default().watch("page"), None);
     }
 
     #[test]
@@ -388,6 +480,12 @@ mod tests {
                 version: "3.1.1".into()
             }),
             serde_json::json!({"phase": "failed", "version": "3.1.1"})
+        );
+        assert_eq!(
+            json(UpdateEvent::Cancelled {
+                version: "3.1.1".into()
+            }),
+            serde_json::json!({"phase": "cancelled", "version": "3.1.1"})
         );
     }
 }

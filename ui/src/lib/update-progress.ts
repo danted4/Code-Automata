@@ -12,7 +12,7 @@ export type UpdateProgressView = {
   percent: number | null;
 };
 
-/** The panel for an update event; null hides it (none yet, or the update failed). */
+/** The panel for an update event; null hides it (none yet, or the update failed or was dropped). */
 export function updateProgressView(event: UpdateEvent | null): UpdateProgressView | null {
   if (!event) return null;
   switch (event.phase) {
@@ -36,6 +36,7 @@ export function updateProgressView(event: UpdateEvent | null): UpdateProgressVie
         percent: null,
       };
     case 'failed':
+    case 'cancelled':
       return null;
   }
 }

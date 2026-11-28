@@ -30,7 +30,8 @@ export type UpdateCheck = 'up_to_date' | 'offered' | 'busy' | 'unavailable';
 export type UpdateEvent =
   | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
   | { phase: 'installing'; version: string }
-  | { phase: 'failed'; version: string };
+  | { phase: 'failed'; version: string }
+  | { phase: 'cancelled'; version: string };
 
 export interface NativeApi {
   openFolderDialog: () => Promise<string | null>;

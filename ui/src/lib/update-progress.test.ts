@@ -49,6 +49,7 @@ describe('updateProgressView', () => {
       percent: null,
     });
     expect(updateProgressView({ phase: 'failed', version: '3.1.1' })).toBeNull();
+    expect(updateProgressView({ phase: 'cancelled', version: '3.1.1' })).toBeNull();
     expect(updateProgressView(null)).toBeNull();
   });
 });

@@ -1,10 +1,12 @@
 /**
  * Desktop app only: after "Install and restart", a panel over the app with the download's
  * progress, then that it is installing. It cannot be closed; the app restarts when it is done,
- * and a failure is explained in the app's own dialog (the panel then goes away).
+ * and a failure is explained in the app's own dialog (the panel then goes away). While it shows,
+ * the app under it is inert, so neither the mouse nor the keyboard reaches it.
  */
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Download } from 'lucide-react';
 import { native, type UpdateEvent } from '@/lib/native';
 import { updateProgressView } from '@/lib/update-progress';
@@ -19,8 +21,20 @@ export function UpdateProgress() {
   }, []);
 
   const view = updateProgressView(event);
+  const showing = view !== null;
+
+  useEffect(() => {
+    const root = document.getElementById('root');
+    if (!root || !showing) return;
+    root.inert = true;
+    return () => {
+      root.inert = false;
+    };
+  }, [showing]);
+
   if (!view) return null;
-  return (
+  // Outside #root, which is inert meanwhile.
+  return createPortal(
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
       data-testid="update-progress"
@@ -59,6 +73,7 @@ export function UpdateProgress() {
           {view.detail}
         </p>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
