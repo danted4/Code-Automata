@@ -2259,3 +2259,18 @@ async fn learnings_go_into_the_project_memory_and_later_prompts() {
     run_to_end(&engine, &third.id).await;
     assert_eq!(engine.memory().await.unwrap().text, "");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_run_names_the_model_it_used() {
+    let env = Env::new().await;
+    let engine = env.engine().await;
+    let fail = json!({ "whenPrompt": "# Planning: implementation plan", "steps": [
+        { "result": { "isError": true, "text": "API Error: 404 model not found" } }
+    ]});
+    let mut agent = env.agent(1, vec![fail]);
+    agent.model = Some("claude-gone-1".into());
+    let task = engine.create_task("Model", "", agent, false).await.unwrap();
+    let t = run_to_end(&engine, &task.id).await;
+    let error = t.run.unwrap().error.unwrap();
+    assert!(error.contains("claude-gone-1"), "{error}");
+}

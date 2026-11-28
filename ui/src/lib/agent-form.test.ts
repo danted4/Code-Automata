@@ -233,24 +233,16 @@ describe('per-phase agents', () => {
     });
   });
 
-  const claudeList = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5'];
-
   it('recommends Fable to plan and review and Opus to develop with Claude Code', () => {
-    const d = defaultDrafts([claudeInfo(true), mockInfo], null, claudeList)!;
+    const d = defaultDrafts([claudeInfo(true), mockInfo], null)!;
     expect(d.same).toBe(false);
     expect([d.planning.model, d.dev.model, d.qa.model]).toEqual([
       'claude-fable-5-2',
       'claude-opus-5-5',
       'claude-fable-5-2',
     ]);
-    // Not while the model list is unknown, or without those models: the CLI's default.
-    for (const list of [null, ['claude-sonnet-5-5']]) {
-      expect(defaultDrafts([claudeInfo(true)], null, list)).toEqual(
-        sameDrafts({ provider: 'claude', model: '', mode: '' })
-      );
-    }
     // Another first ready CLI: the same agent everywhere, its default model.
-    const other = defaultDrafts([claudeInfo(false), mockInfo], null, claudeList)!;
+    const other = defaultDrafts([claudeInfo(false), mockInfo], null)!;
     expect(other).toEqual(sameDrafts({ provider: 'mock', model: '', mode: '' }));
   });
 

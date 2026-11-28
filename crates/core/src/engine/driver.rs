@@ -820,7 +820,16 @@ async fn handle_stop(ctx: &Ctx<'_>, outcome: &Outcome) -> Result<bool> {
             return Ok(false);
         }
         OutcomeKind::TimedOut => "the agent timed out".to_string(),
-        OutcomeKind::AgentError { message } => format!("the agent reported an error: {message}"),
+        OutcomeKind::AgentError { message } => {
+            // A model the login cannot use fails here: say which one ran, so it can be changed.
+            match ctx.agent.model.as_deref().filter(|m| !message.contains(*m)) {
+                Some(model) => format!(
+                    "the agent reported an error: {message} (it ran with model {model}; change the \
+                     task's agents if that model is not available to you)"
+                ),
+                None => format!("the agent reported an error: {message}"),
+            }
+        }
         OutcomeKind::Crashed { exit_code } => format!(
             "the agent exited without finishing (exit code {})",
             exit_code.map_or("unknown".into(), |c| c.to_string())

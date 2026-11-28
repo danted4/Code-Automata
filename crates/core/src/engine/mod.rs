@@ -560,6 +560,11 @@ impl Engine {
         patch: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Task> {
         if patch.contains_key("agents") {
+            // A driver on its way out (it just wrote `rate_limited` or `paused`) is given a few
+            // seconds, as other commands give it, instead of refusing the edit.
+            if self.is_running(id) {
+                let _ = tokio::time::timeout(SETTLE_WAIT, self.wait_idle(id)).await;
+            }
             let task = self.inner.load(id).await?;
             let rate_limited = task
                 .run

@@ -161,14 +161,13 @@ const CLAUDE_RECOMMENDED: Record<AgentPhase, string> = {
 
 /**
  * A new task's drafts: the last choice while every phase's CLI is still ready, else the first
- * ready CLI. For Claude Code that is the recommended model per phase (the user's choice for 3.2),
- * but only when `claudeModels` (its model list, once loaded) has those models; otherwise the
- * CLI's default model.
+ * ready CLI. For Claude Code that is the recommended model per phase, the user's choice for 3.2.
+ * Claude Code cannot list its models, so nothing here knows whether a login has them: a run that
+ * fails says which model it used, and the dialog changes it.
  */
 export function defaultDrafts(
   providers: ProviderInfo[],
-  last: PhaseDrafts | null,
-  claudeModels: string[] | null = null
+  last: PhaseDrafts | null
 ): PhaseDrafts | null {
   const ready = new Set(
     providers.filter((p) => readiness(p.preflight).ready).map((p) => p.provider)
@@ -184,8 +183,7 @@ export function defaultDrafts(
   }
   const provider = defaultProvider(providers);
   if (!provider) return null;
-  const recommended = AGENT_PHASES.every((ph) => claudeModels?.includes(CLAUDE_RECOMMENDED[ph]));
-  if (provider === 'claude' && recommended) {
+  if (provider === 'claude') {
     const draft = (phase: AgentPhase): AgentDraft => ({
       provider,
       model: CLAUDE_RECOMMENDED[phase],
