@@ -67,6 +67,34 @@ async fn settings_default_round_trip_and_strictness() {
 }
 
 #[tokio::test]
+async fn settings_saved_under_older_rules_still_load() {
+    // An MCP variable allowed when saved (3.2's first batches) but refused now.
+    let repo = TempRepo::new();
+    let project = repo.project().await;
+    std::fs::create_dir_all(Settings::path(&project).parent().unwrap()).unwrap();
+    std::fs::write(
+        Settings::path(&project),
+        r#"{"schema": 1, "mcpServers": {
+            "git": { "type": "stdio", "command": "git-mcp", "env": { "SSH_AUTH_SOCK": "/s", "TOKEN": "t" } },
+            "bad.name": { "type": "stdio", "command": "x" }
+        }}"#,
+    )
+    .unwrap();
+    let s = Settings::load(&project).await.unwrap();
+    assert_eq!(s.mcp_servers.len(), 1);
+    match &s.mcp_servers["git"] {
+        ca_core::agent::mcp::McpServer::Stdio { env, .. } => {
+            assert_eq!(env.keys().collect::<Vec<_>>(), ["TOKEN"]);
+        }
+        other => panic!("{other:?}"),
+    }
+    // The project opens.
+    ca_core::engine::Engine::open(project, ca_core::agent::Binaries::from_env())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn only_one_engine_can_hold_a_project() {
     let repo = TempRepo::new();
     let project = repo.project().await;

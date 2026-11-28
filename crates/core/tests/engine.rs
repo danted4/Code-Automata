@@ -2242,7 +2242,8 @@ async fn learnings_go_into_the_project_memory_and_later_prompts() {
     }));
 
     // The user's edit replaces it; with memory off, prompts go without it.
-    engine.save_memory("").await.unwrap();
+    let current = engine.memory().await.unwrap().text;
+    engine.save_memory("", &current).await.unwrap();
     env.settings(|s| s.use_project_memory = false).await;
     let engine = {
         drop(engine);

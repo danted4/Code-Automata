@@ -52,8 +52,10 @@ pub fn for_prompt(text: &str) -> (String, bool) {
     let mut kept: Vec<&str> = Vec::new();
     let mut size = 0;
     for line in entries.iter().rev() {
+        // A line that does not fit (one long one the user wrote) is left out; older, shorter
+        // ones may still fit.
         if size + line.len() + 1 > PROMPT_BYTES {
-            break;
+            continue;
         }
         size += line.len() + 1;
         kept.push(line);
@@ -129,7 +131,7 @@ pub async fn append(
 /// Refuse a memory that cannot be one (the editor's input).
 pub fn validate(text: &str) -> Result<()> {
     if text.len() > 256 * 1024 {
-        return Err(CoreError::Invalid(
+        return Err(CoreError::Patch(
             "the project memory is too large (more than 256 KB)".into(),
         ));
     }
@@ -191,5 +193,9 @@ mod tests {
         assert!(!kept.contains("# Project memory"));
         let (all, cut) = for_prompt("- a: b\n");
         assert_eq!((all.as_str(), cut), ("- a: b", false));
+        // One huge last line does not empty the memory.
+        let huge = format!("- a: keep me\n- b: {}\n", "x".repeat(PROMPT_BYTES * 2));
+        let (kept, truncated) = for_prompt(&huge);
+        assert_eq!((kept.as_str(), truncated), ("- a: keep me", true));
     }
 }

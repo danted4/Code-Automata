@@ -875,11 +875,20 @@ impl Engine {
         })
     }
 
-    /// Replace the project memory with the user's text.
-    pub async fn save_memory(&self, text: &str) -> Result<MemoryView> {
+    /// Replace the project memory with the user's text. `base` is the text the edit started
+    /// from: if the file changed since (an agent added a learning), nothing is written and the
+    /// edit is refused, so a learning is never lost unseen.
+    pub async fn save_memory(&self, text: &str, base: &str) -> Result<MemoryView> {
         memory::validate(text)?;
         {
             let _guard = self.inner.memory_lock.lock().await;
+            if memory::read(&self.inner.project).await? != base {
+                return Err(CoreError::Invalid(
+                    "the project memory changed since you opened it (an agent added to it); \
+                     your edit was not saved. Look at it again and redo the change."
+                        .into(),
+                ));
+            }
             memory::write(&self.inner.project, text).await?;
         }
         self.memory().await

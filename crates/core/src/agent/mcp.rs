@@ -211,24 +211,8 @@ pub fn validate_servers(servers: &McpServers) -> Result<(), String> {
                     return Err(format!("MCP server {name:?} needs a command"));
                 }
                 for (var, value) in env {
-                    let identifier = var
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                        && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-                    if !identifier {
-                        return Err(format!(
-                            "MCP server {name:?}: {var:?} is not a variable name"
-                        ));
-                    }
-                    let upper = var.to_ascii_uppercase();
-                    if RESERVED_ENV.contains(&upper.as_str())
-                        || RESERVED_PREFIXES.iter().any(|p| upper.starts_with(p))
-                    {
-                        return Err(format!(
-                            "MCP server {name:?} may not set {var}: it would change how the agent \
-                             itself runs"
-                        ));
+                    if let Err(why) = check_env_var(var) {
+                        return Err(format!("MCP server {name:?}: {why}"));
                     }
                     match seen.get(var.as_str()) {
                         Some((other, v)) if *v != value.as_str() => {
@@ -250,6 +234,69 @@ pub fn validate_servers(servers: &McpServers) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Whether a server may set `var`: an identifier, and none that would change how the agent itself
+/// runs.
+pub fn check_env_var(var: &str) -> Result<(), String> {
+    let identifier = var
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !identifier {
+        return Err(format!("{var:?} is not a variable name"));
+    }
+    let upper = var.to_ascii_uppercase();
+    if RESERVED_ENV.contains(&upper.as_str())
+        || RESERVED_PREFIXES.iter().any(|p| upper.starts_with(p))
+    {
+        return Err(format!(
+            "{var} may not be set: it would change how the agent itself runs"
+        ));
+    }
+    Ok(())
+}
+
+/// Make saved servers usable under today's rules, which may be stricter than when they were saved
+/// (a project must still open): variables now refused are dropped, then any server still refused.
+/// Returns what was dropped, for a warning.
+pub fn drop_unusable(servers: &mut McpServers) -> Vec<String> {
+    let mut dropped = Vec::new();
+    for (name, server) in servers.iter_mut() {
+        if let McpServer::Stdio { env, .. } = server {
+            env.retain(|var, _| {
+                let ok = check_env_var(var).is_ok();
+                if !ok {
+                    dropped.push(format!("{name}: variable {var}"));
+                }
+                ok
+            });
+        }
+    }
+    // A server refused on its own goes; then, for a variable two servers set differently, the
+    // later one.
+    let refused: Vec<(String, String)> = servers
+        .iter()
+        .filter_map(|(name, server)| {
+            let alone = McpServers::from([(name.clone(), server.clone())]);
+            validate_servers(&alone)
+                .err()
+                .map(|why| (name.clone(), why))
+        })
+        .collect();
+    for (name, why) in refused {
+        servers.remove(&name);
+        dropped.push(format!("server {name} ({why})"));
+    }
+    while let Err(why) = validate_servers(servers) {
+        let Some(last) = servers.keys().next_back().cloned() else {
+            break;
+        };
+        servers.remove(&last);
+        dropped.push(format!("server {last} ({why})"));
+    }
+    dropped
 }
 
 /// A server name must be a plain identifier: it becomes a JSON key and a TOML key.

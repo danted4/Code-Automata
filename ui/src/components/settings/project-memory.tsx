@@ -8,7 +8,7 @@ import { Loader2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { api, errorMessage } from '@/lib/api';
+import { ApiError, api, errorMessage } from '@/lib/api';
 import type { MemoryView } from '@/lib/api/types/MemoryView';
 import { memoryNote } from '@/lib/settings-form';
 
@@ -43,12 +43,20 @@ export function ProjectMemory() {
   const save = async () => {
     setSaving(true);
     try {
-      const saved = await api.memory.save(text);
+      const saved = await api.memory.save(text, view.text);
       setView(saved);
       setText(saved.text);
       toast.success('Project memory saved');
     } catch (e) {
       toast.error(errorMessage(e));
+      // Changed meanwhile (an agent added a learning): show what is there now.
+      if (e instanceof ApiError && e.status === 409) {
+        const now = await api.memory.get().catch(() => null);
+        if (now) {
+          setView(now);
+          setText(now.text);
+        }
+      }
     } finally {
       setSaving(false);
     }

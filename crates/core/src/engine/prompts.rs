@@ -89,6 +89,28 @@ pub struct PromptContext<'a> {
     pub memory: Option<&'a str>,
 }
 
+/// What dev and QA agents are told about `learnings`; nothing when project memory is off.
+fn learnings_note(ctx: &PromptContext<'_>) -> &'static str {
+    if ctx.memory.is_some() {
+        " In `learnings`, add any lasting fact about this project that a later task would want \
+         (a build or test quirk, a convention, a pitfall), one short sentence each; leave it \
+         empty when there is none."
+    } else {
+        ""
+    }
+}
+
+/// `schema` without `learnings`, for when project memory is off.
+pub fn without_learnings(mut schema: serde_json::Value) -> serde_json::Value {
+    if let Some(props) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        props.remove("learnings");
+    }
+    schema
+}
+
 fn memory_block(memory: Option<&str>) -> String {
     match memory.map(str::trim).filter(|m| !m.is_empty()) {
         Some(memory) => format!(
@@ -455,10 +477,9 @@ pub fn dev(
         "\nDo only this subtask; later subtasks will be done after it. Do not commit: the \
          system commits your work when the subtask is done. In `handoff`, write what the next \
          subtasks must know (decisions, unfinished edges, where things live); leave it empty if \
-         there is nothing. In `learnings`, add any lasting fact about this project that a later \
-         task would want (a build or test quirk, a convention, a pitfall), one short sentence \
-         each; leave it empty when there is none.",
+         there is nothing.",
     );
+    s.push_str(learnings_note(ctx));
     s.push_str(&output_instructions::<DevOut>());
     s
 }
@@ -495,8 +516,7 @@ pub fn qa(task: &Task, subtask: &Subtask, ctx: &PromptContext<'_>) -> String {
          `passed` is true only if there is nothing that must be fixed. If the check needs a person, \
          say so in the summary and list what they should look at as findings, with `passed` true. \
          Run the app and its tests where you can (command-line tools such as a browser driver may \
-         be on the PATH). In `learnings`, add any lasting fact about this project that a later \
-         task would want; leave it empty when there is none.{}",
+         be on the PATH).{}{}",
         task_header(task, ctx),
         task.planning.plan.as_deref().unwrap_or("(no plan)"),
         if done.is_empty() {
@@ -507,6 +527,7 @@ pub fn qa(task: &Task, subtask: &Subtask, ctx: &PromptContext<'_>) -> String {
         subtask.title,
         subtask.id,
         subtask.detail.trim(),
+        learnings_note(ctx),
         output_instructions::<QaOut>()
     )
 }
@@ -573,6 +594,22 @@ mod tests {
             &[("task", "mentions {{plan}}"), ("plan", "THE PLAN")],
         );
         assert_eq!(out, "mentions {{plan}} / THE PLAN");
+    }
+
+    #[test]
+    fn learnings_are_asked_for_only_with_project_memory_on() {
+        let t = task();
+        let off = dev(&t, &t.subtasks[1], None, &PromptContext::default());
+        assert!(!off.contains("learnings"));
+        let on = PromptContext {
+            layout: None,
+            memory: Some(""),
+        };
+        assert!(dev(&t, &t.subtasks[1], None, &on).contains("In `learnings`"));
+        assert!(qa(&t, &t.subtasks[2], &on).contains("In `learnings`"));
+        assert!(!qa(&t, &t.subtasks[2], &PromptContext::default()).contains("learnings"));
+        let schema = without_learnings(<DevOut as AgentOutput>::schema());
+        assert!(schema["properties"].get("learnings").is_none());
     }
 
     #[test]

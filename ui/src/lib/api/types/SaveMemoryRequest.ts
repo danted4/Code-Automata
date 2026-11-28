@@ -3,4 +3,8 @@
 /**
  * `PUT /api/memory`: the project memory's new text.
  */
-export type SaveMemoryRequest = { text: string, };
+export type SaveMemoryRequest = { text: string, 
+/**
+ * The text the edit started from (see `Engine::save_memory`).
+ */
+base: string, };

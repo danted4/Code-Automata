@@ -160,26 +160,32 @@ const CLAUDE_RECOMMENDED: Record<AgentPhase, string> = {
 };
 
 /**
- * A new task's drafts: the last choice when its CLIs are still offered, else the first ready CLI,
- * with the recommended models for Claude Code.
+ * A new task's drafts: the last choice while every phase's CLI is still ready, else the first
+ * ready CLI. For Claude Code that is the recommended model per phase (the user's choice for 3.2),
+ * but only when `claudeModels` (its model list, once loaded) has those models; otherwise the
+ * CLI's default model.
  */
 export function defaultDrafts(
   providers: ProviderInfo[],
-  last: PhaseDrafts | null
+  last: PhaseDrafts | null,
+  claudeModels: string[] | null = null
 ): PhaseDrafts | null {
-  const offered = new Set(providers.map((p) => p.provider));
+  const ready = new Set(
+    providers.filter((p) => readiness(p.preflight).ready).map((p) => p.provider)
+  );
   if (
     last &&
     AGENT_PHASES.every((ph) => {
       const p = effectiveDraft(last, ph).provider;
-      return p !== null && offered.has(p);
+      return p !== null && ready.has(p);
     })
   ) {
     return last;
   }
   const provider = defaultProvider(providers);
   if (!provider) return null;
-  if (provider === 'claude') {
+  const recommended = AGENT_PHASES.every((ph) => claudeModels?.includes(CLAUDE_RECOMMENDED[ph]));
+  if (provider === 'claude' && recommended) {
     const draft = (phase: AgentPhase): AgentDraft => ({
       provider,
       model: CLAUDE_RECOMMENDED[phase],

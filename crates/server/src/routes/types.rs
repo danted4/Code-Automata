@@ -131,4 +131,6 @@ pub struct SettingsResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveMemoryRequest {
     pub text: String,
+    /// The text the edit started from (see `Engine::save_memory`).
+    pub base: String,
 }

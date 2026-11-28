@@ -1660,8 +1660,32 @@ async fn the_project_memory_can_be_read_and_edited() {
     assert_eq!(empty, json!({ "text": "", "bytes": 0, "truncated": false }));
     let text = "# Project memory\n\n- 2026-11-28 · t: Use pnpm\n";
     let saved = h
-        .ok("PUT", "/api/memory", p, Some(json!({ "text": text })))
+        .ok(
+            "PUT",
+            "/api/memory",
+            p,
+            Some(json!({ "text": text, "base": "" })),
+        )
         .await;
+    // An edit started from older text is refused: an agent may have added to it.
+    let (status, body) = h
+        .call(
+            "PUT",
+            "/api/memory",
+            p,
+            Some(json!({ "text": "x", "base": "" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _) = h
+        .call(
+            "PUT",
+            "/api/memory",
+            p,
+            Some(json!({ "text": "x".repeat(300 * 1024), "base": text })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(saved["text"], text);
     assert!(
         std::fs::read_to_string(p.join(".code-automata/memory.md"))

@@ -53,11 +53,8 @@ pub async fn save_memory(
     Project(engine): Project,
     Body(req): Body<SaveMemoryRequest>,
 ) -> Result<Json<MemoryView>, ApiError> {
-    match engine.save_memory(&req.text).await {
-        Ok(view) => Ok(Json(view)),
-        Err(CoreError::Invalid(reason)) => Err(ApiError::bad_request(reason)),
-        Err(e) => Err(e.into()),
-    }
+    // A changed file is a conflict (409), too large a text a bad request (400).
+    Ok(Json(engine.save_memory(&req.text, &req.base).await?))
 }
 
 pub async fn get(Project(engine): Project) -> Json<SettingsResponse> {

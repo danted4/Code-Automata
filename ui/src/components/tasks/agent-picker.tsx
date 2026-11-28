@@ -268,6 +268,7 @@ export function AgentPicker({ state, value, onChange, lockedReason }: AgentPicke
               Model (optional)
             </Label>
             <ModelField
+              key={value.provider}
               id="agent-model"
               provider={value.provider}
               value={value.model}
@@ -490,6 +491,7 @@ export function PhaseAgentPicker({
                   )}
                 </div>
                 <ModelField
+                  key={draft.provider}
                   id={`agent-model-${phase}`}
                   provider={draft.provider}
                   value={draft.model}

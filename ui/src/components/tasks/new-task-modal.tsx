@@ -3,7 +3,7 @@
  * the task is created.
  */
 
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -58,9 +58,13 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
   );
 }
 
-/** The page's storage, if it has one. */
+/** The page's storage, if it has one (reading it throws when site data is blocked). */
 function storage(): Storage | null {
-  return typeof window === 'undefined' ? null : window.localStorage;
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 function NewTaskForm({
@@ -77,11 +81,27 @@ function NewTaskForm({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [chosen, setChosen] = useState<PhaseDrafts | null>(null);
+  // Claude Code's model list: the recommended defaults apply only to models it has.
+  const [claudeModels, setClaudeModels] = useState<string[] | null>(null);
+  const claudeOffered = providers?.some((p) => p.provider === 'claude') ?? false;
+  useEffect(() => {
+    if (!claudeOffered) return;
+    let live = true;
+    api
+      .models('claude')
+      .then((l) => live && setClaudeModels(l.models.map((m) => m.id)))
+      .catch(() => live && setClaudeModels([]));
+    return () => {
+      live = false;
+    };
+  }, [claudeOffered]);
   const [requirePlanApproval, setRequirePlanApproval] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Until the user picks, the agents are the last choice or the first ready CLI.
-  const drafts = chosen ?? (providers ? defaultDrafts(providers, loadLastDrafts(storage())) : null);
+  const drafts =
+    chosen ??
+    (providers ? defaultDrafts(providers, loadLastDrafts(storage()), claudeModels) : null);
   const agents = drafts ? agentsFromDrafts(drafts) : null;
   const canSubmit = !creating && title.trim() !== '' && agents !== null;
 

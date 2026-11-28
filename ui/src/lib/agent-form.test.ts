@@ -233,23 +233,34 @@ describe('per-phase agents', () => {
     });
   });
 
+  const claudeList = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5'];
+
   it('recommends Fable to plan and review and Opus to develop with Claude Code', () => {
-    const d = defaultDrafts([claudeInfo(true), mockInfo], null)!;
+    const d = defaultDrafts([claudeInfo(true), mockInfo], null, claudeList)!;
     expect(d.same).toBe(false);
     expect([d.planning.model, d.dev.model, d.qa.model]).toEqual([
       'claude-fable-5-2',
       'claude-opus-5-5',
       'claude-fable-5-2',
     ]);
+    // Not while the model list is unknown, or without those models: the CLI's default.
+    for (const list of [null, ['claude-sonnet-5-5']]) {
+      expect(defaultDrafts([claudeInfo(true)], null, list)).toEqual(
+        sameDrafts({ provider: 'claude', model: '', mode: '' })
+      );
+    }
     // Another first ready CLI: the same agent everywhere, its default model.
-    const other = defaultDrafts([claudeInfo(false), mockInfo], null)!;
+    const other = defaultDrafts([claudeInfo(false), mockInfo], null, claudeList)!;
     expect(other).toEqual(sameDrafts({ provider: 'mock', model: '', mode: '' }));
   });
 
-  it('starts from the last choice while its CLIs are offered', () => {
+  it('starts from the last choice while its CLIs are ready', () => {
     const last = sameDrafts({ provider: 'mock', model: 'm', mode: '' });
     expect(defaultDrafts([claudeInfo(true), mockInfo], last)).toBe(last);
     expect(defaultDrafts([claudeInfo(true)], last)?.dev.provider).toBe('claude');
+    // Its CLI logged out since: not reused.
+    const claudeLast = sameDrafts({ provider: 'claude', model: '', mode: '' });
+    expect(defaultDrafts([claudeInfo(false), mockInfo], claudeLast)?.dev.provider).toBe('mock');
     const store = new Map<string, string>();
     const storage = {
       getItem: (k: string) => store.get(k) ?? null,

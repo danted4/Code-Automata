@@ -251,6 +251,30 @@ describe('MCP servers', () => {
     expect(isFormDirty(form, s, defaults)).toBe(false);
   });
 
+  it('keeps a saved server exactly while its row is not edited', () => {
+    // Text rows would lose the empty argument and split the one with a line break.
+    const mcpServers = {
+      odd: {
+        type: 'stdio' as const,
+        command: 'sh',
+        args: ['-c', 'line1\nline2', '--prefix', ''],
+        env: { bad: ' spaced ' },
+      },
+    };
+    const s = settings({ mcpServers });
+    const form = toForm(s, defaults);
+    const saved = fromForm({ ...form, reworkLimit: '3' }, s, defaults);
+    expect('settings' in saved && saved.settings.mcpServers).toEqual(mcpServers);
+    expect(isFormDirty(form, s, defaults)).toBe(false);
+    // Once edited, the row is what it says.
+    const edited = { ...form.mcp[0], command: 'bash' };
+    const after = fromForm({ ...form, mcp: [edited] }, s, defaults);
+    expect('settings' in after && after.settings.mcpServers?.odd).toMatchObject({
+      command: 'bash',
+      env: { bad: 'spaced' },
+    });
+  });
+
   it('says what is wrong with a row', () => {
     const form = toForm(settings(), defaults);
     const row: McpRow = { ...EMPTY_MCP_ROW, name: 'a' };

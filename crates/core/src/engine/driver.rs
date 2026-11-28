@@ -757,7 +757,13 @@ async fn attempt<T: AgentOutput>(
     session: Option<String>,
 ) -> Result<Attempt<T>> {
     let caps = agent::capabilities(run_agent_config(task).provider);
-    let schema = caps.structured_output.then(T::schema);
+    let schema = caps.structured_output.then(|| {
+        if ctx.settings.use_project_memory {
+            T::schema()
+        } else {
+            prompts::without_learnings(T::schema())
+        }
+    });
     let resumed = session.is_some();
     let outcome = execute(ctx, task, prompt, session, schema.clone(), ctx.log_label).await?;
     if resumed

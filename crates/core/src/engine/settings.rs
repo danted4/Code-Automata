@@ -208,11 +208,21 @@ impl Settings {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
             Err(e) => return Err(CoreError::Io { path, source: e }),
         };
-        let settings: Settings =
+        let mut settings: Settings =
             serde_json::from_slice(&bytes).map_err(|source| CoreError::Corrupt {
                 path: path.clone(),
                 source,
             })?;
+        // Rules stricter than when the file was saved must not lock the project out: what they
+        // refuse is left out (and dropped from the file at the next save).
+        let dropped = crate::agent::mcp::drop_unusable(&mut settings.mcp_servers);
+        if !dropped.is_empty() {
+            log::warn!(
+                "{}: MCP settings no longer allowed were left out: {}",
+                path.display(),
+                dropped.join("; ")
+            );
+        }
         settings.validate()?;
         Ok(settings)
     }

@@ -35,6 +35,11 @@ export type McpRow = {
   env: string;
   url: string;
   headers: string;
+  /**
+   * The saved server this row was made from, and the row as made: while the row is unchanged the
+   * saved server is kept exactly (text rows lose an empty argument or one with a line break).
+   */
+  saved?: { server: McpServer; row: string };
 };
 
 export const EMPTY_MCP_ROW: McpRow = {
@@ -149,8 +154,19 @@ export function toForm(
   };
 }
 
-/** A server as a form row. */
+/** The fields of a row the user edits, for telling an untouched row. */
+function rowText(row: McpRow): string {
+  const { saved: _saved, ...fields } = row;
+  return JSON.stringify(fields);
+}
+
+/** A server as a form row, keeping the server for as long as the row is not edited. */
 export function mcpRow(name: string, server: McpServer): McpRow {
+  const row = textRow(name, server);
+  return { ...row, saved: { server, row: rowText(row) } };
+}
+
+function textRow(name: string, server: McpServer): McpRow {
   if (server.type === 'stdio') {
     return {
       ...EMPTY_MCP_ROW,
@@ -179,41 +195,40 @@ const lines = (text: string) =>
     .map((l) => l.trim())
     .filter(Boolean);
 
+type Pairs = { ok: true; map: Record<string, string> } | { ok: false; line: string };
+
 /** `KEY<sep>value` lines as a map, or the first line that is not one. */
-function pairs(text: string, sep: string): Record<string, string> | { bad: string } {
-  const out: Record<string, string> = {};
+function pairs(text: string, sep: string): Pairs {
+  const map: Record<string, string> = {};
   for (const line of lines(text)) {
     const i = line.indexOf(sep);
-    if (i <= 0) return { bad: line };
-    out[line.slice(0, i).trim()] = line.slice(i + sep.length).trim();
+    if (i <= 0) return { ok: false, line };
+    map[line.slice(0, i).trim()] = line.slice(i + sep.length).trim();
   }
-  return out;
+  return { ok: true, map };
 }
 
 /** The server a row stands for, or what is wrong with it. */
 export function mcpServer(row: McpRow): { server: McpServer } | { error: string } {
+  if (row.saved && rowText(row) === row.saved.row) return { server: row.saved.server };
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(row.name.trim())) {
     return { error: 'A name of letters, digits, "-" and "_".' };
   }
   if (row.type === 'stdio') {
     if (!row.command.trim()) return { error: 'A command is needed.' };
     const env = pairs(row.env, '=');
-    if ('bad' in env && typeof env.bad === 'string') {
-      return { error: `Not NAME=value: ${env.bad}` };
-    }
+    if (!env.ok) return { error: `Not NAME=value: ${env.line}` };
     const server: McpServer = { type: 'stdio', command: row.command.trim() };
     const args = lines(row.args);
     if (args.length) server.args = args;
-    if (Object.keys(env).length) server.env = env as Record<string, string>;
+    if (Object.keys(env.map).length) server.env = env.map;
     return { server };
   }
   if (!row.url.trim()) return { error: 'An address is needed.' };
   const headers = pairs(row.headers, ':');
-  if ('bad' in headers && typeof headers.bad === 'string') {
-    return { error: `Not "Name: value": ${headers.bad}` };
-  }
+  if (!headers.ok) return { error: `Not "Name: value": ${headers.line}` };
   const server: McpServer = { type: 'http', url: row.url.trim() };
-  if (Object.keys(headers).length) server.headers = headers as Record<string, string>;
+  if (Object.keys(headers.map).length) server.headers = headers.map;
   return { server };
 }
 
