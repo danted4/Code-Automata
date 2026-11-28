@@ -316,8 +316,15 @@ function QuestionStep({
         />
       </div>
 
-      {unmet && (
-        <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
+      {/* Kept in the layout once answered (hidden, not removed), so the dialog does not
+          shrink when an option is picked. */}
+      {question.required && (
+        <p
+          className="text-xs"
+          style={{ color: 'var(--color-warning)', visibility: unmet ? 'visible' : 'hidden' }}
+          aria-hidden={!unmet}
+          data-testid={`question-hint-${question.id}`}
+        >
           {options.length > 0
             ? 'Pick an option to answer this question.'
             : 'This question needs an answer.'}
