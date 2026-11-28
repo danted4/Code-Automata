@@ -4,6 +4,20 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 3.1.1
+
+Update progress. If you have 3.1.0 or 3.0.1 installed, it offers this update when it starts.
+
+### New
+
+- **Updates show their progress.** After "Install and restart" the app shows the download (a bar and "6.5 MB of 15 MB"), then that it is installing, until it restarts. Before, nothing showed while the update downloaded, which can take a minute. The bar comes with 3.1.1, so the update *to* 3.1.1 still downloads without it.
+
+### Fixed
+
+- Two tests that failed now and then on Linux (a fake CLI run while another test thread was starting a process, and the server's output pipe closed too early). No change to the app.
+
+---
+
 ## 3.1.0
 
 Workspaces: one task across several repositories. If you have 3.0.1 installed, it offers this update when it starts.
