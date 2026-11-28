@@ -250,19 +250,8 @@ impl Settings {
                 return bad(&format!("{name:?} is not a repository folder name"));
             }
         }
-        for (name, server) in &self.mcp_servers {
-            if let Err(e) = crate::agent::mcp::validate_name(name) {
-                return bad(&e);
-            }
-            let empty = match server {
-                crate::agent::mcp::McpServer::Stdio { command, .. } => command.trim().is_empty(),
-                crate::agent::mcp::McpServer::Http { url, .. } => url.trim().is_empty(),
-            };
-            if empty {
-                return bad(&format!(
-                    "MCP server {name:?} needs a command or an address"
-                ));
-            }
+        if let Err(e) = crate::agent::mcp::validate_servers(&self.mcp_servers) {
+            return bad(&e);
         }
         Ok(())
     }

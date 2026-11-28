@@ -905,7 +905,12 @@ async fn execute(
     req.resume = session;
     req.access = ctx.access;
     req.json_schema = schema;
-    req.mcp_servers = ctx.settings.mcp_servers.clone();
+    // Planning is read-only: an MCP server (a database, GitHub) could change things outside the
+    // worktree that no discard undoes, so it gets none. Dev and QA (which checks the work, often
+    // through a browser server) get the project's allowlist.
+    if ctx.access != Access::ReadOnly {
+        req.mcp_servers = ctx.settings.mcp_servers.clone();
+    }
     req.idle_timeout = Some(ctx.settings.timeouts.idle());
     req.tool_timeout = Some(ctx.settings.timeouts.tool());
     req.total_timeout = Some(ctx.settings.timeouts.total());

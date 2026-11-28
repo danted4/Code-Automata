@@ -186,11 +186,7 @@ impl LineParser for GeminiParser {
                     text,
                     session_id: None,
                     structured: None,
-                    turns: msg
-                        .get("stats")
-                        .and_then(|s| s.get("tool_calls"))
-                        .and_then(Value::as_u64)
-                        .and_then(|n| u32::try_from(n).ok()),
+                    turns: None,
                     cost_usd: None,
                     rate_limit,
                 }));

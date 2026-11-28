@@ -78,11 +78,17 @@ pub async fn models(
         return Ok(Json(list.clone()));
     }
     let list = ca_core::agent::models::list(provider, &state.config.bins).await;
-    state
-        .models
-        .lock()
-        .await
-        .insert(provider, (std::time::Instant::now(), list.clone()));
+    // A fallback after a failed listing is not kept: the next ask tries the CLI again (it may have
+    // been installed, found or logged in meanwhile).
+    let fallback = ca_core::agent::models::can_list(provider)
+        && list.source == ca_core::agent::models::ModelSource::Curated;
+    if !fallback {
+        state
+            .models
+            .lock()
+            .await
+            .insert(provider, (std::time::Instant::now(), list.clone()));
+    }
     Ok(Json(list))
 }
 
@@ -130,6 +136,8 @@ pub async fn choose_cli(
         .map(|(_, label)| label)
         .ok_or_else(|| ApiError::bad_request("this agent's file cannot be chosen"))?;
     let bins = &state.config.bins;
+    // Another file may list other models.
+    state.models.lock().await.remove(&provider);
     bins.choose(provider, req.path).await.map_err(|e| match e {
         // A file that is not a usable CLI is a bad request, not a state conflict.
         ca_core::CoreError::Invalid(message) => ApiError::bad_request(message),

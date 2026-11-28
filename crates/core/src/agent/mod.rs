@@ -265,7 +265,9 @@ pub fn provider_label(provider: Provider) -> &'static str {
         Provider::Cursor => "Cursor",
         Provider::Amp => "Amp",
         Provider::Codex => "Codex",
-        Provider::Gemini => "Gemini CLI",
+        // Google ended Gemini CLI's free Google sign-in for individuals (November 2026): it works
+        // with an API key, Vertex AI or a company plan, and has had no live run here.
+        Provider::Gemini => "Gemini (experimental)",
         Provider::Mock => "Mock",
     }
 }

@@ -377,6 +377,27 @@ fn resume_run(t: &mut Task) {
     }
 }
 
+/// The suffixes of the files a run writes beside its log (`CommandSpec::files`).
+const RUN_FILE_SUFFIXES: [&str; 3] = [".mcp.json", ".schema.json", ".gemini-settings.json"];
+
+/// Delete run files left in `tasks/*/runs/`.
+async fn sweep_run_files(tasks_dir: &std::path::Path) {
+    let Ok(mut tasks) = tokio::fs::read_dir(tasks_dir).await else {
+        return;
+    };
+    while let Ok(Some(task)) = tasks.next_entry().await {
+        let Ok(mut runs) = tokio::fs::read_dir(task.path().join("runs")).await else {
+            continue;
+        };
+        while let Ok(Some(file)) = runs.next_entry().await {
+            let name = file.file_name().to_string_lossy().into_owned();
+            if RUN_FILE_SUFFIXES.iter().any(|s| name.ends_with(s)) {
+                let _ = tokio::fs::remove_file(file.path()).await;
+            }
+        }
+    }
+}
+
 /// How an engine is opened (see [`Engine::open_with`]).
 #[derive(Debug, Clone, Default)]
 pub struct EngineOptions {
@@ -466,6 +487,9 @@ impl Engine {
             _lock: lock,
         };
         let inner = Arc::new(inner);
+        // The lock is ours, so no run of this project is going: files a crash or a forced quit
+        // left beside the run logs (MCP configs with their secrets, schemas) go now.
+        sweep_run_files(&inner.project.tasks_dir()).await;
         if let Ok(list) = inner.store.list().await {
             for task in &list.tasks {
                 if let Some(run) = &task.run

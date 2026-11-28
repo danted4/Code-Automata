@@ -90,7 +90,8 @@ pub fn gemini_settings(servers: &McpServers) -> String {
 /// Codex's `-c` overrides for these servers, and the environment the values they name come from.
 ///
 /// A stdio server's variables are forwarded by name (`env_vars`), their values set in Codex's own
-/// environment. An HTTP server's headers come from variables too (`env_http_headers`), named
+/// environment, so the commands the agent runs see them too (a Codex limit: it takes no file of
+/// its own for them); `validate_servers` keeps them away from the variables that matter. An HTTP server's headers come from variables too (`env_http_headers`), named
 /// `CODE_AUTOMATA_MCP_<n>_<m>`.
 pub fn codex_overrides(servers: &McpServers) -> (Vec<String>, Vec<(String, String)>) {
     let mut args = Vec::new();
@@ -169,6 +170,80 @@ fn toml_key(name: &str) -> String {
     }
 }
 
+/// Variables a server may not set: Codex gets a stdio server's variables in its own environment
+/// (it forwards them by name), where these would change how Codex, git and the agent's commands
+/// run, or bring back an API key the run removed.
+const RESERVED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "PWD",
+    "NODE_OPTIONS",
+    "CODEX_HOME",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "CURSOR_API_KEY",
+];
+
+/// The allowlist as a whole: plain names, a command or address each, and variables that can be
+/// put in an agent's environment (an identifier, not reserved, and one value across all servers).
+pub fn validate_servers(servers: &McpServers) -> Result<(), String> {
+    let mut seen: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+    for (name, server) in servers {
+        validate_name(name)?;
+        match server {
+            McpServer::Stdio { command, env, .. } => {
+                if command.trim().is_empty() {
+                    return Err(format!("MCP server {name:?} needs a command"));
+                }
+                for (var, value) in env {
+                    let identifier = var
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        && var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    if !identifier {
+                        return Err(format!(
+                            "MCP server {name:?}: {var:?} is not a variable name"
+                        ));
+                    }
+                    let upper = var.to_ascii_uppercase();
+                    if RESERVED_ENV.contains(&upper.as_str()) || upper.starts_with("CODE_AUTOMATA_")
+                    {
+                        return Err(format!(
+                            "MCP server {name:?} may not set {var}: it would change how the agent \
+                             itself runs"
+                        ));
+                    }
+                    match seen.get(var.as_str()) {
+                        Some((other, v)) if *v != value.as_str() => {
+                            return Err(format!(
+                                "MCP servers {other:?} and {name:?} set {var} to different values"
+                            ));
+                        }
+                        _ => {
+                            seen.insert(var, (name, value));
+                        }
+                    }
+                }
+            }
+            McpServer::Http { url, .. } => {
+                if url.trim().is_empty() {
+                    return Err(format!("MCP server {name:?} needs an address"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A server name must be a plain identifier: it becomes a JSON key and a TOML key.
 pub fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.len() > 64 {
@@ -206,9 +281,18 @@ pub fn import_candidates(
     repo_roots: &[(String, PathBuf)],
 ) -> Vec<McpCandidate> {
     let mut out = Vec::new();
+    // Gemini's `url` is an SSE server; only its `httpUrl` is streamable HTTP.
     let mut add = |source: &str, servers: Option<&Value>| {
         if let Some(Value::Object(servers)) = servers {
             for (name, entry) in servers {
+                let gemini = source == "Gemini CLI";
+                if gemini && entry.get("httpUrl").is_none() && entry.get("command").is_none() {
+                    continue;
+                }
+                // A name the settings would refuse is not offered.
+                if validate_name(name).is_err() {
+                    continue;
+                }
                 if let Some(server) = from_json(entry) {
                     out.push(McpCandidate {
                         source: source.to_string(),
@@ -400,7 +484,8 @@ mod tests {
             project.path().join(".mcp.json"),
             json!({ "mcpServers": {
                 "docs": { "type": "http", "url": "https://d/mcp", "headers": { "A": "b" } },
-                "old": { "type": "sse", "url": "https://s/sse" }
+                "old": { "type": "sse", "url": "https://s/sse" },
+                "bad.name": { "command": "x" }
             }})
             .to_string(),
         )
@@ -414,7 +499,11 @@ mod tests {
         std::fs::create_dir_all(home.path().join(".gemini")).unwrap();
         std::fs::write(
             home.path().join(".gemini/settings.json"),
-            json!({ "mcpServers": { "g": { "httpUrl": "https://g/mcp" } } }).to_string(),
+            json!({ "mcpServers": {
+                "g": { "httpUrl": "https://g/mcp" },
+                "sse": { "url": "https://g/sse" }
+            } })
+            .to_string(),
         )
         .unwrap();
 
@@ -444,5 +533,37 @@ mod tests {
         );
         assert!(matches!(&found[5].server, McpServer::Http { url, .. } if url == "https://g/mcp"));
         assert!(import_candidates(None, project.path(), &[]).len() == 1);
+    }
+
+    #[test]
+    fn variables_that_would_change_the_agent_or_collide_are_refused() {
+        assert!(validate_servers(&servers()).is_ok());
+        let stdio = |var: &str, value: &str| McpServer::Stdio {
+            command: "x".into(),
+            args: vec![],
+            env: BTreeMap::from([(var.to_string(), value.to_string())]),
+        };
+        for var in [
+            "PATH",
+            "path",
+            "OPENAI_API_KEY",
+            "CODE_AUTOMATA_X",
+            "1BAD",
+            "A-B",
+        ] {
+            let one = McpServers::from([("a".to_string(), stdio(var, "v"))]);
+            assert!(validate_servers(&one).is_err(), "{var} was accepted");
+        }
+        let same = McpServers::from([
+            ("a".to_string(), stdio("TOKEN", "1")),
+            ("b".to_string(), stdio("TOKEN", "1")),
+        ]);
+        assert!(validate_servers(&same).is_ok());
+        let clash = McpServers::from([
+            ("a".to_string(), stdio("TOKEN", "1")),
+            ("b".to_string(), stdio("TOKEN", "2")),
+        ]);
+        let err = validate_servers(&clash).unwrap_err();
+        assert!(err.contains("different values"), "{err}");
     }
 }

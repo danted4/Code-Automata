@@ -106,6 +106,9 @@ pub(crate) async fn spawn(
 ) -> Result<RunningAgent> {
     let log = open_log(&req.log_path).await?;
 
+    // Removed whenever this run ends, however it ends (the guard goes with the supervisor, or is
+    // dropped on any early return below).
+    let files = RunFiles(spec.files.iter().map(|f| f.path.clone()).collect());
     for file in &spec.files {
         write_private(&file.path, &file.contents).await?;
     }
@@ -127,17 +130,9 @@ pub(crate) async fn spawn(
         cmd.env(key, value);
     }
 
-    let files: Vec<PathBuf> = spec.files.iter().map(|f| f.path.clone()).collect();
-    let mut child = match crate::proc::spawn(cmd) {
-        Ok(child) => child,
-        Err(e) => {
-            remove_files(&files).await;
-            return Err(CoreError::Invalid(format!(
-                "could not start {}: {e}",
-                spec.program.display()
-            )));
-        }
-    };
+    let mut child = crate::proc::spawn(cmd).map_err(|e| {
+        CoreError::Invalid(format!("could not start {}: {e}", spec.program.display()))
+    })?;
     let pid = child.id();
     let (Some(mut stdin), Some(stdout), Some(stderr)) =
         (child.take_stdin(), child.take_stdout(), child.take_stderr())
@@ -172,7 +167,7 @@ pub(crate) async fn spawn(
         kill_grace: req.kill_grace,
         session_id: spec.session_id.clone(),
         reaped: false,
-        files,
+        _files: files,
     };
     tokio::spawn(supervisor.run(stdout, stderr, stop_rx));
 
@@ -186,13 +181,32 @@ pub(crate) async fn spawn(
     })
 }
 
-/// Write a run's file (it may hold MCP secrets) so only the user can read it.
+/// The files a run needs (they may hold MCP secrets), removed when this is dropped: at the end
+/// of the run, or on an early return before it starts. Files a crash leaves behind are swept when
+/// the project is next opened (`engine::reconcile`).
+struct RunFiles(Vec<PathBuf>);
+
+impl Drop for RunFiles {
+    fn drop(&mut self) {
+        for f in &self.0 {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+}
+
+/// Write a run's file so only the user can read it: always a new file (an old one, with whatever
+/// mode it had, is removed first), created with mode 0600 on Unix. On Windows the file gets the
+/// folder's permissions, which under the user's profile are the user's own.
 async fn write_private(path: &Path, contents: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         tokio::fs::create_dir_all(dir).await.map_err(io_at(dir))?;
     }
+    match tokio::fs::remove_file(path).await {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io_at(path)(e)),
+        _ => {}
+    }
     let mut options = tokio::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path).await.map_err(io_at(path))?;
@@ -200,12 +214,6 @@ async fn write_private(path: &Path, contents: &str) -> Result<()> {
         .await
         .map_err(io_at(path))?;
     file.flush().await.map_err(io_at(path))
-}
-
-async fn remove_files(files: &[PathBuf]) {
-    for f in files {
-        let _ = tokio::fs::remove_file(f).await;
-    }
 }
 
 async fn open_log(path: &Path) -> Result<File> {
@@ -239,8 +247,8 @@ struct Supervisor {
     session_id: Option<String>,
     /// The agent process has been waited for (its pid and process group id may be reused).
     reaped: bool,
-    /// The run's own files, deleted when it ends.
-    files: Vec<PathBuf>,
+    /// The run's own files, deleted when it ends (on drop).
+    _files: RunFiles,
 }
 
 /// One line-oriented pipe. Lines are read as bytes and decoded lossily, so a stray non-UTF-8
@@ -460,7 +468,6 @@ impl Supervisor {
         }
         self.log_line(&record.to_string()).await;
         let _ = self.log.flush().await;
-        remove_files(&self.files).await;
         let _ = self.events.send(AgentEvent::Finished {
             outcome: Box::new(outcome),
         });

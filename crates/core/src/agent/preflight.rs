@@ -170,7 +170,10 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
 
 /// Whether Gemini CLI has a sign-in it can use headless: a Google login chosen in
 /// `~/.gemini/settings.json` (`security.auth.selectedType`, or the older `selectedAuthType`), or an
-/// API key or Vertex setting the run will still see. Unknown without a home folder.
+/// API key or Vertex setting. A key may also come from Gemini's own `.env` files or a shell the app
+/// was not started from, and Vertex from Google's default credentials, none of which this can see:
+/// those are unknown rather than "not signed in", unless the key is in the app's environment and
+/// the run keeps it. Unknown without a home folder.
 fn gemini_signed_in(bins: &Binaries, agent: &AgentConfig) -> Option<bool> {
     let home = bins.home()?;
     let settings = std::fs::read_to_string(home.join(".gemini").join("settings.json"))
@@ -186,13 +189,13 @@ fn gemini_signed_in(bins: &Binaries, agent: &AgentConfig) -> Option<bool> {
     let has_key = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
         .iter()
         .any(|k| std::env::var_os(k).is_some());
-    Some(match selected.as_deref() {
-        Some("oauth-personal" | "compute-default-credentials" | "cloud-shell") => true,
-        // A key-based sign-in works only while the run keeps the key.
-        Some("gemini-api-key" | "vertex-ai") => keys_kept && has_key,
-        Some(_) => true,
-        None => keys_kept && has_key,
-    })
+    match selected.as_deref() {
+        Some("oauth-personal" | "compute-default-credentials" | "cloud-shell") => Some(true),
+        Some("gemini-api-key" | "vertex-ai") => (keys_kept && has_key).then_some(true),
+        Some(_) => Some(true),
+        None if keys_kept && has_key => Some(true),
+        None => Some(false),
+    }
 }
 
 struct CheckOutput {

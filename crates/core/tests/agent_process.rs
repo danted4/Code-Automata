@@ -588,11 +588,49 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"%s %s","
             env: [("TOKEN".to_string(), "s3cret".to_string())].into(),
         },
     );
-    let outcome = start(req, &bins).await.unwrap().wait().await;
+    // A wider file left from an earlier run is replaced, not reused with its mode.
+    std::fs::create_dir_all(m.path("logs")).unwrap();
+    std::fs::write(m.path("logs/run.mcp.json"), "old").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            m.path("logs/run.mcp.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+    let outcome = start(req.clone(), &bins).await.unwrap().wait().await;
     assert_eq!(outcome.kind, OutcomeKind::Completed, "{outcome:?}");
     assert_eq!(outcome.final_text, "600 1", "the file was not private");
     assert!(
         !m.path("logs/run.mcp.json").exists(),
         "the file outlived the run"
     );
+}
+
+#[tokio::test]
+#[cfg(unix)] // the fake CLI is a shell script
+async fn a_runs_files_go_when_the_cli_cannot_start() {
+    use ca_core::agent::mcp::McpServer;
+    let m = Mock::new();
+    // Executable, but its interpreter does not exist: spawning it fails.
+    let broken = m.path("claude");
+    common::write_script(&broken, "#!/nonexistent/interpreter\n");
+    let bins = Binaries::from_env().with_override(Provider::Claude, &broken);
+    let mut req = RunRequest::new(
+        AgentConfig::new(Provider::Claude),
+        m.dir.path(),
+        "go",
+        m.path("logs/run.ndjson"),
+    );
+    req.mcp_servers.insert(
+        "x".into(),
+        McpServer::Stdio {
+            command: "x".into(),
+            args: vec![],
+            env: Default::default(),
+        },
+    );
+    assert!(start(req, &bins).await.is_err());
+    assert!(!m.path("logs/run.mcp.json").exists());
 }

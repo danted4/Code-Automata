@@ -84,6 +84,8 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
             contents: text,
         });
     }
+    // Settings refuse these already; a run is refused too rather than given a reserved variable.
+    mcp::validate_servers(&req.mcp_servers).map_err(CoreError::Invalid)?;
     let (mcp_args, env_set) = mcp::codex_overrides(&req.mcp_servers);
     args.extend(mcp_args);
     if let Some(id) = &req.resume {

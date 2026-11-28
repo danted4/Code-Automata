@@ -2101,3 +2101,100 @@ async fn a_model_limit_holds_only_that_model_and_moving_off_it_resumes() {
     let charlie = engine.get_task(&c.id).await.unwrap().unwrap();
     assert_eq!(charlie.run.unwrap().state, RunState::RateLimited);
 }
+
+// MCP servers and run files ---------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)] // the fake CLI is a shell script
+async fn planning_runs_get_no_mcp_servers_and_dev_and_qa_do() {
+    use ca_core::agent::mcp::McpServer;
+    let env = Env::new().await;
+    env.settings(|s| {
+        s.mcp_servers.insert(
+            "browser".into(),
+            McpServer::Stdio {
+                command: "npx".into(),
+                args: vec![],
+                env: Default::default(),
+            },
+        );
+    })
+    .await;
+    let record = env.path("claude-args.txt");
+    let fake = env.path("claude");
+    common::write_script(
+        &fake,
+        &format!(
+            r##"#!/bin/sh
+prompt=$(cat)
+echo "$*" >> '{}'
+case "$prompt" in
+  *"Break the approved plan"*) out='{{"subtasks":[{{"id":"dev-1","kind":"dev","title":"a","detail":"d"}},{{"id":"qa-1","kind":"qa","title":"q","detail":"d"}}]}}' ;;
+  *"(qa-1)"*) out='{{"passed":true,"summary":"ok","findings":[]}}' ;;
+  *"(dev-1)"*) out='{{"summary":"did it","handoff":""}}' ;;
+  *) out='{{"plan":"# Plan\n\n## Steps\n1. do the thing, well enough to act on"}}' ;;
+esac
+printf '{{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s","structured_output":%s}}\n' "$out"
+"##,
+            record.display()
+        ),
+    );
+    let bins = env.bins().with_override(Provider::Claude, &fake);
+    let engine = Engine::open(env.project.clone(), bins).await.unwrap();
+    let task = engine
+        .create_task("Mcp", "", AgentConfig::new(Provider::Claude), false)
+        .await
+        .unwrap();
+    let done = run_to_end(&engine, &task.id).await;
+    assert_eq!(done.phase, Phase::HumanReview, "{:?}", done.run);
+
+    let calls = std::fs::read_to_string(&record).unwrap();
+    let (planning, rest): (Vec<&str>, Vec<&str>) =
+        calls.lines().partition(|l| l.contains("--tools"));
+    assert!(planning.len() >= 2, "{calls}");
+    assert!(
+        planning.iter().all(|l| !l.contains("--mcp-config")),
+        "a planning run got MCP servers: {calls}"
+    );
+    assert!(rest.len() >= 2, "{calls}");
+    assert!(
+        rest.iter().all(|l| l.contains("--mcp-config")),
+        "a dev or QA run went without them: {calls}"
+    );
+    // Their files are gone once the runs end.
+    let runs = env.project.tasks_dir().join(&task.id).join("runs");
+    let leftovers: Vec<_> = std::fs::read_dir(runs)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".mcp.json"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_a_project_sweeps_run_files_a_crash_left() {
+    let env = Env::new().await;
+    let engine = env.engine().await;
+    let task = engine
+        .create_task("Sweep", "", env.agent(1, vec![]), false)
+        .await
+        .unwrap();
+    drop(engine);
+    let runs = env.project.tasks_dir().join(&task.id).join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    for name in [
+        "r-1-run.mcp.json",
+        "r-1-run.schema.json",
+        "r-1-run.gemini-settings.json",
+    ] {
+        std::fs::write(runs.join(name), "secret").unwrap();
+    }
+    std::fs::write(runs.join("r-1-run.events.ndjson"), "{}\n").unwrap();
+    let _engine = env.engine().await;
+    let left: Vec<String> = std::fs::read_dir(&runs)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["r-1-run.events.ndjson"]);
+}

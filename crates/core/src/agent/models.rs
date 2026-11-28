@@ -77,6 +77,14 @@ pub fn curated(provider: Provider) -> Vec<ModelOption> {
     }
 }
 
+/// Whether the CLI can list its own models (so a curated answer means its listing failed).
+pub fn can_list(provider: Provider) -> bool {
+    matches!(
+        provider,
+        Provider::Cursor | Provider::Gemini | Provider::Codex
+    )
+}
+
 /// The models for `provider`: the CLI's own list when it can give one, else the curated list.
 pub async fn list(provider: Provider, bins: &Binaries) -> ModelList {
     let listed = match provider {
@@ -125,33 +133,34 @@ async fn run_list(provider: Provider, bins: &Binaries, args: &[&str]) -> Option<
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Cursor's `models` prints one model per line, its id first ("gpt-5 - GPT-5", "• sonnet-4.5
-/// (current)"), under a heading.
+/// Cursor's `models` prints one model per line under a heading: "id - Label", "id (current)" or
+/// a bare id, maybe after a bullet. Any other line (a heading, a "Tip: …" footer) is skipped.
 pub fn parse_cursor(text: &str) -> Vec<ModelOption> {
-    let mut models = Vec::new();
+    let mut models: Vec<ModelOption> = Vec::new();
     for line in text.lines() {
-        let line = line.trim().trim_start_matches(['-', '*', '•', ' ']);
-        if line.is_empty() || line.ends_with(':') || line.to_lowercase().starts_with("available") {
-            continue;
-        }
+        let line = line.trim().trim_start_matches(['-', '*', '•']).trim();
         let Some(id) = line.split_whitespace().next() else {
             continue;
         };
         let plausible = id.chars().any(|c| c.is_ascii_alphabetic())
+            && !id.ends_with(':')
             && id
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "._-:/[]=,".contains(c));
-        if !plausible || models.iter().any(|m: &ModelOption| m.id == id) {
+        if !plausible || models.iter().any(|m| m.id == id) {
             continue;
         }
-        let rest = line[id.len()..]
-            .trim()
-            .trim_start_matches(['-', '–', '—'])
-            .trim();
-        let label = if rest.is_empty() || rest.starts_with('(') {
+        let rest = line[id.len()..].trim();
+        let label = if rest.is_empty() || (rest.starts_with('(') && rest.ends_with(')')) {
             id.to_string()
+        } else if let Some(label) = rest
+            .strip_prefix(['-', '–', '—'])
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+        {
+            label.to_string()
         } else {
-            rest.to_string()
+            continue; // prose, not a model line
         };
         models.push(option(id, &label));
     }
@@ -215,7 +224,7 @@ mod tests {
 
     #[test]
     fn cursor_lines_give_ids_and_labels() {
-        let text = "Available models:\n\n  - auto - Auto\n  • gpt-5 (current)\n  sonnet-4.5-thinking - Claude 4.5 Sonnet Thinking\n";
+        let text = "Available models:\n\n  - auto - Auto\n  • gpt-5 (current)\n  sonnet-4.5-thinking - Claude 4.5 Sonnet Thinking\n\nTip: use --model <id> to pick one\nRun agent models to see more\n";
         let models = parse_cursor(text);
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["auto", "gpt-5", "sonnet-4.5-thinking"]);

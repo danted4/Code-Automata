@@ -532,4 +532,11 @@ async fn preflight_reads_codex_and_gemini_logins() {
     let report = check(Provider::Gemini, &bins).await;
     assert_eq!(report.logged_in, Some(true));
     assert!(report.ready());
+    // A key-based sign-in may use a key this cannot see (Gemini's .env): unknown, not "no".
+    std::fs::write(
+        home.path().join(".gemini/settings.json"),
+        r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(check(Provider::Gemini, &bins).await.logged_in, None);
 }
