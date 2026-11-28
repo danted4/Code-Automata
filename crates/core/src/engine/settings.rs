@@ -125,6 +125,10 @@ pub struct Settings {
     /// above apply to a one-repository project only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub repos: BTreeMap<String, RepoSettings>,
+    /// The MCP servers this project's agents may use, by name; none by default. Claude Code,
+    /// Codex and Gemini CLI get exactly these (the user's own servers stay out).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_servers: crate::agent::mcp::McpServers,
 }
 
 fn default_concurrency() -> u32 {
@@ -148,6 +152,7 @@ impl Default for Settings {
             triage_on_resume: false,
             prompts: PromptOverrides::default(),
             pull_request_host: None,
+            mcp_servers: BTreeMap::new(),
             repos: BTreeMap::new(),
         }
     }
@@ -243,6 +248,20 @@ impl Settings {
         for name in self.repos.keys() {
             if name == crate::util::ROOT_REPO || crate::util::validate_repo_name(name).is_err() {
                 return bad(&format!("{name:?} is not a repository folder name"));
+            }
+        }
+        for (name, server) in &self.mcp_servers {
+            if let Err(e) = crate::agent::mcp::validate_name(name) {
+                return bad(&e);
+            }
+            let empty = match server {
+                crate::agent::mcp::McpServer::Stdio { command, .. } => command.trim().is_empty(),
+                crate::agent::mcp::McpServer::Http { url, .. } => url.trim().is_empty(),
+            };
+            if empty {
+                return bad(&format!(
+                    "MCP server {name:?} needs a command or an address"
+                ));
             }
         }
         Ok(())

@@ -40,6 +40,9 @@ pub struct AppState {
     /// Which CLIs are rate-limited: shared by every project's engine, since a usage limit belongs
     /// to the account.
     limits: Arc<RateLimits>,
+    /// Each agent's model list and when it was read (`GET /api/providers/:provider/models`).
+    pub(crate) models:
+        Mutex<HashMap<ca_core::Provider, (std::time::Instant, ca_core::agent::models::ModelList)>>,
     closing: watch::Sender<bool>,
 }
 
@@ -49,6 +52,7 @@ impl AppState {
             config,
             engines: Mutex::new(HashMap::new()),
             limits: Arc::new(RateLimits::default()),
+            models: Mutex::new(HashMap::new()),
             closing: watch::channel(false).0,
         })
     }

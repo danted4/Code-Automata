@@ -1,0 +1,2 @@
+{"type":"init","timestamp":"2026-11-28T10:00:00.000Z","session_id":"6c9f2f1e-0d6a-4b1e-9a37-00000000quot","model":"gemini-3-pro-preview"}
+{"type":"result","timestamp":"2026-11-28T10:00:03.000Z","status":"error","error":{"type":"FatalTurnError","message":"[API Error: You have exhausted your daily quota on this model.] Please wait and try again later."},"stats":{"total_tokens":0,"tool_calls":0}}

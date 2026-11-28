@@ -16,8 +16,8 @@ export type AgentDraft = { provider: Provider | null; model: string; mode: strin
 
 export const EMPTY_AGENT_DRAFT: AgentDraft = { provider: null, model: '', mode: '' };
 
-/** Providers that take a `mode`; the others ignore it. */
-const MODE_PROVIDERS: Provider[] = ['amp'];
+/** Providers that take a `mode` (Amp's mode, Codex's reasoning effort); the others ignore it. */
+const MODE_PROVIDERS: Provider[] = ['amp', 'codex'];
 
 export function takesMode(provider: Provider | null): boolean {
   return provider !== null && MODE_PROVIDERS.includes(provider);
@@ -25,7 +25,9 @@ export function takesMode(provider: Provider | null): boolean {
 
 /** A suggested mode for the provider, shown as a placeholder. */
 export function suggestedMode(provider: Provider | null): string | null {
-  return provider === 'amp' ? 'low' : null;
+  if (provider === 'amp') return 'low';
+  if (provider === 'codex') return 'medium';
+  return null;
 }
 
 export type Readiness = { ready: boolean; label: string };

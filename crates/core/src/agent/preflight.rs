@@ -76,6 +76,8 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
     let env_remove = match provider {
         Provider::Claude => super::claude::removed_env(agent),
         Provider::Cursor => super::cursor::removed_env(agent),
+        Provider::Codex => super::codex::removed_env(agent),
+        Provider::Gemini => super::gemini::removed_env(agent),
         Provider::Amp | Provider::Mock => Vec::new(),
     };
     let run = |args: &'static [&'static str]| run(&binary, args, bins, &env_remove);
@@ -123,6 +125,27 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
             }),
             "run `amp login`",
         ),
+        // Written to stderr: "Logged in using ChatGPT" (or an API key or token), else "Not
+        // logged in" with exit code 1.
+        Provider::Codex => (
+            run(&["login", "status"]).await.and_then(|o| {
+                let text = format!("{}{}", o.stdout, o.stderr);
+                if text.contains("Not logged in") {
+                    Some(false)
+                } else if o.ok && text.contains("Logged in") || text.contains("API key configured")
+                {
+                    Some(true)
+                } else {
+                    None
+                }
+            }),
+            "run `codex login`",
+        ),
+        // No status command: the sign-in method chosen in its settings, or a key it may use.
+        Provider::Gemini => (
+            gemini_signed_in(bins, agent),
+            "run `gemini` once and sign in with Google",
+        ),
         Provider::Mock => (Some(true), ""),
     };
     report.logged_in = logged_in;
@@ -143,6 +166,33 @@ pub async fn check_agent(agent: &AgentConfig, bins: &Binaries) -> Preflight {
         )),
     };
     report
+}
+
+/// Whether Gemini CLI has a sign-in it can use headless: a Google login chosen in
+/// `~/.gemini/settings.json` (`security.auth.selectedType`, or the older `selectedAuthType`), or an
+/// API key or Vertex setting the run will still see. Unknown without a home folder.
+fn gemini_signed_in(bins: &Binaries, agent: &AgentConfig) -> Option<bool> {
+    let home = bins.home()?;
+    let settings = std::fs::read_to_string(home.join(".gemini").join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let selected = settings.as_ref().and_then(|s| {
+        s.pointer("/security/auth/selectedType")
+            .or_else(|| s.get("selectedAuthType"))
+            .and_then(serde_json::Value::as_str)
+            .map(String::from)
+    });
+    let keys_kept = super::option_bool(agent, "useApiKeyFromEnv");
+    let has_key = ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+        .iter()
+        .any(|k| std::env::var_os(k).is_some());
+    Some(match selected.as_deref() {
+        Some("oauth-personal" | "compute-default-credentials" | "cloud-shell") => true,
+        // A key-based sign-in works only while the run keeps the key.
+        Some("gemini-api-key" | "vertex-ai") => keys_kept && has_key,
+        Some(_) => true,
+        None => keys_kept && has_key,
+    })
 }
 
 struct CheckOutput {

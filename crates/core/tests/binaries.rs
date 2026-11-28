@@ -275,6 +275,16 @@ fn a_cli_under_another_nvm_version_is_found_and_runs_with_that_node() {
     let (program, args) = bins.launch(&script_cli);
     assert_eq!(program, versions.join("v22.22.0/bin/node"));
     assert_eq!(args, [script_cli.to_string_lossy()]);
+    // Flags on the #! line go to node.
+    let flagged = versions.join("v22.22.0/bin/flagged");
+    common::write_script(&flagged, "#!/usr/bin/env -S node --no-warnings\n");
+    assert_eq!(
+        bins.launch(&flagged).1,
+        [
+            "--no-warnings".to_string(),
+            flagged.to_string_lossy().into_owned()
+        ]
+    );
     // A native binary in that folder, or anything on the PATH, runs as itself.
     assert_eq!(bins.launch(&newest), (newest.clone(), vec![]));
     assert_eq!(

@@ -176,6 +176,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude Code',
   cursor: 'Cursor',
   amp: 'Amp',
+  codex: 'Codex',
+  gemini: 'Gemini CLI',
   mock: 'Mock',
 };
 

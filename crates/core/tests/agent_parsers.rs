@@ -295,3 +295,86 @@ fn a_blank_amp_result_does_not_hide_its_error() {
     let r = result_of(&mut StreamJson::amp(), &[line]);
     assert_eq!(r.text.as_deref(), Some("Rate limit exceeded"));
 }
+
+#[test]
+fn codex_items_become_events_and_the_last_message_is_the_answer() {
+    use ca_core::agent::codex::CodexParser;
+    let p = parse("codex-dev", CodexParser::default());
+    assert_eq!(tool_names(&p.events), ["shell", "shell", "edit"]);
+    let failed: Vec<bool> = p
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failed, [false, true, false]);
+    assert!(
+        p.events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Thinking { text } if text.contains("Reading")))
+    );
+    let r = p.result.unwrap();
+    assert!(r.succeeded(), "a reconnect error is not the end: {r:?}");
+    assert_eq!(
+        r.structured.unwrap()["summary"],
+        "Added the limit check in src/lib.rs"
+    );
+    assert_eq!(
+        r.session_id.as_deref(),
+        Some("0199a213-81c0-7800-8aa1-bbab2a035a53")
+    );
+}
+
+#[test]
+fn codex_usage_limit_is_a_limit_on_the_account() {
+    use ca_core::agent::codex::CodexParser;
+    let r = parse("codex-usage-limit", CodexParser::default())
+        .result
+        .unwrap();
+    assert!(!r.succeeded());
+    let limit = r.rate_limit.unwrap();
+    assert_eq!(limit.scope, LimitScope::Account);
+    assert!(limit.resets_at.is_some());
+    // With no turn result, the error line alone still says it.
+    let mut parser = CodexParser::default();
+    parser.parse(r#"{"type":"thread.started","thread_id":"t"}"#);
+    parser.parse(r#"{"type":"error","message":"You've hit your usage limit."}"#);
+    assert!(parser.finish(&[]).unwrap().rate_limit.is_some());
+    assert!(CodexParser::default().finish(&["boom".into()]).is_none());
+}
+
+#[test]
+fn gemini_deltas_join_and_tool_errors_show() {
+    use ca_core::agent::gemini::GeminiParser;
+    let p = parse("gemini-dev", GeminiParser::default());
+    assert_eq!(tool_names(&p.events), ["run_shell_command", "write_file"]);
+    let text = texts(&p.events);
+    assert!(text.contains("Looking at the code."), "{text}");
+    assert!(
+        text.contains(r#"{"summary":"done","handoff":""}"#),
+        "{text}"
+    );
+    assert!(p.events.iter().any(
+        |e| matches!(e, AgentEvent::ToolResult { id, is_error: true, .. } if id == "write_file-2")
+    ));
+    let r = p.result.unwrap();
+    assert!(r.succeeded());
+    assert_eq!(r.text, None, "the answer is the run's text");
+}
+
+#[test]
+fn gemini_quota_and_missing_login() {
+    use ca_core::agent::gemini::GeminiParser;
+    let r = parse("gemini-quota", GeminiParser::default())
+        .result
+        .unwrap();
+    assert!(!r.succeeded());
+    assert_eq!(r.rate_limit.unwrap().scope, LimitScope::Model(None));
+    // Not signed in: exit 41 with no result, the reason only on stderr.
+    let tail = ["Please set an Auth method in your settings.json".to_string()];
+    let r = GeminiParser::default().finish(&tail).unwrap();
+    assert!(r.text.unwrap().contains("not signed in"));
+    assert!(r.rate_limit.is_none());
+}

@@ -73,7 +73,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml` fail on a
 
 **Workflow.** The phases are fixed: `planning → in_progress → ai_review → human_review → done`. Allowed moves, including rework, replan and reopen, are the table in `crates/core/src/transitions.rs`. Do not add phases. Dragging a card only moves it; agents are started, paused and resumed by buttons.
 
-**Providers.** Claude Code, Cursor, Amp, plus `mock` for tests (never offered to users in a packaged build). Provider code lives in `crates/core/src/agent/`.
+**Providers.** Claude Code, Codex, Gemini CLI, Cursor, Amp, plus `mock` for tests (never offered to users in a packaged build). Provider code lives in `crates/core/src/agent/`.
 
 **Desktop-only actions** (folder picker, open in editor, reveal in file manager) go through `ui/src/lib/native.ts`, which calls the app's commands (`crates/app/src/native.rs`). In a plain browser it is `null` and the UI hides those actions.
 

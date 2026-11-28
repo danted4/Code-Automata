@@ -3,4 +3,4 @@
 /**
  * Which CLI agent runs the task.
  */
-export type Provider = "claude" | "cursor" | "amp" | "mock";
+export type Provider = "claude" | "cursor" | "amp" | "codex" | "gemini" | "mock";

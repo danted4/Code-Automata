@@ -1148,7 +1148,7 @@ async fn an_agent_cli_file_can_be_chosen_and_cleared() {
         .map(|c| c["provider"].as_str().unwrap())
         .collect();
     // The mock agent's file is never chosen, even when it is offered.
-    assert_eq!(providers, ["claude", "cursor", "amp"]);
+    assert_eq!(providers, ["claude", "codex", "gemini", "cursor", "amp"]);
     assert!(list[0]["path"].is_null());
 
     let cli = h.files.path().join("my-amp");
@@ -1167,7 +1167,14 @@ async fn an_agent_cli_file_can_be_chosen_and_cleared() {
     assert_eq!(info["preflight"]["binary"], cli.to_str().unwrap());
     assert_eq!(info["preflight"]["version"], "9.9.9");
     let (_, list) = send("GET", "/api/cli-paths", None).await;
-    assert_eq!(list[2]["path"], cli.to_str().unwrap());
+    assert_eq!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["provider"] == "amp")
+            .unwrap()["path"],
+        cli.to_str().unwrap()
+    );
 
     // Not an executable, not a full path, the mock agent: 400, and nothing changes.
     let notes = h.files.path().join("notes.txt");
@@ -1193,13 +1200,27 @@ async fn an_agent_cli_file_can_be_chosen_and_cleared() {
         );
     }
     let (_, list) = send("GET", "/api/cli-paths", None).await;
-    assert_eq!(list[2]["path"], cli.to_str().unwrap());
+    assert_eq!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["provider"] == "amp")
+            .unwrap()["path"],
+        cli.to_str().unwrap()
+    );
 
     let (status, info) = send("PUT", "/api/cli-paths/amp", Some(json!({ "path": null }))).await;
     assert_eq!(status, StatusCode::OK, "{info}");
     assert_ne!(info["preflight"]["source"], "chosen");
     let (_, list) = send("GET", "/api/cli-paths", None).await;
-    assert!(list[2]["path"].is_null());
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["provider"] == "amp")
+            .unwrap()["path"]
+            .is_null()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1560,4 +1581,72 @@ async fn mock_tasks_from_the_ui_get_the_default_scenario() {
         edited["agents"]["qa"]["options"]["scenario"],
         json!(scenario)
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn model_lists_come_from_the_cli_or_the_app() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    // Claude Code cannot list its models: the app's list.
+    let claude = h.ok("GET", "/api/providers/claude/models", p, None).await;
+    assert_eq!(claude["source"], "curated");
+    assert_eq!(claude["models"][0]["id"], "claude-fable-5-2");
+    assert_eq!(claude["models"][0]["label"], "Fable 5.2");
+    let mock = h.ok("GET", "/api/providers/mock/models", p, None).await;
+    assert_eq!(mock["models"][0]["id"], "mock");
+    let (status, _) = h.call("GET", "/api/providers/gpt/models", p, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Not offered without --allow-mock.
+    let plain = Harness::new(false);
+    let (status, _) = plain
+        .call("GET", "/api/providers/mock/models", p, None)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_servers_are_saved_checked_and_imported() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    std::fs::write(
+        p.join(".mcp.json"),
+        json!({ "mcpServers": { "docs": { "type": "http", "url": "https://d/mcp" } } }).to_string(),
+    )
+    .unwrap();
+    let found = h.ok("GET", "/api/mcp/import", p, None).await;
+    let docs = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["source"] == ".mcp.json")
+        .unwrap();
+    assert_eq!(docs["name"], "docs");
+    assert_eq!(
+        docs["server"],
+        json!({ "type": "http", "url": "https://d/mcp" })
+    );
+
+    let mut settings = h.ok("GET", "/api/settings", p, None).await["settings"].clone();
+    settings["mcpServers"] = json!({ "docs": docs["server"] });
+    let saved = h
+        .ok("PUT", "/api/settings", p, Some(settings.clone()))
+        .await;
+    assert_eq!(
+        saved["settings"]["mcpServers"]["docs"]["url"],
+        "https://d/mcp"
+    );
+    // A name that is not plain, or a server with no command, is refused.
+    for bad in [
+        json!({ "a.b": { "type": "stdio", "command": "x" } }),
+        json!({ "x": { "type": "stdio", "command": " " } }),
+        json!({ "x": { "type": "sse", "url": "u" } }),
+    ] {
+        settings["mcpServers"] = bad.clone();
+        let (status, _) = h
+            .call("PUT", "/api/settings", p, Some(settings.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
 }

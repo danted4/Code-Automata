@@ -20,6 +20,8 @@ pub fn api() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/projects/open", post(projects::open))
         .route("/api/providers", get(projects::providers))
+        .route("/api/providers/{provider}/models", get(projects::models))
+        .route("/api/mcp/import", get(settings::mcp_import))
         .route("/api/cli-paths", get(projects::cli_paths))
         .route(
             "/api/cli-paths/{provider}",

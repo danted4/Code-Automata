@@ -16,7 +16,7 @@
 //! * While a tool call is open the idle timeout is replaced by the longer tool timeout (CLIs print
 //!   nothing during a long build); open calls are forgotten once the agent talks again.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,6 +106,9 @@ pub(crate) async fn spawn(
 ) -> Result<RunningAgent> {
     let log = open_log(&req.log_path).await?;
 
+    for file in &spec.files {
+        write_private(&file.path, &file.contents).await?;
+    }
     let (program, launch_args) = bins.launch(&spec.program);
     let mut cmd = crate::proc::command(&program);
     cmd.args(&launch_args)
@@ -124,9 +127,17 @@ pub(crate) async fn spawn(
         cmd.env(key, value);
     }
 
-    let mut child = crate::proc::spawn(cmd).map_err(|e| {
-        CoreError::Invalid(format!("could not start {}: {e}", spec.program.display()))
-    })?;
+    let files: Vec<PathBuf> = spec.files.iter().map(|f| f.path.clone()).collect();
+    let mut child = match crate::proc::spawn(cmd) {
+        Ok(child) => child,
+        Err(e) => {
+            remove_files(&files).await;
+            return Err(CoreError::Invalid(format!(
+                "could not start {}: {e}",
+                spec.program.display()
+            )));
+        }
+    };
     let pid = child.id();
     let (Some(mut stdin), Some(stdout), Some(stderr)) =
         (child.take_stdin(), child.take_stdout(), child.take_stderr())
@@ -161,6 +172,7 @@ pub(crate) async fn spawn(
         kill_grace: req.kill_grace,
         session_id: spec.session_id.clone(),
         reaped: false,
+        files,
     };
     tokio::spawn(supervisor.run(stdout, stderr, stop_rx));
 
@@ -172,6 +184,28 @@ pub(crate) async fn spawn(
             tx: Arc::new(stop_tx),
         },
     })
+}
+
+/// Write a run's file (it may hold MCP secrets) so only the user can read it.
+async fn write_private(path: &Path, contents: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(io_at(dir))?;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await.map_err(io_at(path))?;
+    file.write_all(contents.as_bytes())
+        .await
+        .map_err(io_at(path))?;
+    file.flush().await.map_err(io_at(path))
+}
+
+async fn remove_files(files: &[PathBuf]) {
+    for f in files {
+        let _ = tokio::fs::remove_file(f).await;
+    }
 }
 
 async fn open_log(path: &Path) -> Result<File> {
@@ -205,6 +239,8 @@ struct Supervisor {
     session_id: Option<String>,
     /// The agent process has been waited for (its pid and process group id may be reused).
     reaped: bool,
+    /// The run's own files, deleted when it ends.
+    files: Vec<PathBuf>,
 }
 
 /// One line-oriented pipe. Lines are read as bytes and decoded lossily, so a stray non-UTF-8
@@ -424,6 +460,7 @@ impl Supervisor {
         }
         self.log_line(&record.to_string()).await;
         let _ = self.log.flush().await;
+        remove_files(&self.files).await;
         let _ = self.events.send(AgentEvent::Finished {
             outcome: Box::new(outcome),
         });

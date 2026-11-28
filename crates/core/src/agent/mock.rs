@@ -41,5 +41,6 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
         env_set: Vec::new(),
         stdin: req.prompt.clone(),
         session_id: Some(session_id),
+        files: Vec::new(),
     })
 }

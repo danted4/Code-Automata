@@ -470,12 +470,13 @@ async fn a_long_quiet_tool_call_is_not_an_idle_timeout() {
     let m = Mock::new();
     let mut req = m.request(json!({ "steps": [
         { "text": "starting the build" },
-        { "tool": { "name": "Bash", "input": { "command": "yarn build" }, "output": "ok", "durationMs": 6000 } },
+        { "tool": { "name": "Bash", "input": { "command": "yarn build" }, "output": "ok", "durationMs": 12000 } },
         { "result": { "text": "built" } }
     ]}));
-    // Generous enough for process start-up under parallel test load (1 s was not), far shorter
-    // than the tool.
-    req.idle_timeout = Some(Duration::from_millis(2500));
+    // The idle limit also covers process start-up until the first line, which under a loaded
+    // machine (parallel tests plus a build) took more than 2.5 s twice; the tool runs more than
+    // twice as long as the limit.
+    req.idle_timeout = Some(Duration::from_secs(5));
     let o = start(req, &Mock::bins()).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::Completed, "{o:?}");
 }
@@ -488,18 +489,18 @@ async fn a_tool_call_that_never_returns_hits_the_tool_timeout() {
         { "hang": true }
     ]}));
     // The idle limit covers process start-up until the tool call is seen, so it must leave room
-    // for a slow start under parallel test load; the tool limit is well beyond it.
-    req.idle_timeout = Some(Duration::from_millis(2500));
-    req.tool_timeout = Some(Duration::from_millis(6000));
+    // for a slow start on a loaded machine (2.5 s did not); the tool limit is well beyond it.
+    req.idle_timeout = Some(Duration::from_secs(5));
+    req.tool_timeout = Some(Duration::from_secs(12));
     let began = Instant::now();
     let o = start(req, &Mock::bins()).await.unwrap().wait().await;
     assert_eq!(o.kind, OutcomeKind::TimedOut);
     let took = began.elapsed();
     assert!(
-        took >= Duration::from_millis(5900),
+        took >= Duration::from_millis(11_900),
         "the idle timeout fired during the tool: {took:?}"
     );
-    assert!(took < Duration::from_secs(10), "{took:?}");
+    assert!(took < Duration::from_secs(25), "{took:?}");
 }
 
 #[tokio::test]
@@ -550,4 +551,48 @@ async fn a_json_schema_survives_a_cmd_shim() {
             serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
         assert_eq!(got, ["--json-schema", text.as_str()]);
     }
+}
+
+#[tokio::test]
+#[cfg(unix)] // the fake CLI is a shell script
+async fn a_runs_own_files_exist_only_while_it_runs_and_only_for_the_user() {
+    use ca_core::agent::mcp::McpServer;
+    let m = Mock::new();
+    // A fake Claude Code that reports its --mcp-config file's mode and contents in its answer.
+    let fake = m.path("claude");
+    common::write_script(
+        &fake,
+        r#"#!/bin/sh
+cat > /dev/null
+file=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--mcp-config" ]; then file="$2"; fi
+  shift
+done
+mode=$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")
+printf '{"type":"result","subtype":"success","is_error":false,"result":"%s %s","session_id":"s"}\n' "$mode" "$(grep -c s3cret "$file")"
+"#,
+    );
+    let bins = Binaries::from_env().with_override(Provider::Claude, &fake);
+    let mut req = RunRequest::new(
+        AgentConfig::new(Provider::Claude),
+        m.dir.path(),
+        "go",
+        m.path("logs/run.ndjson"),
+    );
+    req.mcp_servers.insert(
+        "browser".into(),
+        McpServer::Stdio {
+            command: "npx".into(),
+            args: vec![],
+            env: [("TOKEN".to_string(), "s3cret".to_string())].into(),
+        },
+    );
+    let outcome = start(req, &bins).await.unwrap().wait().await;
+    assert_eq!(outcome.kind, OutcomeKind::Completed, "{outcome:?}");
+    assert_eq!(outcome.final_text, "600 1", "the file was not private");
+    assert!(
+        !m.path("logs/run.mcp.json").exists(),
+        "the file outlived the run"
+    );
 }

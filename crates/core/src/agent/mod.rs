@@ -9,10 +9,14 @@
 
 pub mod amp;
 pub mod claude;
+pub mod codex;
 pub mod cursor;
 pub mod env;
+pub mod gemini;
 pub mod limits;
+pub mod mcp;
 pub mod mock;
+pub mod models;
 pub mod preflight;
 pub mod process;
 pub mod stream_json;
@@ -45,6 +49,9 @@ pub struct RunRequest {
     pub access: Access,
     /// JSON Schema for the final answer, honoured by providers with structured output.
     pub json_schema: Option<Value>,
+    /// The only MCP servers the agent may use (the project's allowlist); none when empty. Claude
+    /// Code, Codex and Gemini CLI are held to it; Cursor and Amp load their own configuration.
+    pub mcp_servers: mcp::McpServers,
     pub max_turns: Option<u32>,
     /// Raw stdout lines, stderr and the outcome are appended here as NDJSON.
     pub log_path: PathBuf,
@@ -76,6 +83,7 @@ impl RunRequest {
             resume: None,
             access: Access::Full,
             json_schema: None,
+            mcp_servers: mcp::McpServers::new(),
             max_turns: None,
             log_path: log_path.into(),
             idle_timeout: None,
@@ -227,6 +235,20 @@ pub fn capabilities(provider: Provider) -> Capabilities {
             structured_output: false,
             resume: true,
         },
+        Provider::Codex => Capabilities {
+            // The read-only OS sandbox.
+            enforced_read_only: true,
+            enforced_review: false,
+            structured_output: true,
+            resume: true,
+        },
+        Provider::Gemini => Capabilities {
+            // Headless, a tool that needs approval is refused.
+            enforced_read_only: true,
+            enforced_review: false,
+            structured_output: false,
+            resume: true,
+        },
         Provider::Mock => Capabilities {
             enforced_read_only: false,
             enforced_review: false,
@@ -242,13 +264,21 @@ pub fn provider_label(provider: Provider) -> &'static str {
         Provider::Claude => "Claude Code",
         Provider::Cursor => "Cursor",
         Provider::Amp => "Amp",
+        Provider::Codex => "Codex",
+        Provider::Gemini => "Gemini CLI",
         Provider::Mock => "Mock",
     }
 }
 
 /// The order providers are offered in the app. Mock is left out; it exists for tests and dev
 /// builds only.
-pub const APP_PROVIDERS: [Provider; 3] = [Provider::Claude, Provider::Cursor, Provider::Amp];
+pub const APP_PROVIDERS: [Provider; 5] = [
+    Provider::Claude,
+    Provider::Codex,
+    Provider::Gemini,
+    Provider::Cursor,
+    Provider::Amp,
+];
 
 /// A process to spawn, built by a provider from a [`RunRequest`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,8 +291,11 @@ pub struct CommandSpec {
     pub env_set: Vec<(String, String)>,
     /// Written to stdin, which is then closed.
     pub stdin: String,
-    /// Known before the process starts (Claude and the mock take the id we choose).
+    /// Known before the process starts (Claude, Gemini and the mock take the id we choose).
     pub session_id: Option<String>,
+    /// Files the run needs (an MCP config, a schema), written readable only by the user before it
+    /// starts and deleted when it ends. Kept beside the run log, outside every worktree.
+    pub files: Vec<mcp::RunFile>,
 }
 
 /// The final `result` event, as each parser reads it.
@@ -323,6 +356,14 @@ pub fn command_for(
         Provider::Amp => Ok((
             amp::command(req, bins)?,
             Box::new(stream_json::StreamJson::amp()),
+        )),
+        Provider::Codex => Ok((
+            codex::command(req, bins)?,
+            Box::new(codex::CodexParser::default()),
+        )),
+        Provider::Gemini => Ok((
+            gemini::command(req, bins)?,
+            Box::new(gemini::GeminiParser::default()),
         )),
         Provider::Mock => Ok((
             mock::command(req, bins)?,

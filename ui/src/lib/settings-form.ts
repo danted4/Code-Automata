@@ -235,6 +235,10 @@ export function fromForm(
   if (Object.keys(repos).length > 0) settings.repos = repos;
   if (Object.keys(prompts).length > 0) settings.prompts = prompts;
   if (form.pullRequestHost !== 'detect') settings.pullRequestHost = form.pullRequestHost;
+  // Not edited by this form: kept as they are.
+  if (base.mcpServers && Object.keys(base.mcpServers).length > 0) {
+    settings.mcpServers = base.mcpServers;
+  }
   return { settings };
 }
 

@@ -78,7 +78,7 @@ pub struct RepoLayout {
 }
 
 /// The files (or folder, for Cursor's rules) an agent should read before working in a folder.
-pub const INSTRUCTION_FILES: [&str; 3] = ["CLAUDE.md", "AGENTS.md", ".cursor/rules"];
+pub const INSTRUCTION_FILES: [&str; 4] = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursor/rules"];
 
 fn layout_block(layout: Option<&Layout>) -> String {
     let Some(layout) = layout else {

@@ -4,9 +4,10 @@
 //!
 //! * **Sessions.** We choose the session id (`--session-id <uuid>`), so it is known before the
 //!   process starts; resume is `--resume <id>`.
-//! * **Settings.** Only project settings load (`--setting-sources project`) and no MCP servers
-//!   (`--strict-mcp-config`), so the user's personal hooks, plugins and account connectors stay
-//!   out of task agents. Login is unaffected: it is read from the keychain, not from settings.
+//! * **Settings.** Only project settings load (`--setting-sources project`), and MCP servers only
+//!   from the project's allowlist (`--strict-mcp-config`, plus `--mcp-config <file>` when it names
+//!   any), so the user's personal hooks, plugins and account connectors stay out of task agents.
+//!   Login is unaffected: it is read from the keychain, not from settings.
 //! * **Read-only** (planning): built-in tools are cut to `Read,Grep,Glob`.
 //! * **Review** (QA): editing tools are disallowed (`Edit,Write,NotebookEdit`); the shell stays, so
 //!   tests can run.
@@ -80,6 +81,16 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
         args.extend(["--json-schema".into(), text]);
     }
 
+    let mut files = Vec::new();
+    if !req.mcp_servers.is_empty() {
+        let path = req.log_path.with_extension("mcp.json");
+        args.extend(["--mcp-config".into(), path.to_string_lossy().into_owned()]);
+        files.push(super::mcp::RunFile {
+            path,
+            contents: super::mcp::claude_config(&req.mcp_servers),
+        });
+    }
+
     Ok(CommandSpec {
         program: bins.locate(Provider::Claude)?,
         args,
@@ -87,5 +98,6 @@ pub fn command(req: &RunRequest, bins: &super::Binaries) -> Result<CommandSpec> 
         env_set: Vec::new(),
         stdin: req.prompt.clone(),
         session_id: Some(session_id),
+        files,
     })
 }

@@ -225,3 +225,13 @@ describe('checkSourceText', () => {
     expect(checkSourceText(undefined)).toBe('Not in the workspace now.');
   });
 });
+
+describe('MCP servers', () => {
+  it('are kept as they are when the form saves', () => {
+    const mcpServers = { docs: { type: 'http' as const, url: 'https://d/mcp' } };
+    const saved = save(settings({ mcpServers }), (f) => {
+      f.reworkLimit = '3';
+    });
+    expect('settings' in saved && saved.settings.mcpServers).toEqual(mcpServers);
+  });
+});

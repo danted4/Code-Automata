@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Path, State};
 use ca_core::Provider;
+use ca_core::agent::models::ModelList;
 use ca_core::agent::preflight;
 
 use super::Body;
@@ -55,6 +56,34 @@ pub async fn providers(State(state): State<Arc<AppState>>) -> Json<Vec<ProviderI
         });
     }
     Json(providers)
+}
+
+/// How long a CLI's model list is kept before asking it again.
+const MODELS_FRESH: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// The models an agent offers for the task dialog: its own list where the CLI can give one, else
+/// the app's (see `ca_core::agent::models`). Kept for ten minutes, since listing runs the CLI.
+pub async fn models(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> Result<Json<ModelList>, ApiError> {
+    let provider: Provider = serde_json::from_value(serde_json::Value::String(provider))
+        .map_err(|_| ApiError::bad_request("no such agent"))?;
+    if !offered(&state).iter().any(|(p, _)| *p == provider) {
+        return Err(ApiError::bad_request("this agent is not offered"));
+    }
+    if let Some((at, list)) = state.models.lock().await.get(&provider)
+        && at.elapsed() < MODELS_FRESH
+    {
+        return Ok(Json(list.clone()));
+    }
+    let list = ca_core::agent::models::list(provider, &state.config.bins).await;
+    state
+        .models
+        .lock()
+        .await
+        .insert(provider, (std::time::Instant::now(), list.clone()));
+    Ok(Json(list))
 }
 
 /// The agents offered, in the order the UI shows them.

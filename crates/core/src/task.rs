@@ -76,6 +76,8 @@ pub enum Provider {
     Claude,
     Cursor,
     Amp,
+    Codex,
+    Gemini,
     Mock,
 }
 

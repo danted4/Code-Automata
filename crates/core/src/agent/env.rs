@@ -66,6 +66,8 @@ pub fn binary_name(provider: Provider) -> &'static str {
         Provider::Claude => "claude",
         Provider::Cursor => "agent",
         Provider::Amp => "amp",
+        Provider::Codex => "codex",
+        Provider::Gemini => "gemini",
         Provider::Mock => "mock-agent",
     }
 }
@@ -83,6 +85,16 @@ pub fn install_locations(provider: Provider, home: &Path) -> Vec<PathBuf> {
         Provider::Cursor => &[".local/bin/cursor-agent"],
         Provider::Amp if cfg!(windows) => &[],
         Provider::Amp => &[".amp/bin/amp"],
+        // The standalone installer; on Windows also the native binary inside an npm install
+        // (the `codex.cmd` shim would pass `-c key="value"` through cmd's quoting).
+        Provider::Codex if cfg!(windows) => &[
+            "AppData/Local/Programs/OpenAI/Codex/bin/codex.exe",
+            "AppData/Roaming/npm/node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe",
+            "AppData/Roaming/npm/node_modules/@openai/codex/vendor/aarch64-pc-windows-msvc/codex/codex.exe",
+        ],
+        Provider::Codex => &[".local/bin/codex"],
+        // npm only: found on PATH or in a node version's folder.
+        Provider::Gemini => &[],
         Provider::Mock => &[],
     };
     relative.iter().map(|r| home.join(r)).collect()
@@ -429,10 +441,14 @@ impl Binaries {
             .search_path
             .as_deref()
             .is_some_and(|p| std::env::split_paths(p).any(|e| e == dir));
-        if on_path || !is_executable(&node) || !is_node_script(binary) {
+        if on_path || !is_executable(&node) {
             return plain;
         }
-        (node, vec![binary.to_string_lossy().into_owned()])
+        let Some(mut args) = node_script_flags(binary) else {
+            return plain;
+        };
+        args.push(binary.to_string_lossy().into_owned());
+        (node, args)
     }
 
     pub fn locate(&self, provider: Provider) -> Result<PathBuf> {
@@ -514,15 +530,21 @@ impl Binaries {
     }
 }
 
-/// Whether `file` starts with a `#!` line naming node.
-fn is_node_script(file: &Path) -> bool {
+/// The node flags on `file`'s `#!` line if it runs node ("#!/usr/bin/env node", "#!/usr/bin/env -S
+/// node --no-warnings"), else `None`.
+fn node_script_flags(file: &Path) -> Option<Vec<String>> {
     use std::io::Read;
-    let mut head = [0u8; 128];
+    let mut head = [0u8; 256];
     let n = std::fs::File::open(file)
         .and_then(|mut f| f.read(&mut head))
         .unwrap_or(0);
     let head = String::from_utf8_lossy(&head[..n]);
-    head.starts_with("#!") && head.lines().next().is_some_and(|l| l.contains("node"))
+    let line = head.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_whitespace();
+    words
+        .by_ref()
+        .find(|w| *w == "node" || w.ends_with("/node"))?;
+    Some(words.map(String::from).collect())
 }
 
 /// `NVM_DIR` and, on Windows, `NVM_HOME`, when set.

@@ -3,6 +3,8 @@
  */
 
 import { request } from './client';
+import type { McpCandidate } from './types/McpCandidate';
+import type { ModelList } from './types/ModelList';
 import type { PhaseAgents } from './types/PhaseAgents';
 import type { CliPath } from './types/CliPath';
 import type { Answer } from './types/Answer';
@@ -30,6 +32,13 @@ export const api = {
   openProject: (path: string) =>
     request<OpenProjectResponse>('POST', '/api/projects/open', { body: { path }, project: path }),
   providers: () => request<ProviderInfo[]>('GET', '/api/providers', { project: null }),
+  /** The models a CLI offers: its own list where it can give one, else the app's. */
+  models: (provider: Provider) =>
+    request<ModelList>('GET', `/api/providers/${encodeURIComponent(provider)}/models`, {
+      project: null,
+    }),
+  /** MCP servers already configured on this computer or in the open project, to import. */
+  mcpImport: () => request<McpCandidate[]>('GET', '/api/mcp/import'),
 
   /** The agent CLI files chosen by hand, kept for this computer (not per project). */
   cliPaths: {

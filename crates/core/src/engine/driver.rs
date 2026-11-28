@@ -905,6 +905,7 @@ async fn execute(
     req.resume = session;
     req.access = ctx.access;
     req.json_schema = schema;
+    req.mcp_servers = ctx.settings.mcp_servers.clone();
     req.idle_timeout = Some(ctx.settings.timeouts.idle());
     req.tool_timeout = Some(ctx.settings.timeouts.tool());
     req.total_timeout = Some(ctx.settings.timeouts.total());

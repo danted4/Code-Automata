@@ -1,5 +1,6 @@
 use axum::Json;
 use ca_core::CoreError;
+use ca_core::agent::mcp::{McpCandidate, import_candidates};
 use ca_core::engine::Engine;
 use ca_core::engine::prompts::{DEFAULT_PLAN_TEMPLATE, DEFAULT_SUBTASKS_TEMPLATE};
 use ca_core::engine::settings::Settings;
@@ -18,6 +19,27 @@ async fn response(engine: &Engine) -> Json<SettingsResponse> {
         },
         repo_checks: engine.repo_checks().await,
     })
+}
+
+/// MCP servers already configured on this computer or in the project, for the settings' Import.
+/// Nothing is copied into the settings until the user saves them.
+pub async fn mcp_import(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    Project(engine): Project,
+) -> Json<Vec<McpCandidate>> {
+    let project = engine.project();
+    let repos: Vec<(String, std::path::PathBuf)> = project
+        .repos()
+        .iter()
+        .map(|r| (r.name.clone(), r.path.clone()))
+        .collect();
+    let home = state.config.bins.home().map(std::path::Path::to_path_buf);
+    let root = project.root().to_path_buf();
+    let found =
+        tokio::task::spawn_blocking(move || import_candidates(home.as_deref(), &root, &repos))
+            .await
+            .unwrap_or_default();
+    Json(found)
 }
 
 pub async fn get(Project(engine): Project) -> Json<SettingsResponse> {
