@@ -192,6 +192,13 @@ const RESERVED_ENV: &[&str] = &[
     "CURSOR_API_KEY",
 ];
 
+/// Prefixes of variables a server may not set either: the app's own, the dynamic loader's (which
+/// would load code into every program), git's and ssh's (which would change every commit and push).
+const RESERVED_PREFIXES: &[&str] = &["CODE_AUTOMATA_", "LD_", "DYLD_", "GIT_", "SSH_"];
+
+/// Where [`import_candidates`] says it found Gemini CLI's servers.
+pub const GEMINI_SOURCE: &str = "Gemini CLI";
+
 /// The allowlist as a whole: plain names, a command or address each, and variables that can be
 /// put in an agent's environment (an identifier, not reserved, and one value across all servers).
 pub fn validate_servers(servers: &McpServers) -> Result<(), String> {
@@ -215,7 +222,8 @@ pub fn validate_servers(servers: &McpServers) -> Result<(), String> {
                         ));
                     }
                     let upper = var.to_ascii_uppercase();
-                    if RESERVED_ENV.contains(&upper.as_str()) || upper.starts_with("CODE_AUTOMATA_")
+                    if RESERVED_ENV.contains(&upper.as_str())
+                        || RESERVED_PREFIXES.iter().any(|p| upper.starts_with(p))
                     {
                         return Err(format!(
                             "MCP server {name:?} may not set {var}: it would change how the agent \
@@ -285,7 +293,7 @@ pub fn import_candidates(
     let mut add = |source: &str, servers: Option<&Value>| {
         if let Some(Value::Object(servers)) = servers {
             for (name, entry) in servers {
-                let gemini = source == "Gemini CLI";
+                let gemini = source == GEMINI_SOURCE;
                 if gemini && entry.get("httpUrl").is_none() && entry.get("command").is_none() {
                     continue;
                 }
@@ -337,7 +345,7 @@ pub fn import_candidates(
             add("Codex", Some(&json));
         }
         if let Some(gemini) = read_json(home.join(".gemini").join("settings.json")) {
-            add("Gemini CLI", gemini.get("mcpServers"));
+            add(GEMINI_SOURCE, gemini.get("mcpServers"));
         }
     }
     out
@@ -548,6 +556,10 @@ mod tests {
             "path",
             "OPENAI_API_KEY",
             "CODE_AUTOMATA_X",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "GIT_DIR",
+            "SSH_AUTH_SOCK",
             "1BAD",
             "A-B",
         ] {

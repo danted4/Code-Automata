@@ -20,8 +20,30 @@ export type AvailableEditor = {
 
 export type OpenEditorResult = { success: boolean; error?: string };
 
+/** A terminal app "Open in terminal" can use (`crates/app/src/terminals.rs`). */
+export type TerminalId =
+  | 'terminal'
+  | 'iterm'
+  | 'ghostty'
+  | 'warp'
+  | 'wezterm'
+  | 'kitty'
+  | 'windowsTerminal'
+  | 'powershell'
+  | 'gnome'
+  | 'konsole'
+  | 'alacritty'
+  | 'default';
+
+export type AvailableTerminal = { id: TerminalId; label: string; available: boolean };
+
 /** The app's own settings for this computer (`app-settings.json`). */
-export type AppSettings = { schema: number; checkUpdatesAtLaunch: boolean };
+export type AppSettings = {
+  schema: number;
+  checkUpdatesAtLaunch: boolean;
+  /** The terminal "Open in terminal" uses; absent picks the first one found. */
+  terminal?: TerminalId;
+};
 
 /** What "Check for updates" found (a newer version is offered in the app's own dialog). */
 export type UpdateCheck = 'up_to_date' | 'offered' | 'busy' | 'unavailable';
@@ -54,6 +76,9 @@ export interface NativeApi {
     projectPath?: string | null
   ) => Promise<OpenEditorResult>;
   openFolder: (worktreePath: string) => Promise<OpenEditorResult>;
+  getAvailableTerminals: () => Promise<AvailableTerminal[]>;
+  /** A terminal at the folder (a worktree, or a workspace task's folder). */
+  openInTerminal: (path: string) => Promise<OpenEditorResult>;
   getAppSettings: () => Promise<AppSettings>;
   setAppSettings: (settings: AppSettings) => Promise<void>;
   checkForUpdates: () => Promise<UpdateCheck>;
@@ -93,6 +118,8 @@ export function tauriNative(call: Invoke, channel: MakeChannel = tauriChannel): 
     openEditorAtPath: (worktreePath, editorId) =>
       open('open_in_editor', { worktreePath, editorId }),
     openFolder: (worktreePath) => open('reveal_folder', { worktreePath }),
+    getAvailableTerminals: () => call<AvailableTerminal[]>('available_terminals'),
+    openInTerminal: (path) => open('open_in_terminal', { path }),
     getAppSettings: () => call<AppSettings>('get_app_settings'),
     setAppSettings: (settings) => call<void>('set_app_settings', { settings }),
     checkForUpdates: () => call<UpdateCheck>('check_for_updates'),

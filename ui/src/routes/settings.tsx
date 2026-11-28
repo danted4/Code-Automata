@@ -10,6 +10,8 @@ import { Loader2, Plus, RotateCcw, Save, Settings as SettingsIcon, X } from 'luc
 import { toast } from 'sonner';
 import { AgentClis } from '@/components/settings/agent-clis';
 import { AppUpdates } from '@/components/settings/app-updates';
+import { McpServers } from '@/components/settings/mcp-servers';
+import { ProjectMemory } from '@/components/settings/project-memory';
 import { RepoSettings } from '@/components/settings/repo-settings';
 import { native } from '@/lib/native';
 import { Button } from '@/components/ui/button';
@@ -483,8 +485,34 @@ export default function SettingsPage() {
             <AgentClis />
           </Section>
 
+          <Section title="MCP servers for agents">
+            <p className="text-sm" style={secondary}>
+              The only MCP servers Claude Code, Codex and Gemini get in development and QA runs;
+              planning runs get none. Your own servers stay out unless added here. A server can
+              change things outside the task's worktree, which no discard undoes. Cursor and Amp use
+              their own settings.
+            </p>
+            <McpServers rows={form.mcp} errors={shown.mcp} onChange={(mcp) => update({ mcp })} />
+          </Section>
+
+          <Section title="Project memory">
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-sm" style={secondary}>
+                Lasting facts agents learned about this project (a build quirk, a convention), kept
+                in .code-automata/memory.md and given to every prompt. Edit or prune it here.
+              </p>
+              <Switch
+                checked={form.useProjectMemory}
+                onCheckedChange={(on) => update({ useProjectMemory: on })}
+                data-testid="settings-use-memory"
+                aria-label="Use project memory"
+              />
+            </div>
+            <ProjectMemory />
+          </Section>
+
           {native && (
-            <Section title="App updates">
+            <Section title="This app">
               <AppUpdates nativeApi={native} />
             </Section>
           )}

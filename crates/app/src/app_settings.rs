@@ -16,6 +16,9 @@ pub struct AppSettings {
     /// Look for a new version a few seconds after the app starts.
     #[serde(default = "yes")]
     pub check_updates_at_launch: bool,
+    /// The terminal "Open in terminal" uses; `None` picks the first one found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::terminals::TerminalId>,
 }
 
 fn yes() -> bool {
@@ -27,6 +30,7 @@ impl Default for AppSettings {
         AppSettings {
             schema: SCHEMA,
             check_updates_at_launch: true,
+            terminal: None,
         }
     }
 }

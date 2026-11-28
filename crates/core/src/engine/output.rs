@@ -179,11 +179,23 @@ impl AgentOutput for SubtasksOut {
     }
 }
 
+/// `learnings` in dev and QA answers: optional, empty when there is nothing lasting.
+fn learnings_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Lasting facts about this project that later tasks should know (a build or test quirk, a convention, a pitfall), one short sentence each; not this task's progress. Usually empty."
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct DevOut {
     pub summary: String,
     #[serde(default)]
     pub handoff: String,
+    /// Lasting facts about the project for later tasks (project memory).
+    #[serde(default)]
+    pub learnings: Vec<String>,
 }
 
 impl AgentOutput for DevOut {
@@ -193,7 +205,8 @@ impl AgentOutput for DevOut {
             "type": "object",
             "properties": {
                 "summary": { "type": "string", "description": "What you changed, in a few lines" },
-                "handoff": { "type": "string", "description": "What the next subtasks must know" }
+                "handoff": { "type": "string", "description": "What the next subtasks must know" },
+                "learnings": learnings_schema()
             },
             "required": ["summary", "handoff"]
         })
@@ -215,6 +228,9 @@ pub struct QaOut {
     pub summary: String,
     #[serde(default)]
     pub findings: Vec<String>,
+    /// Lasting facts about the project for later tasks (project memory).
+    #[serde(default)]
+    pub learnings: Vec<String>,
 }
 
 impl AgentOutput for QaOut {
@@ -226,7 +242,8 @@ impl AgentOutput for QaOut {
                 "passed": { "type": "boolean" },
                 "summary": { "type": "string" },
                 "findings": { "type": "array", "items": { "type": "string" },
-                              "description": "Concrete problems found; empty when passed" }
+                              "description": "Concrete problems found; empty when passed" },
+                "learnings": learnings_schema()
             },
             "required": ["passed", "summary", "findings"]
         })

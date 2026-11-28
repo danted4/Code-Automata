@@ -28,6 +28,8 @@ describe('native', () => {
       get_app_settings: { schema: 1, checkUpdatesAtLaunch: true },
       set_app_settings: null,
       check_for_updates: 'up_to_date',
+      available_terminals: [{ id: 'terminal', label: 'Terminal', available: true }],
+      open_in_terminal: { success: true },
     });
     const api = tauriNative(call);
     expect(await api.openFolderDialog()).toBe('/repo');
@@ -41,6 +43,10 @@ describe('native', () => {
     expect(await api.getAppSettings()).toEqual({ schema: 1, checkUpdatesAtLaunch: true });
     await api.setAppSettings({ schema: 1, checkUpdatesAtLaunch: false });
     expect(await api.checkForUpdates()).toBe('up_to_date');
+    expect(await api.getAvailableTerminals()).toEqual([
+      { id: 'terminal', label: 'Terminal', available: true },
+    ]);
+    expect(await api.openInTerminal('/repo/wt')).toEqual({ success: true });
     expect(calls).toEqual([
       ['pick_folder', undefined],
       ['pick_file', { title: 'Choose the claude file' }],
@@ -51,6 +57,8 @@ describe('native', () => {
       ['get_app_settings', undefined],
       ['set_app_settings', { settings: { schema: 1, checkUpdatesAtLaunch: false } }],
       ['check_for_updates', undefined],
+      ['available_terminals', undefined],
+      ['open_in_terminal', { path: '/repo/wt' }],
     ]);
   });
 

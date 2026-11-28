@@ -13,6 +13,9 @@
 //!
 //! `--cli-paths` is the file that keeps the agent CLI files chosen in the UI (the app keeps it in
 //! its data folder). Without it, a choice lasts until the server stops.
+//!
+//! `--wake-grace-ms N` shortens the wait after a usage limit's reset before a rate-limited task
+//! resumes (60 s by default), and the wall-clock tick with it; for the end-to-end tests.
 
 use std::process::ExitCode;
 
@@ -27,6 +30,7 @@ struct Args {
     allow_mock: bool,
     mock_scenario: Option<std::path::PathBuf>,
     cli_paths: Option<std::path::PathBuf>,
+    wake_grace_ms: Option<u64>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -36,6 +40,7 @@ fn parse_args() -> Result<Args, String> {
         allow_mock: false,
         mock_scenario: None,
         cli_paths: None,
+        wake_grace_ms: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -65,6 +70,14 @@ fn parse_args() -> Result<Args, String> {
                 let path = std::path::absolute(&value)
                     .map_err(|e| format!("--cli-paths {value:?}: {e}"))?;
                 args.cli_paths = Some(path);
+            }
+            "--wake-grace-ms" => {
+                let value = it.next().ok_or("--wake-grace-ms needs a number")?;
+                args.wake_grace_ms = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--wake-grace-ms: {value:?} is not a number"))?,
+                );
             }
             "-h" | "--help" => {
                 return Err(
@@ -142,7 +155,14 @@ async fn run(args: Args) -> Result<(), String> {
         mock_scenario: args.mock_scenario,
         bins,
         allowed_origins: Vec::new(),
-        wake_timing: ca_core::engine::limits::WakeTiming::default(),
+        wake_timing: match args.wake_grace_ms {
+            Some(ms) => ca_core::engine::limits::WakeTiming {
+                grace: std::time::Duration::from_millis(ms),
+                tick: std::time::Duration::from_millis(ms.clamp(20, 1000)),
+                ..ca_core::engine::limits::WakeTiming::default()
+            },
+            None => ca_core::engine::limits::WakeTiming::default(),
+        },
     });
 
     println!("listening on http://127.0.0.1:{port}");

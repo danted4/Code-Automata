@@ -7,6 +7,8 @@ fn main() {
         "path_exists",
         "open_in_editor",
         "reveal_folder",
+        "available_terminals",
+        "open_in_terminal",
         "get_app_settings",
         "set_app_settings",
         "check_for_updates",

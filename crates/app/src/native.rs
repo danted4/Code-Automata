@@ -11,6 +11,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::editors::{self, Editor, EditorId};
 use crate::paths::inside_open_project;
 use crate::server::Server;
+use crate::terminals;
 
 /// `native.ts`'s `OpenEditorResult`.
 #[derive(Debug, Serialize)]
@@ -94,6 +95,34 @@ pub async fn open_in_editor(
         let launch = editors::launch_for(editor_id, &bins, &editors::system_app_paths(editor_id))
             .ok_or_else(|| format!("{} is not installed", editor_id.label()))?;
         editors::open(&launch, &folder, &bins).await
+    }
+    .await;
+    Ok(result.into())
+}
+
+/// The terminals of this system and whether each is installed.
+#[tauri::command]
+pub async fn available_terminals(
+    server: State<'_, Server>,
+) -> Result<Vec<terminals::Terminal>, String> {
+    let bins = server.bins().await?;
+    Ok(terminals::detect(&bins))
+}
+
+/// Open a terminal at a worktree (or a workspace task's folder), in the terminal chosen in the app
+/// settings, else the first one found.
+#[tauri::command]
+pub async fn open_in_terminal(
+    app: AppHandle,
+    server: State<'_, Server>,
+    path: String,
+) -> Result<OpenResult, String> {
+    let result = async {
+        let roots = server.state().await?.open_roots().await;
+        let folder = inside_open_project(&path, &roots)?;
+        let bins = server.bins().await?;
+        let chosen = crate::app_settings::load(&app).terminal;
+        terminals::open(chosen, &folder, &bins).await
     }
     .await;
     Ok(result.into())

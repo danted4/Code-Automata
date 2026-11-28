@@ -20,6 +20,7 @@ mod native;
 mod paths;
 mod server;
 mod smoke;
+mod terminals;
 mod update;
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -76,6 +77,8 @@ fn main() {
             native::path_exists,
             native::open_in_editor,
             native::reveal_folder,
+            native::available_terminals,
+            native::open_in_terminal,
             app_settings::get_app_settings,
             app_settings::set_app_settings,
             update::check_for_updates,

@@ -24,12 +24,12 @@ import type { Task } from '@/lib/api/types/Task';
 import {
   type TaskForm,
   agentLockedReason,
-  draftFromAgent,
+  draftsFromAgents,
   formFromTask,
   taskChanges,
 } from '@/lib/agent-form';
 import { act, useTask } from '@/store/task-store';
-import { AgentPicker, useProviders } from './agent-picker';
+import { PhaseAgentPicker, useProviders } from './agent-picker';
 import type { TaskModalProps } from './modal-props';
 
 export function EditTaskModal({ taskId, open, onOpenChange }: TaskModalProps) {
@@ -122,10 +122,10 @@ function EditTaskForm({
         </div>
 
         <div className="border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
-          <AgentPicker
+          <PhaseAgentPicker
             state={providersState}
-            value={lockedReason ? draftFromAgent(task.agents.dev) : form.agent}
-            onChange={(agent) => set({ agent })}
+            value={lockedReason ? draftsFromAgents(task.agents) : form.agents}
+            onChange={(agents) => set({ agents })}
             lockedReason={lockedReason}
           />
         </div>

@@ -231,3 +231,24 @@ export function repoChips(task: Task): string[] {
   const planned = new Set((task.subtasks ?? []).flatMap((s) => s.repos ?? []));
   return repos.filter((r) => planned.has(r)).sort();
 }
+
+/** One agent as the task details show it: "Claude Code · claude-opus-5-5 · high". */
+function agentText(agent: Task['agents']['dev']): string {
+  const label = PROVIDER_LABELS[agent.provider] ?? agent.provider;
+  return [label, agent.model, agent.mode].filter(Boolean).join(' · ');
+}
+
+/**
+ * The task's agents for the details view: one line when every phase uses the same agent, else one
+ * per phase.
+ */
+export function agentLines(task: Task): { phase: string | null; text: string }[] {
+  const { planning, dev, qa } = task.agents;
+  const texts = [agentText(planning), agentText(dev), agentText(qa)];
+  if (texts.every((t) => t === texts[0])) return [{ phase: null, text: texts[0] }];
+  return [
+    { phase: 'Planning', text: texts[0] },
+    { phase: 'Development', text: texts[1] },
+    { phase: 'QA', text: texts[2] },
+  ];
+}

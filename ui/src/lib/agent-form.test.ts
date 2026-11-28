@@ -4,6 +4,11 @@ import type { ProviderInfo } from '@/lib/api/types/ProviderInfo';
 import type { Run } from '@/lib/api/types/Run';
 import type { Task } from '@/lib/api/types/Task';
 import {
+  agentsFromDrafts,
+  defaultDrafts,
+  loadLastDrafts,
+  saveLastDrafts,
+  sameDrafts,
   agentFromDraft,
   agentLockedReason,
   defaultProvider,
@@ -136,7 +141,10 @@ describe('taskChanges', () => {
       requirePlanApproval: true,
     });
     expect(
-      taskChanges(t, { ...form, agent: { provider: 'claude', model: 'opus', mode: '' } })
+      taskChanges(t, {
+        ...form,
+        agents: sameDrafts({ provider: 'claude', model: 'opus', mode: '' }),
+      })
     ).toEqual({
       agents: {
         planning: { provider: 'claude', model: 'opus' },
@@ -149,9 +157,9 @@ describe('taskChanges', () => {
   it('leaves the agent out while a run holds it', () => {
     const t = task({ run });
     const form = formFromTask(t);
-    expect(taskChanges(t, { ...form, agent: { provider: 'amp', model: '', mode: '' } })).toEqual(
-      {}
-    );
+    expect(
+      taskChanges(t, { ...form, agents: sameDrafts({ provider: 'amp', model: '', mode: '' }) })
+    ).toEqual({});
   });
 });
 
@@ -179,24 +187,78 @@ describe('agentLockedReason', () => {
   });
 });
 
-describe('taskChanges with different agents per phase', () => {
-  it('keeps a phase that has its own agent', () => {
+describe('per-phase agents', () => {
+  const claudeInfo = (ready: boolean) => ({
+    provider: 'claude' as const,
+    label: 'Claude Code',
+    preflight: {
+      provider: 'claude' as const,
+      binary: ready ? '/bin/claude' : null,
+      source: null,
+      chosen: null,
+      version: null,
+      loggedIn: ready,
+      problem: null,
+    },
+  });
+  const mockInfo = {
+    provider: 'mock' as const,
+    label: 'Mock',
+    preflight: { ...claudeInfo(true).preflight, provider: 'mock' as const },
+  };
+
+  it('changes only the phase the form changed, keeping the others and their options', () => {
     const t = task({
       agents: {
         planning: { provider: 'claude', model: 'claude-fable-5-2' },
-        dev: { provider: 'claude' },
+        dev: { provider: 'claude', options: { maxTurns: 40 } },
         qa: { provider: 'claude' },
       },
     });
     const form = formFromTask(t);
-    expect(taskChanges(t, { ...form, agent: { provider: 'cursor', model: '', mode: '' } })).toEqual(
-      {
-        agents: {
-          planning: { provider: 'claude', model: 'claude-fable-5-2' },
-          dev: { provider: 'cursor' },
-          qa: { provider: 'cursor' },
-        },
-      }
-    );
+    expect(form.agents.same).toBe(false);
+    const agents = { ...form.agents, qa: { provider: 'cursor' as const, model: '', mode: '' } };
+    expect(taskChanges(t, { ...form, agents })).toEqual({
+      agents: {
+        planning: { provider: 'claude', model: 'claude-fable-5-2' },
+        dev: { provider: 'claude', options: { maxTurns: 40 } },
+        qa: { provider: 'cursor' },
+      },
+    });
+    // "Same for all" puts the development agent in every phase.
+    expect(agentsFromDrafts({ ...form.agents, same: true })).toEqual({
+      planning: { provider: 'claude' },
+      dev: { provider: 'claude' },
+      qa: { provider: 'claude' },
+    });
+  });
+
+  it('recommends Fable to plan and review and Opus to develop with Claude Code', () => {
+    const d = defaultDrafts([claudeInfo(true), mockInfo], null)!;
+    expect(d.same).toBe(false);
+    expect([d.planning.model, d.dev.model, d.qa.model]).toEqual([
+      'claude-fable-5-2',
+      'claude-opus-5-5',
+      'claude-fable-5-2',
+    ]);
+    // Another first ready CLI: the same agent everywhere, its default model.
+    const other = defaultDrafts([claudeInfo(false), mockInfo], null)!;
+    expect(other).toEqual(sameDrafts({ provider: 'mock', model: '', mode: '' }));
+  });
+
+  it('starts from the last choice while its CLIs are offered', () => {
+    const last = sameDrafts({ provider: 'mock', model: 'm', mode: '' });
+    expect(defaultDrafts([claudeInfo(true), mockInfo], last)).toBe(last);
+    expect(defaultDrafts([claudeInfo(true)], last)?.dev.provider).toBe('claude');
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    saveLastDrafts(storage, last);
+    expect(loadLastDrafts(storage)).toEqual(last);
+    store.set('code-automata-last-agents', '{"same":1}');
+    expect(loadLastDrafts(storage)).toBeNull();
+    expect(loadLastDrafts(null)).toBeNull();
   });
 });

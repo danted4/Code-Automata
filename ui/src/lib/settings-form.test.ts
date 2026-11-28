@@ -3,6 +3,9 @@ import type { PromptDefaults } from '@/lib/api/types/PromptDefaults';
 import type { RepoChecks } from '@/lib/api/types/RepoChecks';
 import type { Settings } from '@/lib/api/types/Settings';
 import {
+  EMPTY_MCP_ROW,
+  memoryNote,
+  type McpRow,
   checkSourceText,
   checksMode,
   fromForm,
@@ -22,6 +25,7 @@ function settings(over: Partial<Settings> = {}): Settings {
     timeouts: { idleMinutes: 10, toolMinutes: 30, totalMinutes: 120, checkMinutes: 10 },
     reworkLimit: 2,
     triageOnResume: false,
+    useProjectMemory: true,
     ...over,
   };
 }
@@ -168,6 +172,7 @@ describe('workspace repositories', () => {
     timeouts: { idleMinutes: 10, toolMinutes: 30, totalMinutes: 120, checkMinutes: 10 },
     reworkLimit: 2,
     triageOnResume: false,
+    useProjectMemory: true,
     repos: {
       web: { checks: [{ name: 'lint', command: 'yarn lint' }] },
       gone: { pullRequestHost: 'gitlab' },
@@ -227,11 +232,58 @@ describe('checkSourceText', () => {
 });
 
 describe('MCP servers', () => {
+  it('round-trip through the form rows', () => {
+    const mcpServers = {
+      browser: {
+        type: 'stdio' as const,
+        command: 'npx',
+        args: ['-y', '@playwright/mcp'],
+        env: { TOKEN: 'a=b' },
+      },
+      docs: { type: 'http' as const, url: 'https://d/mcp', headers: { Authorization: 'Bearer x' } },
+    };
+    const s = settings({ mcpServers });
+    const form = toForm(s, defaults);
+    expect(form.mcp.map((r) => r.name)).toEqual(['browser', 'docs']);
+    expect(form.mcp[0].args).toBe('-y\n@playwright/mcp');
+    const saved = fromForm(form, s, defaults);
+    expect('settings' in saved && saved.settings.mcpServers).toEqual(mcpServers);
+    expect(isFormDirty(form, s, defaults)).toBe(false);
+  });
+
+  it('says what is wrong with a row', () => {
+    const form = toForm(settings(), defaults);
+    const row: McpRow = { ...EMPTY_MCP_ROW, name: 'a' };
+    const check = (over: Partial<McpRow>) =>
+      validateForm({ ...form, mcp: [{ ...row, ...over }] }).mcp?.[0];
+    expect(check({})).toMatch(/command/);
+    expect(check({ command: 'x', name: 'a.b' })).toMatch(/name/);
+    expect(check({ command: 'x', env: 'NOEQUALS' })).toMatch(/NAME=value/);
+    expect(check({ type: 'http' })).toMatch(/address/);
+    expect(check({ command: 'x' })).toBeUndefined();
+    const two = validateForm({
+      ...form,
+      mcp: [
+        { ...row, command: 'x' },
+        { ...row, command: 'y' },
+      ],
+    });
+    expect(two.mcp?.[1]).toMatch(/Two servers/);
+  });
+
   it('are kept as they are when the form saves', () => {
     const mcpServers = { docs: { type: 'http' as const, url: 'https://d/mcp' } };
     const saved = save(settings({ mcpServers }), (f) => {
       f.reworkLimit = '3';
     });
     expect('settings' in saved && saved.settings.mcpServers).toEqual(mcpServers);
+  });
+});
+
+describe('memoryNote', () => {
+  it('gives the size and says when prompts get only part', () => {
+    expect(memoryNote({ text: '', bytes: 0, truncated: false })).toBe('Empty.');
+    expect(memoryNote({ text: 'x', bytes: 300, truncated: false })).toMatch(/300 bytes.*all of it/);
+    expect(memoryNote({ text: 'x', bytes: 20480, truncated: true })).toMatch(/20\.0 KB.*prune/);
   });
 });

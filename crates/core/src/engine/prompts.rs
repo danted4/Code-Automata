@@ -80,6 +80,26 @@ pub struct RepoLayout {
 /// The files (or folder, for Cursor's rules) an agent should read before working in a folder.
 pub const INSTRUCTION_FILES: [&str; 4] = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursor/rules"];
 
+/// What every prompt is built with besides the task: the workspace layout (`None` for a
+/// one-repository project) and what earlier tasks learned about the project (`None` when memory is
+/// off or empty). Read by the driver, so the builders stay pure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PromptContext<'a> {
+    pub layout: Option<&'a Layout>,
+    pub memory: Option<&'a str>,
+}
+
+fn memory_block(memory: Option<&str>) -> String {
+    match memory.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(memory) => format!(
+            "\n# What earlier tasks learned about this project\n\nNotes kept from earlier tasks \
+             (newest last). Use what applies; they may be out of date, and the code wins.\n\n\
+             {memory}\n"
+        ),
+        None => String::new(),
+    }
+}
+
 fn layout_block(layout: Option<&Layout>) -> String {
     let Some(layout) = layout else {
         return String::new();
@@ -125,19 +145,20 @@ fn layout_block(layout: Option<&Layout>) -> String {
     s
 }
 
-fn task_header(task: &Task, layout: Option<&Layout>) -> String {
+fn task_header(task: &Task, ctx: &PromptContext<'_>) -> String {
     let mut s = format!("**Task:** {}\n", task.title);
     if !task.description.trim().is_empty() {
         let _ = writeln!(s, "**Description:** {}", task.description.trim());
     }
-    s.push_str(&layout_block(layout));
+    s.push_str(&layout_block(ctx.layout));
+    s.push_str(&memory_block(ctx.memory));
     s
 }
 
 const READ_ONLY_NOTE: &str = "This is a planning step: read the code, but do not create, edit or \
 delete any file and do not run commands that change anything. Anything you change is discarded.";
 
-pub fn questions(task: &Task, layout: Option<&Layout>) -> String {
+pub fn questions(task: &Task, ctx: &PromptContext<'_>) -> String {
     format!(
         "You are an AI planning assistant helping to plan the following task.\n\n{}\n\
          # Planning: clarifying questions\n\n\
@@ -147,7 +168,7 @@ pub fn questions(task: &Task, layout: Option<&Layout>) -> String {
          edge cases and error handling, performance, and how the result should be tested.\n\n\
          Ask between 3 and 10 questions. Give each 2 to 5 short options where options make \
          sense (the user can always add a note), and mark whether it must be answered.\n\n{READ_ONLY_NOTE}{}",
-        task_header(task, layout),
+        task_header(task, ctx),
         output_instructions::<QuestionsOut>()
     )
 }
@@ -204,14 +225,14 @@ fn answers_block(task: &Task) -> String {
     s
 }
 
-pub fn plan(task: &Task, settings: &Settings, layout: Option<&Layout>) -> String {
+pub fn plan(task: &Task, settings: &Settings, ctx: &PromptContext<'_>) -> String {
     let template = settings
         .prompts
         .plan
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or(DEFAULT_PLAN_TEMPLATE);
-    let header = task_header(task, layout);
+    let header = task_header(task, ctx);
     let answers = answers_block(task);
     format!(
         "{}\n\n{READ_ONLY_NOTE}{}",
@@ -220,12 +241,12 @@ pub fn plan(task: &Task, settings: &Settings, layout: Option<&Layout>) -> String
     )
 }
 
-pub fn plan_revision(task: &Task, feedback: &str, layout: Option<&Layout>) -> String {
+pub fn plan_revision(task: &Task, feedback: &str, ctx: &PromptContext<'_>) -> String {
     format!(
         "You are an AI planning assistant. Revise the implementation plan below according to the \
          user's feedback. Keep what the feedback does not touch.\n\n{}\n\
          # Current plan\n\n{}\n\n# The user's feedback\n\n{}\n\n{READ_ONLY_NOTE}{}",
-        task_header(task, layout),
+        task_header(task, ctx),
         task.planning.plan.as_deref().unwrap_or("(no plan yet)"),
         feedback.trim(),
         output_instructions::<PlanOut>()
@@ -255,16 +276,16 @@ or merge subtasks just to fit the range.
 - Give each a short title (3 to 6 words), a detailed `detail`, and optionally a present-tense \
 `progressLabel` (\"Adding validation\").";
 
-pub fn subtasks(task: &Task, settings: &Settings, layout: Option<&Layout>) -> String {
+pub fn subtasks(task: &Task, settings: &Settings, ctx: &PromptContext<'_>) -> String {
     let template = settings
         .prompts
         .subtasks
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or(DEFAULT_SUBTASKS_TEMPLATE);
-    let header = task_header(task, layout);
+    let header = task_header(task, ctx);
     let plan = task.planning.plan.clone().unwrap_or_default();
-    let repos_note = if layout.is_some() {
+    let repos_note = if ctx.layout.is_some() {
         "\n\nThis is a workspace of several repositories: give each subtask `repos`, the \
          repository folders it changes (or, for a QA subtask, checks)."
     } else {
@@ -389,13 +410,13 @@ pub fn dev(
     task: &Task,
     subtask: &Subtask,
     resume: Option<&RepoDiffs>,
-    layout: Option<&Layout>,
+    ctx: &PromptContext<'_>,
 ) -> String {
     let mut s = format!(
         "You are a developer working through an approved plan one subtask at a time.\n\n{}\n\
          # Approved plan\n\n{}\n\n# Subtasks\n\n{}{}\n\
          # Your subtask: {} ({})\n\n{}\n",
-        task_header(task, layout),
+        task_header(task, ctx),
         task.planning.plan.as_deref().unwrap_or("(no plan)"),
         subtask_list(task, &subtask.id),
         handoffs(task),
@@ -434,7 +455,9 @@ pub fn dev(
         "\nDo only this subtask; later subtasks will be done after it. Do not commit: the \
          system commits your work when the subtask is done. In `handoff`, write what the next \
          subtasks must know (decisions, unfinished edges, where things live); leave it empty if \
-         there is nothing.",
+         there is nothing. In `learnings`, add any lasting fact about this project that a later \
+         task would want (a build or test quirk, a convention, a pitfall), one short sentence \
+         each; leave it empty when there is none.",
     );
     s.push_str(&output_instructions::<DevOut>());
     s
@@ -451,7 +474,7 @@ pub fn resume_same_session(diff: &RepoDiffs) -> String {
     )
 }
 
-pub fn qa(task: &Task, subtask: &Subtask, layout: Option<&Layout>) -> String {
+pub fn qa(task: &Task, subtask: &Subtask, ctx: &PromptContext<'_>) -> String {
     let done: String = task
         .subtasks
         .iter()
@@ -470,8 +493,11 @@ pub fn qa(task: &Task, subtask: &Subtask, layout: Option<&Layout>) -> String {
          step. Check that the code does what the plan says, look for errors and runtime problems, \
          and report each problem found as one concrete finding (what, where, how to see it). \
          `passed` is true only if there is nothing that must be fixed. If the check needs a person, \
-         say so in the summary and list what they should look at as findings, with `passed` true.{}",
-        task_header(task, layout),
+         say so in the summary and list what they should look at as findings, with `passed` true. \
+         Run the app and its tests where you can (command-line tools such as a browser driver may \
+         be on the PATH). In `learnings`, add any lasting fact about this project that a later \
+         task would want; leave it empty when there is none.{}",
+        task_header(task, ctx),
         task.planning.plan.as_deref().unwrap_or("(no plan)"),
         if done.is_empty() {
             "(none)\n".to_string()
@@ -485,7 +511,7 @@ pub fn qa(task: &Task, subtask: &Subtask, layout: Option<&Layout>) -> String {
     )
 }
 
-pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs, layout: Option<&Layout>) -> String {
+pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs, ctx: &PromptContext<'_>) -> String {
     format!(
         "A developer was interrupted while working on a subtask. Judge the state they left; do \
          not change anything.\n\n{}\n# The subtask: {} ({})\n\n{}\n\n# What is in the \
@@ -493,7 +519,7 @@ pub fn triage(task: &Task, subtask: &Subtask, diff: &RepoDiffs, layout: Option<&
          Answer `done` if the subtask is complete as it stands, `partial` if it is part-way and \
          the changes are a good base, or `broken` if the changes should be thrown away and the \
          subtask redone.{}",
-        task_header(task, layout),
+        task_header(task, ctx),
         subtask.title,
         subtask.id,
         subtask.detail.trim(),
@@ -552,7 +578,7 @@ mod tests {
     #[test]
     fn a_dev_prompt_carries_plan_list_handoffs_and_answer_format() {
         let t = task();
-        let p = dev(&t, &t.subtasks[1], None, None);
+        let p = dev(&t, &t.subtasks[1], None, &PromptContext::default());
         assert!(p.contains("## Steps"), "plan missing");
         assert!(p.contains("[✓ done] dev-1"));
         assert!(p.contains("[→ (this one)] dev-2"));
@@ -571,7 +597,7 @@ mod tests {
             truncated: false,
         };
         let diff = RepoDiffs(vec![(ROOT_REPO.to_string(), diff)]);
-        let p = dev(&t, &t.subtasks[1], Some(&diff), None);
+        let p = dev(&t, &t.subtasks[1], Some(&diff), &PromptContext::default());
         assert!(p.contains("Resuming an interrupted attempt"));
         assert!(p.contains("+fn next() {}"));
         assert!(p.contains("src/new.rs"));
@@ -582,7 +608,7 @@ mod tests {
     fn custom_templates_replace_only_the_editable_part() {
         let mut settings = Settings::default();
         settings.prompts.plan = Some("CUSTOM for {{task}}".into());
-        let p = plan(&task(), &settings, None);
+        let p = plan(&task(), &settings, &PromptContext::default());
         assert!(p.starts_with("CUSTOM for **Task:** Add pagination"));
         assert!(
             p.contains("# Answer format"),
@@ -593,7 +619,7 @@ mod tests {
     #[test]
     fn qa_prompts_forbid_edits_and_ask_for_a_verdict() {
         let t = task();
-        let p = qa(&t, &t.subtasks[2], None);
+        let p = qa(&t, &t.subtasks[2], &PromptContext::default());
         assert!(p.contains("do not edit"));
         assert!(p.contains("\"passed\""));
         assert!(p.contains("dev-1: Cursor query"));
@@ -616,17 +642,34 @@ mod tests {
             ],
             root_instructions: vec!["/ws/CLAUDE.md".into()],
         };
-        let p = dev(&t, &t.subtasks[1], None, Some(&layout));
+        let p = dev(
+            &t,
+            &t.subtasks[1],
+            None,
+            &PromptContext {
+                layout: Some(&layout),
+                memory: None,
+            },
+        );
         assert!(p.contains("# Workspace layout"));
         assert!(p.contains("- `api/`: its instructions are `api/CLAUDE.md`, `api/AGENTS.md`"));
         assert!(p.contains("- `web/`\n"));
         assert!(p.contains("`/ws/CLAUDE.md`"));
         assert!(p.contains("removed after the run"));
         assert!(p.contains("this subtask changes: `api/`"));
-        let s = subtasks(&t, &Settings::default(), Some(&layout));
+        let s = subtasks(
+            &t,
+            &Settings::default(),
+            &PromptContext {
+                layout: Some(&layout),
+                memory: None,
+            },
+        );
         assert!(s.contains("give each subtask `repos`"));
         // A one-repository project says nothing of it.
-        assert!(!dev(&t, &t.subtasks[0], None, None).contains("Workspace layout"));
-        assert!(!subtasks(&t, &Settings::default(), None).contains("`repos`"));
+        assert!(
+            !dev(&t, &t.subtasks[0], None, &PromptContext::default()).contains("Workspace layout")
+        );
+        assert!(!subtasks(&t, &Settings::default(), &PromptContext::default()).contains("`repos`"));
     }
 }

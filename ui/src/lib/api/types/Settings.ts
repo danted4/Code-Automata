@@ -35,4 +35,9 @@ repos?: { [key in string]: RepoSettings },
  * The MCP servers this project's agents may use, by name; none by default. Claude Code,
  * Codex and Gemini CLI get exactly these (the user's own servers stay out).
  */
-mcpServers?: { [key in string]: McpServer }, };
+mcpServers?: { [key in string]: McpServer }, 
+/**
+ * Give every prompt what earlier tasks learned about the project, and keep what this one
+ * learns (`.code-automata/memory.md`).
+ */
+useProjectMemory: boolean, };

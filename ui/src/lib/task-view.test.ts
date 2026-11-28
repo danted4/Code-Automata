@@ -4,6 +4,7 @@ import type { Subtask } from '@/lib/api/types/Subtask';
 import type { Task } from '@/lib/api/types/Task';
 import {
   ACTION_LABELS,
+  agentLines,
   primaryAction,
   progress,
   rateLimitText,
@@ -199,5 +200,23 @@ describe('repoChips', () => {
 
   it('shows nothing for a one-repository project', () => {
     expect(repoChips(ws({ baseCommits: { '.': 'b' } }))).toEqual([]);
+  });
+});
+
+describe('agentLines', () => {
+  it('is one line when every phase has the same agent, else one per phase', () => {
+    expect(agentLines(task())).toEqual([{ phase: null, text: 'Claude Code' }]);
+    const t = task({
+      agents: {
+        planning: { provider: 'claude', model: 'claude-fable-5-2' },
+        dev: { provider: 'codex', model: 'gpt-6.2-sol', mode: 'high' },
+        qa: { provider: 'claude', model: 'claude-fable-5-2' },
+      },
+    });
+    expect(agentLines(t)).toEqual([
+      { phase: 'Planning', text: 'Claude Code · claude-fable-5-2' },
+      { phase: 'Development', text: 'Codex · gpt-6.2-sol · high' },
+      { phase: 'QA', text: 'Claude Code · claude-fable-5-2' },
+    ]);
   });
 });

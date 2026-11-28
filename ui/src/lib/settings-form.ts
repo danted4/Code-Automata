@@ -6,6 +6,8 @@
  */
 
 import type { CheckCommand } from '@/lib/api/types/CheckCommand';
+import type { McpServer } from '@/lib/api/types/McpServer';
+import type { MemoryView } from '@/lib/api/types/MemoryView';
 import type { PrHost } from '@/lib/api/types/PrHost';
 import type { PromptDefaults } from '@/lib/api/types/PromptDefaults';
 import type { PromptOverrides } from '@/lib/api/types/PromptOverrides';
@@ -20,6 +22,30 @@ export type PrHostMode = 'detect' | PrHost;
 
 export const TIMEOUT_KEYS = ['idle', 'tool', 'total', 'check'] as const;
 export type TimeoutKey = (typeof TIMEOUT_KEYS)[number];
+
+/**
+ * One MCP server as the form edits it: arguments one per line, variables as `NAME=value` lines,
+ * headers as `Name: value` lines.
+ */
+export type McpRow = {
+  name: string;
+  type: 'stdio' | 'http';
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+};
+
+export const EMPTY_MCP_ROW: McpRow = {
+  name: '',
+  type: 'stdio',
+  command: '',
+  args: '',
+  env: '',
+  url: '',
+  headers: '',
+};
 
 /** A workspace repository's own checks and pull request host. */
 export type RepoForm = {
@@ -40,6 +66,9 @@ export type SettingsForm = {
   pullRequestHost: PrHostMode;
   /** A workspace's repositories, by name in name order; empty for a one-repository project. */
   repos: Record<string, RepoForm>;
+  /** The MCP servers agents may use, in name order. */
+  mcp: McpRow[];
+  useProjectMemory: boolean;
 };
 
 export type FormErrors = Partial<{
@@ -52,6 +81,8 @@ export type FormErrors = Partial<{
   timeouts?: Partial<Record<TimeoutKey, string>>;
   /** Per workspace repository, the checks error. */
   repoChecks?: Record<string, string>;
+  /** Per MCP row (by index), what is wrong with it. */
+  mcp?: Record<number, string>;
 };
 
 export const DEFAULT_MAX_CONCURRENT_AGENTS = 12;
@@ -111,7 +142,79 @@ export function toForm(
     },
     pullRequestHost: settings.pullRequestHost ?? 'detect',
     repos,
+    mcp: Object.entries(settings.mcpServers ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, server]) => mcpRow(name, server)),
+    useProjectMemory: settings.useProjectMemory ?? true,
   };
+}
+
+/** A server as a form row. */
+export function mcpRow(name: string, server: McpServer): McpRow {
+  if (server.type === 'stdio') {
+    return {
+      ...EMPTY_MCP_ROW,
+      name,
+      command: server.command,
+      args: (server.args ?? []).join('\n'),
+      env: Object.entries(server.env ?? {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n'),
+    };
+  }
+  return {
+    ...EMPTY_MCP_ROW,
+    name,
+    type: 'http',
+    url: server.url,
+    headers: Object.entries(server.headers ?? {})
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n'),
+  };
+}
+
+const lines = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+/** `KEY<sep>value` lines as a map, or the first line that is not one. */
+function pairs(text: string, sep: string): Record<string, string> | { bad: string } {
+  const out: Record<string, string> = {};
+  for (const line of lines(text)) {
+    const i = line.indexOf(sep);
+    if (i <= 0) return { bad: line };
+    out[line.slice(0, i).trim()] = line.slice(i + sep.length).trim();
+  }
+  return out;
+}
+
+/** The server a row stands for, or what is wrong with it. */
+export function mcpServer(row: McpRow): { server: McpServer } | { error: string } {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(row.name.trim())) {
+    return { error: 'A name of letters, digits, "-" and "_".' };
+  }
+  if (row.type === 'stdio') {
+    if (!row.command.trim()) return { error: 'A command is needed.' };
+    const env = pairs(row.env, '=');
+    if ('bad' in env && typeof env.bad === 'string') {
+      return { error: `Not NAME=value: ${env.bad}` };
+    }
+    const server: McpServer = { type: 'stdio', command: row.command.trim() };
+    const args = lines(row.args);
+    if (args.length) server.args = args;
+    if (Object.keys(env).length) server.env = env as Record<string, string>;
+    return { server };
+  }
+  if (!row.url.trim()) return { error: 'An address is needed.' };
+  const headers = pairs(row.headers, ':');
+  if ('bad' in headers && typeof headers.bad === 'string') {
+    return { error: `Not "Name: value": ${headers.bad}` };
+  }
+  const server: McpServer = { type: 'http', url: row.url.trim() };
+  if (Object.keys(headers).length) server.headers = headers as Record<string, string>;
+  return { server };
 }
 
 /** Switch the checks mode; choosing `custom` with an empty list starts one blank row. */
@@ -178,6 +281,15 @@ export function validateForm(form: SettingsForm): FormErrors {
       };
     }
   }
+  const names = new Set<string>();
+  form.mcp.forEach((row, i) => {
+    const result = mcpServer(row);
+    const name = row.name.trim();
+    const message =
+      'error' in result ? result.error : names.has(name) ? 'Two servers have this name.' : null;
+    names.add(name);
+    if (message) errors.mcp = { ...errors.mcp, [i]: message };
+  });
   if (!form.prompts.plan.trim()) errors.promptPlan = 'Empty. Use "Reset to default" instead.';
   if (!form.prompts.subtasks.trim()) {
     errors.promptSubtasks = 'Empty. Use "Reset to default" instead.';
@@ -186,11 +298,12 @@ export function validateForm(form: SettingsForm): FormErrors {
 }
 
 export function hasErrors(errors: FormErrors): boolean {
-  const { timeouts, repoChecks, ...rest } = errors;
+  const { timeouts, repoChecks, mcp, ...rest } = errors;
   return (
     Object.keys(rest).length > 0 ||
     Object.keys(timeouts ?? {}).length > 0 ||
-    Object.keys(repoChecks ?? {}).length > 0
+    Object.keys(repoChecks ?? {}).length > 0 ||
+    Object.keys(mcp ?? {}).length > 0
   );
 }
 
@@ -219,6 +332,7 @@ export function fromForm(
     timeouts,
     reworkLimit: Number(form.reworkLimit.trim()),
     triageOnResume: form.triageOnResume,
+    useProjectMemory: form.useProjectMemory,
   };
   const checks = checksValue(form.checksMode, form.checks);
   if (checks) settings.checks = checks;
@@ -235,10 +349,12 @@ export function fromForm(
   if (Object.keys(repos).length > 0) settings.repos = repos;
   if (Object.keys(prompts).length > 0) settings.prompts = prompts;
   if (form.pullRequestHost !== 'detect') settings.pullRequestHost = form.pullRequestHost;
-  // Not edited by this form: kept as they are.
-  if (base.mcpServers && Object.keys(base.mcpServers).length > 0) {
-    settings.mcpServers = base.mcpServers;
+  const mcp: Record<string, McpServer> = {};
+  for (const row of [...form.mcp].sort((a, b) => a.name.trim().localeCompare(b.name.trim()))) {
+    const result = mcpServer(row);
+    if ('server' in result) mcp[row.name.trim()] = result.server;
   }
+  if (Object.keys(mcp).length > 0) settings.mcpServers = mcp;
   return { settings };
 }
 
@@ -275,4 +391,13 @@ export function checkSourceText(info: RepoChecks | undefined): string {
     case 'detected':
       return info.commands.length ? `Now: ${list} (detected)` : 'Now: none detected';
   }
+}
+
+/** The line under the memory editor: its size, and whether prompts get only part of it. */
+export function memoryNote(view: MemoryView): string {
+  if (view.bytes === 0) return 'Empty.';
+  const size = view.bytes < 1024 ? `${view.bytes} bytes` : `${(view.bytes / 1024).toFixed(1)} KB`;
+  return view.truncated
+    ? `${size}. Memory is full: prompts get only the newest entries; prune it.`
+    : `${size}. Every prompt gets all of it.`;
 }

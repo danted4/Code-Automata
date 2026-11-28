@@ -320,14 +320,22 @@ fn held_by_another_program(e: &std::io::Error) -> bool {
 /// Write pretty JSON to a hidden temp file next to `path`, flush it to disk, then rename it over
 /// `path`. The temp name starts with '.', so it is never read as a task file.
 pub async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|e| CoreError::Invalid(format!("could not serialise: {e}")))?;
+    bytes.push(b'\n');
+    write_bytes_atomic(path, &bytes).await
+}
+
+/// [`write_json_atomic`] for text.
+pub async fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
+    write_bytes_atomic(path, text.as_bytes()).await
+}
+
+async fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| CoreError::Invalid(format!("{} has no parent", path.display())))?;
     tokio::fs::create_dir_all(dir).await.map_err(io_at(dir))?;
-
-    let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|e| CoreError::Invalid(format!("could not serialise: {e}")))?;
-    bytes.push(b'\n');
 
     let file_name = path
         .file_name()
@@ -341,7 +349,7 @@ pub async fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(
 
     let result = async {
         let mut file = tokio::fs::File::create(&tmp).await.map_err(io_at(&tmp))?;
-        file.write_all(&bytes).await.map_err(io_at(&tmp))?;
+        file.write_all(bytes).await.map_err(io_at(&tmp))?;
         file.sync_all().await.map_err(io_at(&tmp))?;
         drop(file);
         replace_file(&tmp, path).await.map_err(io_at(path))

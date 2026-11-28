@@ -1650,3 +1650,26 @@ async fn mcp_servers_are_saved_checked_and_imported() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_project_memory_can_be_read_and_edited() {
+    let h = Harness::new(true);
+    let repo = Repo::new().await;
+    let p = &repo.path;
+    let empty = h.ok("GET", "/api/memory", p, None).await;
+    assert_eq!(empty, json!({ "text": "", "bytes": 0, "truncated": false }));
+    let text = "# Project memory\n\n- 2026-11-28 · t: Use pnpm\n";
+    let saved = h
+        .ok("PUT", "/api/memory", p, Some(json!({ "text": text })))
+        .await;
+    assert_eq!(saved["text"], text);
+    assert!(
+        std::fs::read_to_string(p.join(".code-automata/memory.md"))
+            .unwrap()
+            .contains("Use pnpm")
+    );
+    let (status, _) = h
+        .call("PUT", "/api/memory", p, Some(json!({ "words": "x" })))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

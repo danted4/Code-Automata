@@ -58,7 +58,7 @@ yarn typecheck
 yarn test           # Vitest
 yarn build          # typecheck + vite build into ui/dist
 yarn format         # Prettier
-yarn e2e            # after `cargo build` and `yarn build`: eleven agent-browser scenarios
+yarn e2e            # after `cargo build` and `yarn build`: fourteen agent-browser scenarios
 ```
 
 Releases: `.github/workflows/release.yml` builds the installers (universal macOS DMG, Windows NSIS, Linux AppImage and deb) on a `v*` tag that matches the version in `Cargo.toml` and `ui/package.json`, and creates a **draft** release with `latest.json` (the updater's manifest) and `checksums.sha256`. Run it by hand without a tag for a dry run (workflow artifacts only). Updates are signed with the `TAURI_SIGNING_PRIVATE_KEY` secret. A local `cargo tauri build` with bundles needs that key too (`TAURI_SIGNING_PRIVATE_KEY="$(cat <key file>)"`), or `--config '{"bundle":{"createUpdaterArtifacts":false}}'`. Installers are not code-signed.
@@ -75,7 +75,7 @@ CI: `.github/workflows/rust.yml` (macOS, Ubuntu, Windows) and `ui.yml` fail on a
 
 **Providers.** Claude Code, Codex, Gemini CLI, Cursor, Amp, plus `mock` for tests (never offered to users in a packaged build). Provider code lives in `crates/core/src/agent/`.
 
-**Desktop-only actions** (folder picker, open in editor, reveal in file manager) go through `ui/src/lib/native.ts`, which calls the app's commands (`crates/app/src/native.rs`). In a plain browser it is `null` and the UI hides those actions.
+**Desktop-only actions** (folder picker, open in editor, open in terminal, reveal in file manager) go through `ui/src/lib/native.ts`, which calls the app's commands (`crates/app/src/native.rs`). In a plain browser it is `null` and the UI hides those actions.
 
 **Child processes** are created with `ca_core::proc::command`, never `Command::new`: it gives them the login shell's `PATH` once the app has resolved it (`proc::set_child_path`; a Dock-launched app otherwise has the system's minimal `PATH`, and git hooks such as husky's `yarn` fail), and on Windows it sets `CREATE_NO_WINDOW`, without which the GUI app opens a console window per `git` or agent run. `crates/core/tests/no_console_windows.rs` fails on a plain `Command::new` in shipped code.
 

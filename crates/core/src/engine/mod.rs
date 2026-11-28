@@ -16,6 +16,7 @@ pub mod driver;
 pub mod extract;
 pub mod limits;
 pub mod lock;
+pub mod memory;
 pub mod output;
 pub mod pr;
 pub mod prompts;
@@ -135,6 +136,8 @@ pub(crate) struct Inner {
     wakeups: StdMutex<HashMap<String, (i64, tokio::task::AbortHandle)>>,
     /// The engine is shutting down: timers must not start anything.
     closing: AtomicBool,
+    /// Serialises changes to the project memory.
+    pub memory_lock: tokio::sync::Mutex<()>,
     _lock: ProjectLock,
 }
 
@@ -432,6 +435,18 @@ pub struct RepoChecks {
     pub commands: Vec<settings::CheckCommand>,
 }
 
+/// The project memory (`.code-automata/memory.md`).
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryView {
+    pub text: String,
+    #[cfg_attr(feature = "ts", ts(as = "f64"))]
+    pub bytes: usize,
+    /// Prompts get only the newest entries: older ones are left out (prune it).
+    pub truncated: bool,
+}
+
 /// One repository's worktree for a task.
 pub(crate) struct RepoWorktree {
     pub repo: String,
@@ -483,6 +498,7 @@ impl Engine {
             timing: options.timing,
             wakeups: StdMutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
+            memory_lock: tokio::sync::Mutex::new(()),
             project,
             _lock: lock,
         };
@@ -846,6 +862,27 @@ impl Engine {
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = settings;
         Ok(())
+    }
+
+    /// The project memory as Settings shows it.
+    pub async fn memory(&self) -> Result<MemoryView> {
+        let text = memory::read(&self.inner.project).await?;
+        let (_, truncated) = memory::for_prompt(&text);
+        Ok(MemoryView {
+            bytes: text.len(),
+            truncated,
+            text,
+        })
+    }
+
+    /// Replace the project memory with the user's text.
+    pub async fn save_memory(&self, text: &str) -> Result<MemoryView> {
+        memory::validate(text)?;
+        {
+            let _guard = self.inner.memory_lock.lock().await;
+            memory::write(&self.inner.project, text).await?;
+        }
+        self.memory().await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {

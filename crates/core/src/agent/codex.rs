@@ -375,10 +375,16 @@ mod tests {
         assert_eq!(item["properties"]["repos"]["type"], "array");
         assert_eq!(item["properties"]["id"]["type"], "string");
         assert_eq!(strict["additionalProperties"], false);
-        // Already strict schemas keep their shape.
+        // Optional lists, such as `learnings`, become required lists (empty when there is none).
         for schema in [DevOut::schema(), QaOut::schema()] {
             let strict = strict_schema(&schema);
-            assert_eq!(strict["required"], schema["required"]);
+            assert!(
+                strict["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("learnings"))
+            );
+            assert_eq!(strict["properties"]["learnings"]["type"], "array");
         }
     }
 }

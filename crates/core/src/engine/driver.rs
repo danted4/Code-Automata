@@ -437,7 +437,20 @@ async fn run_agent(
     let sub = subtask_id.as_ref().and_then(|s| task.subtask(s)).cloned();
     let worktrees = inner.task_worktrees(&task)?;
     let layout = layout_for(inner, &worktrees).await;
-    let layout = layout.as_ref();
+    let memory = if settings.use_project_memory {
+        // A memory that cannot be read is left out, never a failed step.
+        let text = super::memory::read(&inner.project)
+            .await
+            .unwrap_or_default();
+        Some(super::memory::for_prompt(&text).0)
+    } else {
+        None
+    };
+    let pctx = prompts::PromptContext {
+        layout: layout.as_ref(),
+        memory: memory.as_deref(),
+    };
+    let layout = &pctx;
 
     match step {
         AgentStep::Questions => {
@@ -522,7 +535,8 @@ async fn run_agent(
             let Attempt::Answer(v) = attempt::<QaOut>(&ctx, &task, prompt, None).await? else {
                 return Ok(false);
             };
-            finish(&ctx, |t| {
+            let learnings = v.learnings.clone();
+            let done = finish(&ctx, |t| {
                 if let Some(s) = t.subtask_mut(&sub_id) {
                     s.status = SubtaskStatus::Done;
                     s.finished_at = Some(now_ms());
@@ -534,7 +548,9 @@ async fn run_agent(
                 }
                 Ok(())
             })
-            .await
+            .await?;
+            remember(&ctx, done, &learnings).await;
+            Ok(done)
         }
         AgentStep::Dev(sub_id) => {
             let sub = sub.ok_or_else(|| CoreError::Invalid(format!("no subtask {sub_id:?}")))?;
@@ -584,8 +600,24 @@ async fn run_agent(
             else {
                 return Ok(false);
             };
-            finish_dev(&ctx, &task, &sub, &d.summary, &d.handoff).await
+            let done = finish_dev(&ctx, &task, &sub, &d.summary, &d.handoff).await?;
+            remember(&ctx, done, &d.learnings).await;
+            Ok(done)
         }
+    }
+}
+
+/// Keep a finished step's learnings in the project memory (after its result is written, outside
+/// the task's lock). A memory that cannot be written is logged, never a failed step.
+async fn remember(ctx: &Ctx<'_>, finished: bool, learnings: &[String]) {
+    if !finished || !ctx.settings.use_project_memory {
+        return;
+    }
+    let inner = ctx.inner;
+    if let Err(e) =
+        super::memory::append(&inner.project, &inner.memory_lock, learnings, ctx.id).await
+    {
+        log::warn!("task {}: could not update the project memory: {e}", ctx.id);
     }
 }
 
@@ -595,7 +627,7 @@ fn resume_prompt(
     diff: &prompts::RepoDiffs,
     session: Option<&str>,
     provider_resumes: bool,
-    layout: Option<&prompts::Layout>,
+    layout: &prompts::PromptContext<'_>,
 ) -> (String, Option<String>) {
     match session {
         Some(s) if provider_resumes => (prompts::resume_same_session(diff), Some(s.to_string())),
@@ -683,7 +715,7 @@ async fn triage(
     task: &Task,
     sub: &Subtask,
     diff: &prompts::RepoDiffs,
-    layout: Option<&prompts::Layout>,
+    layout: &prompts::PromptContext<'_>,
 ) -> Result<Option<TriageVerdict>> {
     let triage_ctx = Ctx {
         inner: ctx.inner,

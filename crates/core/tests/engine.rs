@@ -2198,3 +2198,63 @@ async fn opening_a_project_sweeps_run_files_a_crash_left() {
         .collect();
     assert_eq!(left, ["r-1-run.events.ndjson"]);
 }
+
+// Project memory -----------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn learnings_go_into_the_project_memory_and_later_prompts() {
+    let env = Env::new().await;
+    let engine = env.engine().await;
+    let learn = json!({ "whenPrompt": "(dev-1)", "onceFile": env.once("learn"), "steps": [
+        { "write": { "path": "dev-1.txt", "content": "1" } },
+        structured(json!({ "summary": "did dev-1", "handoff": "",
+            "learnings": ["Tests need DATABASE_URL set", "  "] }))
+    ]});
+    let first = engine
+        .create_task("First", "", env.agent(1, vec![learn]), false)
+        .await
+        .unwrap();
+    let done = run_to_end(&engine, &first.id).await;
+    assert_eq!(done.phase, Phase::HumanReview, "{:?}", done.run);
+    let memory = engine.memory().await.unwrap();
+    assert!(
+        memory
+            .text
+            .contains(&format!("{}: Tests need DATABASE_URL set", first.id)),
+        "{}",
+        memory.text
+    );
+    assert_eq!(memory.text.matches("DATABASE_URL").count(), 1);
+
+    // The next task's prompts carry it.
+    let second = engine
+        .create_task("Second", "", env.agent(1, vec![]), false)
+        .await
+        .unwrap();
+    run_to_end(&engine, &second.id).await;
+    let prompts = env.prompts_with("Second");
+    assert!(!prompts.is_empty());
+    assert!(prompts.iter().all(|r| {
+        r["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Tests need DATABASE_URL set")
+    }));
+
+    // The user's edit replaces it; with memory off, prompts go without it.
+    engine.save_memory("").await.unwrap();
+    env.settings(|s| s.use_project_memory = false).await;
+    let engine = {
+        drop(engine);
+        env.engine().await
+    };
+    let note = json!({ "whenPrompt": "(dev-1)", "onceFile": env.once("off"), "steps": [
+        structured(json!({ "summary": "did", "handoff": "", "learnings": ["Not kept"] }))
+    ]});
+    let third = engine
+        .create_task("Third", "", env.agent(1, vec![note]), false)
+        .await
+        .unwrap();
+    run_to_end(&engine, &third.id).await;
+    assert_eq!(engine.memory().await.unwrap().text, "");
+}

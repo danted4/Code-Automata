@@ -4,6 +4,7 @@
 
 import { request } from './client';
 import type { McpCandidate } from './types/McpCandidate';
+import type { MemoryView } from './types/MemoryView';
 import type { ModelList } from './types/ModelList';
 import type { PhaseAgents } from './types/PhaseAgents';
 import type { CliPath } from './types/CliPath';
@@ -101,6 +102,11 @@ export const api = {
       ),
   },
 
+  /** The project memory (what earlier tasks learned). */
+  memory: {
+    get: () => request<MemoryView>('GET', '/api/memory'),
+    save: (text: string) => request<MemoryView>('PUT', '/api/memory', { body: { text } }),
+  },
   settings: {
     get: () => request<SettingsResponse>('GET', '/api/settings'),
     save: (settings: Settings) =>

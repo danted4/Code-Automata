@@ -116,7 +116,18 @@ export async function startServer(rules) {
   if (!existsSync(server)) throw new Error(`${server} is missing: run \`cargo build\` first`);
   const child = spawn(
     server,
-    ['--port', String(SERVER_PORT), '--token', TOKEN, '--allow-mock', '--mock-scenario', scenario],
+    [
+      '--port',
+      String(SERVER_PORT),
+      '--token',
+      TOKEN,
+      '--allow-mock',
+      '--mock-scenario',
+      scenario,
+      // A rate-limited task resumes moments after its reset.
+      '--wake-grace-ms',
+      '200',
+    ],
     { env: { ...process.env, CODE_AUTOMATA_MOCK_AGENT: path.join(BIN, `mock-agent${EXE}`) } }
   );
   await started(child, /listening on/, 'ca-server');
@@ -281,6 +292,10 @@ export function untilCard(title, what, accept, timeoutMs) {
 /** Create a mock task through the new-task dialog. */
 export async function createTask(title, { description = '', approval = false } = {}) {
   click('new-task-button');
+  // Shown once the agents are loaded and the default chosen.
+  await until('the agent choice', () => exists('agent-same'), Boolean, 60_000);
+  // One agent for every phase (the default is one per phase when Claude Code is ready).
+  sameAgentForAllPhases();
   await until('the agent list', () => exists('agent-option-mock'), Boolean, 60_000);
   fill('new-task-title', title);
   if (description) fill('new-task-description', description);
@@ -289,6 +304,20 @@ export async function createTask(title, { description = '', approval = false } =
   click('new-task-submit');
   await until('the new task card', () => card(title));
   await until('the dialog to close', () => !exists('new-task-modal'));
+}
+
+/** Tick "Use the same agent for all phases" unless it is ticked. */
+export function sameAgentForAllPhases() {
+  js(
+    `(() => { const c = document.querySelector('[data-testid="agent-same"]'); if (c && c.getAttribute('data-state') !== 'checked') c.click(); return true; })()`
+  );
+}
+
+/** Choose `value` in the native select `testid`, the way a user's pick reaches React. */
+export function select(testid, value) {
+  js(
+    `(() => { const s = document.querySelector('[data-testid="${testid}"]'); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; set.call(s, ${JSON.stringify(value)}); s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`
+  );
 }
 
 export function cardAction(title, action) {

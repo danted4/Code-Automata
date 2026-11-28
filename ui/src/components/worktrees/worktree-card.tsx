@@ -12,6 +12,7 @@ import {
   Code2,
   Copy,
   FolderOpen,
+  SquareTerminal,
   GitBranch,
   HardDrive,
   HelpCircle,
@@ -108,6 +109,16 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
     } finally {
       setOpeningFolder(false);
     }
+  };
+
+  const openInTerminal = async () => {
+    if (!native) return;
+    if (await pathMissing(native, worktree.path)) {
+      toast.error('Worktree path not found');
+      return;
+    }
+    const result = await native.openInTerminal(worktree.path);
+    if (!result.success) toast.error(result.error ?? 'Could not open a terminal');
   };
 
   const copyPath = async () => {
@@ -259,6 +270,17 @@ export function WorktreeCard({ worktree, sizeBytes, onDelete }: WorktreeCardProp
                 <FolderOpen className="w-3.5 h-3.5" />
               )}
               Reveal in file manager
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              style={outlineStyle}
+              onClick={openInTerminal}
+              data-testid={`worktree-open-terminal-${worktree.taskId}`}
+            >
+              <SquareTerminal className="w-3.5 h-3.5" />
+              Open in terminal
             </Button>
           </>
         )}

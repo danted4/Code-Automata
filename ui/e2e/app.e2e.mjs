@@ -26,6 +26,8 @@ import {
   openProject,
   rules,
   screenshot,
+  select,
+  structured,
   startPreview,
   startServer,
   until,
@@ -388,4 +390,81 @@ test('11. a workspace task changes two repositories and pushes each', async () =
   assert.match(ws.remoteGit('api', 'ls-tree', '-r', '--name-only', branch), /a\.txt/);
   assert.match(ws.remoteGit('web', 'ls-tree', '-r', '--name-only', branch), /w\.txt/);
   assert.ok(!exists('review-create-prs'), 'nothing left to push');
+});
+
+test('12. each phase can have its own agent and model', async () => {
+  const repo = makeRepo();
+  server = await startServer(rules(1));
+  await openProject(repo.path);
+  click('new-task-button');
+  await until('the agent choice', () => exists('agent-same'));
+  // One agent per phase.
+  js(
+    `(() => { const c = document.querySelector('[data-testid="agent-same"]'); if (c.getAttribute('data-state') === 'checked') c.click(); return true; })()`
+  );
+  await until('the phase rows', () => exists('agent-provider-qa'));
+  for (const phase of ['planning', 'dev', 'qa']) select(`agent-provider-${phase}`, 'mock');
+  await until('the model lists', () =>
+    js(`!!document.querySelector('[data-testid="agent-model-qa"] option[value="mock"]')`)
+  );
+  select('agent-model-dev', 'mock');
+  select('agent-model-qa', '__other__');
+  await until('the typed model', () => exists('agent-model-qa-other'));
+  fill('agent-model-qa-other', 'mock-review');
+  fill('new-task-title', 'Per phase');
+  click('new-task-submit');
+  await untilCard('Per phase', 'in review', inReview);
+  openDetails('Per phase');
+  await until('the details', () => exists('task-detail-agent'));
+  assert.equal(
+    js(`document.querySelector('[data-testid="task-detail-agent"]').innerText`),
+    'Planning: Mock · Development: Mock · mock · QA: Mock · mock-review'
+  );
+});
+
+test('13. a usage limit shows on the card, and the task resumes on its own', async () => {
+  const repo = makeRepo();
+  const limit = once('(dev-1)', [{ text: 'working' }, { rateLimit: { inSecs: 3 } }]);
+  server = await startServer(rules(1, [limit]));
+  await openProject(repo.path);
+  await createTask('Limited');
+  const limited = await untilCard('Limited', 'rate-limited', (c) => c.status === 'rate_limited');
+  assert.equal(limited.badge, 'Rate-limited');
+  assert.equal(limited.action, 'resume_now');
+  assert.match(
+    js(
+      `document.querySelector('[data-testid="task-card-${limited.id}"] [data-testid="task-rate-limited"]').innerText`
+    ),
+    /^Resumes at /
+  );
+  await untilCard('Limited', 'in review', inReview, 30_000);
+});
+
+test('14. what an agent learns lands in the project memory, which can be edited', async () => {
+  const repo = makeRepo();
+  const learn = {
+    whenPrompt: '(dev-1)',
+    steps: [
+      { write: { path: 'file-1.txt', content: '1' } },
+      structured({ summary: 'wrote it', handoff: '', learnings: ['Tests need DATABASE_URL'] }),
+    ],
+  };
+  server = await startServer(rules(1, [learn]));
+  await openProject(repo.path);
+  await createTask('Learns');
+  await untilCard('Learns', 'in review', inReview);
+  ab('open', `${BASE}/settings`);
+  await until(
+    'the memory',
+    () => js(`document.querySelector('[data-testid="settings-memory-text"]')?.value ?? ''`),
+    (v) => v.includes('Tests need DATABASE_URL')
+  );
+  fill('settings-memory-text', '- by hand: Use pnpm');
+  click('settings-memory-save');
+  const file = path.join(repo.path, '.code-automata', 'memory.md');
+  await until(
+    'memory.md',
+    () => readFileSync(file, 'utf8'),
+    (t) => t === '- by hand: Use pnpm'
+  );
 });

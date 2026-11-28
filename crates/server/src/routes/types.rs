@@ -124,3 +124,11 @@ pub struct SettingsResponse {
     /// Each repository's check commands as a task would run them, and where they come from.
     pub repo_checks: Vec<ca_core::engine::RepoChecks>,
 }
+
+/// `PUT /api/memory`: the project memory's new text.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveMemoryRequest {
+    pub text: String,
+}

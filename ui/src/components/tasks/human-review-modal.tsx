@@ -718,7 +718,7 @@ function LocalReview({ nativeApi, taskId }: { nativeApi: NativeApi; taskId: stri
   const path = worktreePath(projectPath, taskId);
   const [editors, setEditors] = useState<AvailableEditor[] | null>(null);
   const [editorId, setEditorId] = useState<EditorId | null>(null);
-  const [opening, setOpening] = useState<'editor' | 'folder' | null>(null);
+  const [opening, setOpening] = useState<'editor' | 'folder' | 'terminal' | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -740,7 +740,7 @@ function LocalReview({ nativeApi, taskId }: { nativeApi: NativeApi; taskId: stri
 
   const editor = editors?.find((e) => e.id === editorId) ?? null;
 
-  const openIn = async (target: 'editor' | 'folder') => {
+  const openIn = async (target: 'editor' | 'folder' | 'terminal') => {
     if (!path) return;
     setOpening(target);
     try {
@@ -751,11 +751,16 @@ function LocalReview({ nativeApi, taskId }: { nativeApi: NativeApi; taskId: stri
       const result =
         target === 'editor' && editorId
           ? await nativeApi.openEditorAtPath(path, editorId, projectPath)
-          : await nativeApi.openFolder(path);
+          : target === 'terminal'
+            ? await nativeApi.openInTerminal(path)
+            : await nativeApi.openFolder(path);
       if (result.success) {
-        toast.success(target === 'editor' ? `Opened in ${editor?.label}` : 'Opened the folder', {
-          description: path,
-        });
+        const done = {
+          editor: `Opened in ${editor?.label}`,
+          folder: 'Opened the folder',
+          terminal: 'Opened a terminal',
+        }[target];
+        toast.success(done, { description: path });
       } else {
         toast.error(result.error ?? 'Could not open the worktree');
       }
@@ -855,6 +860,16 @@ function LocalReview({ nativeApi, taskId }: { nativeApi: NativeApi; taskId: stri
             data-testid="review-open-folder"
           >
             {opening === 'folder' ? 'Opening…' : 'Show in file manager'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs"
+            onClick={() => openIn('terminal')}
+            disabled={!path || opening !== null}
+            data-testid="review-open-terminal"
+          >
+            {opening === 'terminal' ? 'Opening…' : 'Open in terminal'}
           </Button>
         </div>
       </Card>

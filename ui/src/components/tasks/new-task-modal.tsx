@@ -21,9 +21,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
-import { EMPTY_AGENT_DRAFT, agentFromDraft, defaultProvider, sameForAll } from '@/lib/agent-form';
+import {
+  type PhaseDrafts,
+  agentsFromDrafts,
+  defaultDrafts,
+  loadLastDrafts,
+  saveLastDrafts,
+} from '@/lib/agent-form';
 import { useTaskStore } from '@/store/task-store';
-import { AgentPicker, useProviders } from './agent-picker';
+import { PhaseAgentPicker, useProviders } from './agent-picker';
 
 type NewTaskModalProps = {
   open: boolean;
@@ -52,6 +58,11 @@ export function NewTaskModal({ open, onOpenChange }: NewTaskModalProps) {
   );
 }
 
+/** The page's storage, if it has one. */
+function storage(): Storage | null {
+  return typeof window === 'undefined' ? null : window.localStorage;
+}
+
 function NewTaskForm({
   creating,
   setCreating,
@@ -65,31 +76,29 @@ function NewTaskForm({
   const { providers } = providersState;
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [agentDraft, setAgentDraft] = useState(EMPTY_AGENT_DRAFT);
+  const [chosen, setChosen] = useState<PhaseDrafts | null>(null);
   const [requirePlanApproval, setRequirePlanApproval] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Until the user picks one, the agent is the first ready provider.
-  const draft = {
-    ...agentDraft,
-    provider: agentDraft.provider ?? (providers ? defaultProvider(providers) : null),
-  };
-  const agent = agentFromDraft(draft);
-  const canSubmit = !creating && title.trim() !== '' && agent !== null;
+  // Until the user picks, the agents are the last choice or the first ready CLI.
+  const drafts = chosen ?? (providers ? defaultDrafts(providers, loadLastDrafts(storage())) : null);
+  const agents = drafts ? agentsFromDrafts(drafts) : null;
+  const canSubmit = !creating && title.trim() !== '' && agents !== null;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!canSubmit || !agent) return;
+    if (!canSubmit || !agents || !drafts) return;
     setCreating(true);
     setError(null);
     try {
       const task = await api.tasks.create({
         title: title.trim(),
         description: description.trim(),
-        agents: sameForAll(agent),
+        agents,
         requirePlanApproval,
       });
       useTaskStore.getState().upsert(task);
+      saveLastDrafts(storage(), drafts);
       toast.success('Task created');
       setCreating(false);
       close();
@@ -127,7 +136,20 @@ function NewTaskForm({
         </div>
 
         <div className="border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
-          <AgentPicker state={providersState} value={draft} onChange={setAgentDraft} />
+          {drafts ? (
+            <PhaseAgentPicker state={providersState} value={drafts} onChange={setChosen} />
+          ) : (
+            <PhaseAgentPicker
+              state={providersState}
+              value={{
+                same: true,
+                planning: { provider: null, model: '', mode: '' },
+                dev: { provider: null, model: '', mode: '' },
+                qa: { provider: null, model: '', mode: '' },
+              }}
+              onChange={setChosen}
+            />
+          )}
         </div>
 
         <div

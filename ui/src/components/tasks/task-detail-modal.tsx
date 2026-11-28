@@ -39,7 +39,7 @@ import {
   PHASE_LABELS,
   primaryAction,
   progress,
-  PROVIDER_LABELS,
+  agentLines,
   rateLimitText,
   reworkLabel,
   statusBadge,
@@ -149,9 +149,9 @@ export function TaskDetailModal({ taskId, open, onOpenChange }: TaskModalProps) 
               </Badge>
             )}
             <span data-testid="task-detail-agent" style={muted}>
-              {PROVIDER_LABELS[task.agents.dev.provider] ?? task.agents.dev.provider}
-              {task.agents.dev.model && ` · ${task.agents.dev.model}`}
-              {task.agents.dev.mode && ` · ${task.agents.dev.mode}`}
+              {agentLines(task)
+                .map((l) => (l.phase ? `${l.phase}: ${l.text}` : l.text))
+                .join(' · ')}
             </span>
             {status.kind === 'working' && (
               <span
@@ -601,6 +601,20 @@ function ChangesTab({ task }: { task: Task }) {
                   }}
                 >
                   Show in folder
+                </Button>
+              )}
+              {native && path && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  data-testid={`task-changes-terminal-${repo.repo}`}
+                  onClick={async () => {
+                    const result = await native!.openInTerminal(path);
+                    if (!result.success) toast.error(result.error ?? 'Could not open a terminal');
+                  }}
+                >
+                  Terminal
                 </Button>
               )}
             </div>

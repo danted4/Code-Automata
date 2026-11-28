@@ -129,6 +129,14 @@ pub struct Settings {
     /// Codex and Gemini CLI get exactly these (the user's own servers stay out).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: crate::agent::mcp::McpServers,
+    /// Give every prompt what earlier tasks learned about the project, and keep what this one
+    /// learns (`.code-automata/memory.md`).
+    #[serde(default = "yes")]
+    pub use_project_memory: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_concurrency() -> u32 {
@@ -153,6 +161,7 @@ impl Default for Settings {
             prompts: PromptOverrides::default(),
             pull_request_host: None,
             mcp_servers: BTreeMap::new(),
+            use_project_memory: true,
             repos: BTreeMap::new(),
         }
     }

@@ -102,10 +102,127 @@ export function agentLockedReason(run: Run | null | undefined): string | null {
   }
 }
 
+/** The task's phases, each with its own agent. */
+export type AgentPhase = 'planning' | 'dev' | 'qa';
+
+export const AGENT_PHASES: AgentPhase[] = ['planning', 'dev', 'qa'];
+
+export const AGENT_PHASE_LABELS: Record<AgentPhase, string> = {
+  planning: 'Planning',
+  dev: 'Development',
+  qa: 'QA review',
+};
+
+/** The agent part of the task forms: one draft per phase, or one for all (`same`). */
+export type PhaseDrafts = { same: boolean } & Record<AgentPhase, AgentDraft>;
+
+function sameDraft(a: AgentDraft, b: AgentDraft): boolean {
+  return a.provider === b.provider && a.model === b.model && a.mode === b.mode;
+}
+
+export function draftsFromAgents(agents: PhaseAgents): PhaseDrafts {
+  const drafts = {
+    planning: draftFromAgent(agents.planning),
+    dev: draftFromAgent(agents.dev),
+    qa: draftFromAgent(agents.qa),
+  };
+  const same = sameDraft(drafts.planning, drafts.dev) && sameDraft(drafts.qa, drafts.dev);
+  return { same, ...drafts };
+}
+
+/** All three phases on one draft. */
+export function sameDrafts(draft: AgentDraft): PhaseDrafts {
+  return { same: true, planning: draft, dev: draft, qa: draft };
+}
+
+/** The draft each phase uses: the development one for all when `same`. */
+export function effectiveDraft(drafts: PhaseDrafts, phase: AgentPhase): AgentDraft {
+  return drafts.same ? drafts.dev : drafts[phase];
+}
+
+/**
+ * The agents the drafts stand for; null until every phase has a provider. `base` keeps each
+ * phase's `options` while its provider stays the same.
+ */
+export function agentsFromDrafts(drafts: PhaseDrafts, base?: PhaseAgents): PhaseAgents | null {
+  const one = (phase: AgentPhase) => agentFromDraft(effectiveDraft(drafts, phase), base?.[phase]);
+  const planning = one('planning');
+  const dev = one('dev');
+  const qa = one('qa');
+  return planning && dev && qa ? { planning, dev, qa } : null;
+}
+
+/** The recommended models per phase: Fable 5.2 to plan and review, Opus 5.5 to develop. */
+const CLAUDE_RECOMMENDED: Record<AgentPhase, string> = {
+  planning: 'claude-fable-5-2',
+  dev: 'claude-opus-5-5',
+  qa: 'claude-fable-5-2',
+};
+
+/**
+ * A new task's drafts: the last choice when its CLIs are still offered, else the first ready CLI,
+ * with the recommended models for Claude Code.
+ */
+export function defaultDrafts(
+  providers: ProviderInfo[],
+  last: PhaseDrafts | null
+): PhaseDrafts | null {
+  const offered = new Set(providers.map((p) => p.provider));
+  if (
+    last &&
+    AGENT_PHASES.every((ph) => {
+      const p = effectiveDraft(last, ph).provider;
+      return p !== null && offered.has(p);
+    })
+  ) {
+    return last;
+  }
+  const provider = defaultProvider(providers);
+  if (!provider) return null;
+  if (provider === 'claude') {
+    const draft = (phase: AgentPhase): AgentDraft => ({
+      provider,
+      model: CLAUDE_RECOMMENDED[phase],
+      mode: '',
+    });
+    return { same: false, planning: draft('planning'), dev: draft('dev'), qa: draft('qa') };
+  }
+  return sameDrafts({ provider, model: '', mode: '' });
+}
+
+const LAST_KEY = 'code-automata-last-agents';
+
+/** The last choice made in the new-task form, kept in this browser. */
+export function loadLastDrafts(storage: Pick<Storage, 'getItem'> | null): PhaseDrafts | null {
+  try {
+    const raw = storage?.getItem(LAST_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as PhaseDrafts;
+    const ok = (d: unknown): d is AgentDraft =>
+      typeof d === 'object' &&
+      d !== null &&
+      typeof (d as AgentDraft).model === 'string' &&
+      typeof (d as AgentDraft).mode === 'string';
+    return typeof value.same === 'boolean' && AGENT_PHASES.every((ph) => ok(value[ph]))
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastDrafts(storage: Pick<Storage, 'setItem'> | null, drafts: PhaseDrafts) {
+  try {
+    storage?.setItem(LAST_KEY, JSON.stringify(drafts));
+  } catch {
+    // Storage full or off: the next form starts from the defaults.
+  }
+}
+
 export type TaskForm = {
   title: string;
   description: string;
-  agent: AgentDraft;
+  agents: PhaseDrafts;
   requirePlanApproval: boolean;
 };
 
@@ -113,7 +230,7 @@ export function formFromTask(task: Task): TaskForm {
   return {
     title: task.title,
     description: task.description ?? '',
-    agent: draftFromAgent(task.agents.dev),
+    agents: draftsFromAgents(task.agents),
     requirePlanApproval: task.requirePlanApproval,
   };
 }
@@ -123,9 +240,9 @@ export type TaskPatch = Partial<
 >;
 
 /**
- * The fields of `form` that differ from `task`. The agent is compared after both sides go through
- * the same normalisation, so an untouched form never produces an agent change, and it is left out
- * entirely while a run holds it.
+ * The fields of `form` that differ from `task`. The agents are compared after both sides go
+ * through the same normalisation, so an untouched form never produces an agent change, and they
+ * are left out entirely while a run holds them.
  */
 export function taskChanges(task: Task, form: TaskForm): TaskPatch {
   const changes: TaskPatch = {};
@@ -137,18 +254,10 @@ export function taskChanges(task: Task, form: TaskForm): TaskPatch {
     changes.requirePlanApproval = form.requirePlanApproval;
   }
   if (agentLockedReason(task.run) === null) {
-    const base = task.agents.dev;
-    const next = agentFromDraft(form.agent, base);
-    const current = agentFromDraft(draftFromAgent(base), base);
-    if (next && current && !sameAgent(next, current)) {
-      // The form edits the development agent; a phase that used the same one follows it, and a
-      // phase with its own agent keeps it.
-      const follow = (phase: AgentConfig) => (sameAgent(phase, base) ? next : phase);
-      changes.agents = {
-        planning: follow(task.agents.planning),
-        dev: next,
-        qa: follow(task.agents.qa),
-      };
+    const next = agentsFromDrafts(form.agents, task.agents);
+    const current = agentsFromDrafts(draftsFromAgents(task.agents), task.agents);
+    if (next && current && AGENT_PHASES.some((ph) => !sameAgent(next[ph], current[ph]))) {
+      changes.agents = next;
     }
   }
   return changes;

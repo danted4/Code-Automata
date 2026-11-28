@@ -13,7 +13,19 @@ import { api, errorMessage } from '@/lib/api';
 import type { Preflight } from '@/lib/api/types/Preflight';
 import type { Provider } from '@/lib/api/types/Provider';
 import type { ProviderInfo } from '@/lib/api/types/ProviderInfo';
-import { type AgentDraft, readiness, suggestedMode, takesMode } from '@/lib/agent-form';
+import {
+  AGENT_PHASES,
+  AGENT_PHASE_LABELS,
+  type AgentDraft,
+  type AgentPhase,
+  type PhaseDrafts,
+  readiness,
+  sameDrafts,
+  suggestedMode,
+  takesMode,
+} from '@/lib/agent-form';
+import type { ModelList } from '@/lib/api/types/ModelList';
+import { Checkbox } from '@/components/ui/checkbox';
 import { offerCliChoice, sourceText } from '@/lib/cli-path';
 import { CliPathChooser } from './cli-path-chooser';
 
@@ -255,13 +267,12 @@ export function AgentPicker({ state, value, onChange, lockedReason }: AgentPicke
             <Label htmlFor="agent-model" className="text-xs">
               Model (optional)
             </Label>
-            <Input
+            <ModelField
               id="agent-model"
-              data-testid="agent-model"
-              placeholder="Provider default"
+              provider={value.provider}
               value={value.model}
               disabled={locked}
-              onChange={(e) => onChange({ ...value, model: e.target.value })}
+              onChange={(model) => onChange({ ...value, model })}
             />
           </div>
           {takesMode(value.provider) && (
@@ -282,6 +293,212 @@ export function AgentPicker({ state, value, onChange, lockedReason }: AgentPicke
               </p>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Each CLI's model list, asked once per page load (the server keeps it fresh). */
+const modelLists = new Map<Provider, Promise<ModelList>>();
+
+function useModels(provider: Provider | null): ModelList | null {
+  const [list, setList] = useState<ModelList | null>(null);
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    let pending = modelLists.get(provider);
+    if (!pending) {
+      pending = api.models(provider);
+      // A failed ask is tried again next time.
+      pending.catch(() => modelLists.delete(provider));
+      modelLists.set(provider, pending);
+    }
+    pending
+      .then((l) => {
+        if (!cancelled) setList(l);
+      })
+      .catch(() => {
+        if (!cancelled) setList(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
+  return list && list.provider === provider ? list : null;
+}
+
+const OTHER = '__other__';
+
+const selectClass =
+  'h-9 w-full min-w-0 rounded-md border bg-transparent px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60';
+
+/**
+ * A model: "Default" (the CLI picks), one of the CLI's own models (or the app's list for a CLI
+ * that cannot list them), or "Other…" with a typed id.
+ */
+export function ModelField({
+  id,
+  provider,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  provider: Provider | null;
+  value: string;
+  disabled?: boolean;
+  onChange: (model: string) => void;
+}) {
+  const list = useModels(provider);
+  const models = list?.models ?? [];
+  const known = value === '' || models.some((m) => m.id === value);
+  const [typing, setTyping] = useState(false);
+  const other = typing || !known;
+  return (
+    <div className="space-y-1.5">
+      <select
+        id={id}
+        data-testid={id}
+        className={selectClass}
+        style={{ borderColor: 'var(--color-border)' }}
+        value={other ? OTHER : value}
+        disabled={disabled}
+        onChange={(e) => {
+          const v = e.target.value;
+          setTyping(v === OTHER);
+          onChange(v === OTHER ? '' : v);
+        }}
+      >
+        <option value="">Default (the CLI picks)</option>
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label === m.id ? m.id : `${m.label} (${m.id})`}
+          </option>
+        ))}
+        <option value={OTHER}>Other…</option>
+      </select>
+      {other && (
+        <Input
+          data-testid={`${id}-other`}
+          placeholder="Model id, as the CLI takes it"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The agents of a task: one for all three phases (the familiar picker), or one per phase
+ * (Planning, Development, QA review), each a CLI, a model and, where the CLI takes one, a mode.
+ */
+export function PhaseAgentPicker({
+  state,
+  value,
+  onChange,
+  lockedReason,
+}: {
+  state: ProvidersState;
+  value: PhaseDrafts;
+  onChange: (value: PhaseDrafts) => void;
+  lockedReason?: string | null;
+}) {
+  const locked = Boolean(lockedReason);
+  const providers = state.providers ?? [];
+  const setPhase = (phase: AgentPhase, draft: AgentDraft) => onChange({ ...value, [phase]: draft });
+  return (
+    <div className="space-y-3">
+      {/* Shown once the agents are known: the default (one agent, or one per phase) depends on
+          which are ready, and the box must not flip under a click. */}
+      {state.providers && (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="agent-same"
+            data-testid="agent-same"
+            checked={value.same}
+            disabled={locked}
+            onCheckedChange={(checked) =>
+              onChange(checked === true ? sameDrafts(value.dev) : { ...value, same: false })
+            }
+          />
+          <Label htmlFor="agent-same" className="cursor-pointer text-sm">
+            Use the same agent for planning, development and QA
+          </Label>
+        </div>
+      )}
+      {value.same ? (
+        <AgentPicker
+          state={state}
+          value={value.dev}
+          onChange={(draft) => onChange(sameDrafts(draft))}
+          lockedReason={lockedReason}
+        />
+      ) : (
+        <div className="space-y-3" data-testid="agent-phases">
+          <Label>Agents</Label>
+          {lockedReason && (
+            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              {lockedReason}
+            </p>
+          )}
+          {AGENT_PHASES.map((phase) => {
+            const draft = value[phase];
+            const info = providers.find((p) => p.provider === draft.provider);
+            const ready = info ? readiness(info.preflight) : null;
+            const mode = suggestedMode(draft.provider);
+            return (
+              <div
+                key={phase}
+                className="grid items-start gap-2 sm:grid-cols-[7rem_1fr_1fr]"
+                data-testid={`agent-phase-${phase}`}
+              >
+                <div className="pt-2 text-sm font-medium">{AGENT_PHASE_LABELS[phase]}</div>
+                <div className="space-y-1">
+                  <select
+                    data-testid={`agent-provider-${phase}`}
+                    className={selectClass}
+                    style={{ borderColor: 'var(--color-border)' }}
+                    value={draft.provider ?? ''}
+                    disabled={locked}
+                    onChange={(e) =>
+                      setPhase(phase, { provider: e.target.value as Provider, model: '', mode: '' })
+                    }
+                  >
+                    {providers.map((p) => (
+                      <option key={p.provider} value={p.provider}>
+                        {p.label}
+                        {readiness(p.preflight).ready ? '' : ` (${readiness(p.preflight).label})`}
+                      </option>
+                    ))}
+                  </select>
+                  {ready && !ready.ready && (
+                    <p className="text-xs" style={{ color: 'var(--color-warning)' }}>
+                      {info?.label} is not ready: {ready.label.toLowerCase()}.
+                    </p>
+                  )}
+                  {takesMode(draft.provider) && (
+                    <Input
+                      data-testid={`agent-mode-${phase}`}
+                      placeholder={mode ? `Mode, e.g. ${mode}` : 'Mode'}
+                      value={draft.mode}
+                      disabled={locked}
+                      onChange={(e) => setPhase(phase, { ...draft, mode: e.target.value })}
+                    />
+                  )}
+                </div>
+                <ModelField
+                  id={`agent-model-${phase}`}
+                  provider={draft.provider}
+                  value={draft.model}
+                  disabled={locked}
+                  onChange={(model) => setPhase(phase, { ...draft, model })}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

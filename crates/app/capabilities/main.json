@@ -10,6 +10,8 @@
     "allow-path-exists",
     "allow-open-in-editor",
     "allow-reveal-folder",
+    "allow-available-terminals",
+    "allow-open-in-terminal",
     "allow-get-app-settings",
     "allow-set-app-settings",
     "allow-check-for-updates",

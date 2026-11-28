@@ -57,6 +57,10 @@ pub fn api() -> Router<Arc<AppState>> {
             axum::routing::delete(worktrees::delete),
         )
         .route("/api/settings", get(settings::get).put(settings::put))
+        .route(
+            "/api/memory",
+            get(settings::memory).put(settings::save_memory),
+        )
         .fallback(|| async { ApiError::not_found("no such endpoint") })
 }
 

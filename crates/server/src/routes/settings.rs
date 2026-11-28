@@ -2,11 +2,12 @@ use axum::Json;
 use ca_core::CoreError;
 use ca_core::agent::mcp::{McpCandidate, import_candidates};
 use ca_core::engine::Engine;
+use ca_core::engine::MemoryView;
 use ca_core::engine::prompts::{DEFAULT_PLAN_TEMPLATE, DEFAULT_SUBTASKS_TEMPLATE};
 use ca_core::engine::settings::Settings;
 
 use super::Body;
-use super::types::{PromptDefaults, SettingsResponse};
+use super::types::{PromptDefaults, SaveMemoryRequest, SettingsResponse};
 use crate::error::ApiError;
 use crate::state::Project;
 
@@ -40,6 +41,23 @@ pub async fn mcp_import(
             .await
             .unwrap_or_default();
     Json(found)
+}
+
+/// The project memory.
+pub async fn memory(Project(engine): Project) -> Result<Json<MemoryView>, ApiError> {
+    Ok(Json(engine.memory().await?))
+}
+
+/// Replace the project memory with the user's edit.
+pub async fn save_memory(
+    Project(engine): Project,
+    Body(req): Body<SaveMemoryRequest>,
+) -> Result<Json<MemoryView>, ApiError> {
+    match engine.save_memory(&req.text).await {
+        Ok(view) => Ok(Json(view)),
+        Err(CoreError::Invalid(reason)) => Err(ApiError::bad_request(reason)),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub async fn get(Project(engine): Project) -> Json<SettingsResponse> {
