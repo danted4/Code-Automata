@@ -4,6 +4,39 @@ All notable changes to Code-Automata are documented here.
 
 ---
 
+## 3.2.0
+
+Rate limits, Codex, an agent per phase, and project memory. If you have an earlier 3.x installed, it offers this update when it starts.
+
+### New
+
+- **A usage limit no longer fails your tasks.** When Claude Code, Codex, Cursor, Amp or Gemini stops because your subscription's limit was reached, the task shows "Rate-limited" and "Resumes at 15:42", and starts again on its own once the limit resets (also after a restart, when its project is open). Other tasks on the same CLI wait instead of failing one after another; tasks on other CLIs go on. An Opus or Sonnet limit holds back only tasks on that model. When the CLI does not say when the limit resets, the task tries again after 30 minutes ("Retrying at …"). "Resume now" tries straight away; you can also move the task to another CLI or model.
+- **Codex** (OpenAI's CLI) can run tasks: planning in its read-only sandbox, development and QA with full access, its reasoning effort as the mode, answers checked against the task's schema.
+- **Gemini (experimental)**: Google's Gemini CLI can run tasks too. See the known limits.
+- **An agent per phase.** The new-task dialog picks the agent for planning, development and QA separately, each a CLI and a model, or one for all three ("Use the same agent…"). Models come from each CLI's own list where it has one (Cursor, Gemini, Codex), else the app's, plus "Default" and "Other…". New tasks start from your last choice; with Claude Code the first time, **Fable 5.2 plans and reviews and Opus 5.5 develops**. To change that, untick or edit the models in the dialog (or the task's Edit, also while it is rate-limited). The task details show each phase's agent.
+- **Project memory.** Agents report lasting facts about a project (a build quirk, a convention, a pitfall); they are kept in `.code-automata/memory.md` and given to every later task. Settings → Project memory shows it, lets you edit or prune it, and turns it off.
+- **MCP servers for agents.** Settings → MCP servers for agents lists the only MCP servers agents may use, per project (none by default; your own servers stay out). Import copies one you already set up for Claude Code, Codex, Gemini or in the project's `.mcp.json`. Development and QA runs get them; planning runs do not.
+- **Open in terminal** next to Open in editor (Human Review, task details, Worktrees). Choose the terminal app in Settings.
+- **CLIs installed with npm under another node version** (nvm, fnm) are found, and run on the node they were installed with.
+
+### Changed
+
+- **The planner decides how many subtasks a task needs.** The suggested counts are a guide, and there is no upper limit (it was 25).
+- **A failed run names the model it used** when the agent's own message does not, so a model your login cannot use is easy to spot and change.
+- **Task files are version 3** (an agent per phase). Older task files are read as before and rewritten on their next change; 3.1 cannot read a task once 3.2 has changed it.
+- Amp's error messages now reach the card (they were dropped).
+
+### Known limits
+
+- **Codex has not run live here** (no ChatGPT plan to test with): it is built from Codex's own source and tested on its event format. If a Codex run fails in a way the card does not explain, the run log has its output. The commands a Codex agent runs can see the variables you give a stdio MCP server (Codex has no other way to pass them).
+- **Gemini CLI's "Sign in with Google" no longer works for individuals** (Google moved them to its Antigravity products). Gemini CLI now needs a Gemini API key, Vertex AI or a company Code Assist plan. Runs from the app remove `GEMINI_API_KEY` and `GOOGLE_API_KEY` (as they do every CLI's API key, so subscriptions are used), so from the app it works with Vertex AI or a company plan. It has had no live run, hence "experimental".
+- **A real usage limit has not been hit while testing**: detection follows each CLI's documented and source messages and is tested on recorded shapes. A Claude limit worded unlike any known message is shown as a failed run (Resume works as usual). A reset more than eight days ahead (a monthly credit date) is treated as unknown and retried every 30 minutes.
+- **Cursor and Amp keep their own MCP settings**; the per-project list applies to Claude Code, Codex and Gemini.
+- **Open in terminal was tried on macOS only**; on Windows and Linux it is untested. Codex or Gemini installed only as npm `.cmd` shims on Windows are untested too.
+- A repository opened on its own and inside a workspace keeps two separate project memories.
+
+---
+
 ## 3.1.2
 
 Faster, smoother updates and a new logo. If you have an earlier 3.x installed, it offers this update when it starts.

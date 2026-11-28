@@ -32,13 +32,23 @@ async fn live_claude_takes_a_task_from_plan_to_human_review() {
     settings.save(&project).await.unwrap();
 
     let engine = Engine::open(project, Binaries::from_env()).await.unwrap();
-    let mut agent = AgentConfig::new(Provider::Claude);
-    agent.model = Some("sonnet".into());
+    // A different configuration per phase (all Sonnet, so the run stays cheap): the alias to plan
+    // and review, the full id to develop.
+    let sonnet = |model: &str| {
+        let mut agent = AgentConfig::new(Provider::Claude);
+        agent.model = Some(model.into());
+        agent
+    };
+    let agents = ca_core::PhaseAgents {
+        planning: sonnet("sonnet"),
+        dev: sonnet("claude-sonnet-5-5"),
+        qa: sonnet("sonnet"),
+    };
     let task = engine
         .create_task(
             "Add a hello file",
             "Create a file named hello.txt at the repository root containing exactly the word hello. Nothing else.",
-            agent,
+            agents,
             false,
         )
         .await

@@ -7,7 +7,7 @@
 </div>
 
 <a href="https://youtu.be/jNYMC-HXDNA" target="_blank" rel="noopener noreferrer">
-  <img src="./docs/images/ca.png" alt="Code-Automata logo" />
+  <img src="./docs/images/ca.png" alt="The Code-Automata board: tasks in Planning, In Progress and Human Review" />
 </a>
 
 _"Ever since the first MVP was shipped, Code-Automata™ has started modifying its **own code**..."_ — It felt weird at first, but it is fun to watch it ship its own features one by one to production. That's the power of a clean workflow design!
@@ -41,7 +41,7 @@ The app checks for a new version once at launch and asks before installing it. U
 
 ## What it is
 
-Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-column Kanban workflow. Each task gets its own git worktree and branch inside the project you open.
+Code-Automata runs AI coding agents (Claude Code, Codex, Cursor, Amp, and Gemini as experimental) through a five-column Kanban workflow, with an agent of your choice for each phase. Each task gets its own git worktree and branch inside the project you open.
 
 ```
 ┌──────────┐    ┌─────────────┐    ┌───────────┐    ┌──────────────┐    ┌──────┐
@@ -56,11 +56,27 @@ Code-Automata runs AI coding agents (Claude Code, Cursor, Amp) through a five-co
 
 3.0 keeps every run's position on disk. Closing the app, a crash or Pause leaves the task where it was. Resume continues the same subtask, using the agent's own session and the partial work.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![A new task with an agent per phase](docs/images/screenshots/new-task-agents.png) | ![Reviewing the plan](docs/images/screenshots/plan-review.png) |
+| A new task: an agent and model per phase | Reviewing the plan before development |
+| ![A task's details](docs/images/screenshots/task-details.png) | ![Human review](docs/images/screenshots/human-review.png) |
+| A task's subtasks, changes and runs | Human review: what was built, checks, QA, pull request |
+| ![MCP servers and project memory](docs/images/screenshots/settings-mcp-memory.png) | ![The board](docs/images/screenshots/board.png) |
+| Settings: MCP servers for agents and project memory | The board |
+
+The screenshots and the video come from a scripted run of the app with its test agent (`yarn demo`).
+
 ## Things to know
 
 - Agents work in a git worktree per task, and they can edit any file there, including your repository's git hooks (for example husky's `.husky/`). Code-Automata runs hooks as git normally does: `post-commit` and `prepare-commit-msg` on each checkpoint commit, `pre-push` when it creates or updates the pull request, with your login shell's `PATH`. Review hook changes in a task's diff before you push it.
 - Pull requests: on GitHub they are opened with the [GitHub CLI](https://cli.github.com/) (`gh`, logged in); on GitLab, including self-hosted 11.10 or later, git opens the merge request itself with push options, no CLI needed. Any other host gets the branch pushed and keeps the link the host prints for opening a pull request. The host is detected from `origin`; set it under Settings → Pull requests when the address does not say (a self-hosted GitLab, say).
 - A project is a git repository's root, or a **workspace**: a folder whose every (non-hidden) folder is a git repository. In a workspace one task can change several repositories, each in its own worktree, and gets one pull request per repository it changed. A folder inside a repository is not opened as that repository; open its root.
+- Usage limits: a task whose CLI hit its subscription's limit waits ("Rate-limited, resumes at …") and starts again on its own; other tasks on that CLI wait with it.
+- Agents get no MCP servers unless you list them under Settings → MCP servers for agents (development and QA runs only). What agents learn about a project is kept in `.code-automata/memory.md` and given to later tasks; edit or turn it off in Settings.
+- Gemini (experimental): Google ended Gemini CLI's free sign-in for individuals; from the app it works with Vertex AI or a company Code Assist plan. Codex needs a ChatGPT plan. Runs leave out every CLI's API-key variable, so your subscriptions are used.
 - The installers are not code-signed (see Install).
 
 ## Repository layout

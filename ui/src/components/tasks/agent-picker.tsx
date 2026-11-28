@@ -373,8 +373,8 @@ export function ModelField({
       >
         <option value="">Default (the CLI picks)</option>
         {models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label === m.id ? m.id : `${m.label} (${m.id})`}
+          <option key={m.id} value={m.id} title={m.id}>
+            {m.label}
           </option>
         ))}
         <option value={OTHER}>Other…</option>
