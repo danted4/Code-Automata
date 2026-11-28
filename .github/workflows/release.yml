@@ -299,4 +299,4 @@ jobs:
           pre=()
           case "$V" in *-*) pre=(--prerelease) ;; esac
           gh release create "$TAG" --draft --verify-tag "${pre[@]}" \
-            --title "Code-Automata $V" --notes-file notes.md dist/*
+            --title "$V" --notes-file notes.md dist/*
